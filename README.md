@@ -30,22 +30,26 @@ AWS-MON/
 │  ├─ web/        フロント Vite+React+TS → S3/CloudFront（未着手）
 │  ├─ api/        ビジネスロジックAPI（Hono + Lambda Web Adapter, TS）
 │  └─ agent/      問題生成エージェント（Strands + Bedrock, Python）
+├─ packages/
+│  └─ shared/     web ⇄ api のTS型・DynamoDBテーブル定義共有（@aws-mon/shared）
 ├─ infra/         Terraform（envs = local / prod）
 └─ local/         ローカル開発環境（DynamoDB Local + LocalStack）
 ```
-
-`packages/shared-types/`（web ⇄ api のTS型共有）などは必要になった段階で追加する。
 
 ## ローカル開発
 
 前提: Docker Desktop、Node.js 20+、Python 3.11+。
 
 ```bash
+# 0. 依存関係インストール + 共有パッケージ（packages/shared）のビルド
+npm install
+npm run build -w @aws-mon/shared
+
 # 1. ローカルインフラ（DynamoDB Local + LocalStack）を起動
 cd local && docker compose up -d
 
 # 2. API を起動（LWAは本番でのみ被せる。ローカルは普通のWebサーバとして起動）
-cd apps/api && npm install && npm run dev   # http://localhost:8080/health
+cd apps/api && npm run dev   # http://localhost:8080/health
 
 # 3. 問題生成エージェント（Bedrockは"本物"を叩く。要AWS認証＋モデルアクセス）
 cd apps/agent && python -m venv .venv && .venv/Scripts/Activate.ps1
