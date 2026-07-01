@@ -18,6 +18,7 @@ import {
   startSession,
 } from "./repository.js";
 import { saveGeneratedQuestion } from "./questionRepository.js";
+import { runRunnableJobs } from "./jobRepository.js";
 
 // Lambda Web Adapter(LWA) は「PORTで待ち受ける普通のWebサーバ」をそのままLambda化する。
 // そのため、このファイルにLambda固有の実装(handlerなど)は一切書かない。
@@ -140,6 +141,15 @@ app.post("/dev/questions", async (c) => {
     };
 
     return result.created ? c.json(response, 201) : c.json(response);
+  } catch (e) {
+    return errorResponse(c, e);
+  }
+});
+
+app.post("/dev/jobs/run", async (c) => {
+  try {
+    const result = await runRunnableJobs();
+    return c.json({ status: "ok", ...result });
   } catch (e) {
     return errorResponse(c, e);
   }

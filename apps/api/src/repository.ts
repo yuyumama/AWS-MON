@@ -25,6 +25,7 @@ import {
   type SessionMode,
 } from "@aws-mon/shared";
 import { dynamoDoc } from "./dynamo.js";
+import { createAndRunPrefetchJob } from "./jobRepository.js";
 
 const tables = resolveTableNames();
 
@@ -237,7 +238,7 @@ async function getAttempt(
   return isAttemptItem(out.Item) ? out.Item : undefined;
 }
 
-async function findBankQuestion(input: {
+export async function findBankQuestion(input: {
   cert: string;
   domain: string;
   excludeQuestionIds?: string[];
@@ -328,6 +329,22 @@ export async function startSession(input: StartSessionInput): Promise<SessionDto
     sessionId,
   });
   const activeAbandonKeys = abandonKeys({ sessionId, abandonAfter });
+  const current: SessionMetaItem["current"] = {
+    sequence: 1,
+    questionId: question.questionId,
+    domain: question.domain,
+    state: "ANSWERING",
+  };
+  const prefetch = await createAndRunPrefetchJob({
+    sessionId,
+    userId: input.userId,
+    cert: input.cert,
+    domainSelection,
+    domain: nextDomain({ cert: input.cert, domainSelection, current } as SessionMetaItem),
+    mode,
+    targetSequence: 2,
+    excludeQuestionIds: [question.questionId],
+  });
 
   const meta: SessionMetaItem = {
     sessionId,
@@ -338,17 +355,8 @@ export async function startSession(input: StartSessionInput): Promise<SessionDto
     cert: input.cert,
     domainSelection,
     mode,
-    current: {
-      sequence: 1,
-      questionId: question.questionId,
-      domain: question.domain,
-      state: "ANSWERING",
-    },
-    prefetch: {
-      sequence: 2,
-      state: "IDLE",
-      updatedAt: createdAt,
-    },
+    current,
+    prefetch,
     answeredCount: 0,
     correctCount: 0,
     lastSeenQuestionIds: [question.questionId],
@@ -606,6 +614,12 @@ export async function nextSessionQuestion(input: NextInput): Promise<SessionDto>
     meta.lastSeenQuestionIds,
     question.questionId,
   );
+  const newCurrent: SessionMetaItem["current"] = {
+    sequence: nextSequence,
+    questionId: question.questionId,
+    domain: question.domain,
+    state: "ANSWERING",
+  };
   const abandonAfter = addDaysIso(updatedAt, policy.abandonAfterDays);
   const statusKeys = userStatusKeys({
     userId: input.userId,
@@ -616,6 +630,19 @@ export async function nextSessionQuestion(input: NextInput): Promise<SessionDto>
   const activeAbandonKeys = abandonKeys({
     sessionId: input.sessionId,
     abandonAfter,
+  });
+  // job作成とこの後のsession Updateはトランザクションではないため、楽観ロック
+  // (version/current.state)の競合でUpdateが失敗するとjobだけ孤立する。
+  // BANKモードは読み取り専用なので実害はない。agent連携で実生成を繋ぐ際は要見直し。
+  const prefetch = await createAndRunPrefetchJob({
+    sessionId: input.sessionId,
+    userId: input.userId,
+    cert: meta.cert,
+    domainSelection: meta.domainSelection,
+    domain: nextDomain({ ...meta, current: newCurrent }),
+    mode: meta.mode,
+    targetSequence: nextSequence + 1,
+    excludeQuestionIds: lastSeenQuestionIds,
   });
 
   try {
@@ -637,17 +664,8 @@ export async function nextSessionQuestion(input: NextInput): Promise<SessionDto>
           ":expectedVersion": expectedVersion,
           ":active": "ACTIVE",
           ":answered": "ANSWERED",
-          ":current": {
-            sequence: nextSequence,
-            questionId: question.questionId,
-            domain: question.domain,
-            state: "ANSWERING",
-          },
-          ":prefetch": {
-            sequence: nextSequence + 1,
-            state: "IDLE",
-            updatedAt,
-          },
+          ":current": newCurrent,
+          ":prefetch": prefetch,
           ":lastSeenQuestionIds": lastSeenQuestionIds,
           ":one": 1,
           ":updatedAt": updatedAt,
