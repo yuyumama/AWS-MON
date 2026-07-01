@@ -5,7 +5,10 @@
 | サービス | 用途 | ポート |
 |---|---|---|
 | DynamoDB Local | セッション状態・生成済み問題・復習データ | 8000 |
-| LocalStack | Cognito / SSM / Secrets Manager / S3 の検証 | 4566 |
+| LocalStack | SSM / Secrets Manager / S3 の検証 | 4566 |
+
+> **Cognito はローカルで動かさない。** LocalStack Community(無料)は Cognito 非対応（Pro限定）。
+> ローカルは `x-dev-user-id` ヘッダの devシムで `userId` を代用し、本物の認証は実AWSのCognito（無料枠 50k MAU）に対してJWT検証する。
 
 ## 使い方
 

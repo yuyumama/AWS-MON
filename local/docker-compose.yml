@@ -17,8 +17,10 @@ services:
     ports:
       - "4566:4566"
     environment:
-      # 使うサービスに絞ると起動が速い。必要になったら追加する。
-      - SERVICES=cognito-idp,ssm,secretsmanager,s3
+      # LocalStack Community(無料)で使えるサービスのみ。必要になったら追加する。
+      # 注意: Cognito(cognito-idp)は LocalStack Pro 限定のため含めない。
+      #   ローカルは devシム(x-dev-user-id)、本物の認証は実AWSのCognito(無料枠)に向けて検証する。
+      - SERVICES=ssm,secretsmanager,s3
       - DEBUG=0
       - PERSISTENCE=1
     volumes:
