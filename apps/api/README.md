@@ -40,5 +40,9 @@ docker build -t aws-mon-api .      # LWA同梱イメージ
 |---|---|---|
 | GET | `/health` | 生存確認 |
 | GET | `/health/dynamo` | DynamoDB接続確認（ローカルインフラ起動時） |
+| GET | `/health/tables` | APIが参照するDynamoDBテーブル名 |
+| POST | `/sessions` | seed問題からセッション開始（Phase 1は `x-dev-user-id` ヘッダでユーザーを仮指定） |
+| GET | `/sessions/:sessionId` | セッション再開 |
+| POST | `/sessions/:sessionId/answers` | 現在問題への回答記録 |
 
-> ここから セッション/問題/復習 のルートを足していく。認証はCognito（JWT検証）を前段に入れる想定。
+Phase 1 では Cognito 未実装のため、`x-dev-user-id` ヘッダがあればそれを `userId` として使い、無ければ `dev-user` を使う。

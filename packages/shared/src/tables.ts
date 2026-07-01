@@ -128,6 +128,14 @@ export function bankKeys(input: {
   };
 }
 
+export function bankPkForBucket(input: {
+  cert: string;
+  domain: string;
+  bucket: string;
+}) {
+  return `BANK#CERT#${input.cert}#DOMAIN#${input.domain}#STATUS#ACTIVE#B#${input.bucket}`;
+}
+
 export function staleKeys(input: { questionId: string; validUntil: string }) {
   const staleBucket = bucket(input.questionId, bucketCounts.stale);
   return {
@@ -153,6 +161,17 @@ export function userStatusKeys(input: {
     userStatusPk: `USER#${input.userId}#SESSION#${input.status}`,
     userStatusSk: `${input.updatedAt}#SESSION#${input.sessionId}`,
   };
+}
+
+export function questionStateKey(questionId: string): `QUESTION#${string}` {
+  return `QUESTION#${questionId}`;
+}
+
+export function domainStatKey(input: {
+  cert: string;
+  domain: string;
+}): `STAT#CERT#${string}#DOMAIN#${string}` {
+  return `STAT#CERT#${input.cert}#DOMAIN#${input.domain}`;
 }
 
 export function abandonKeys(input: {
