@@ -1,0 +1,37 @@
+# dependencies
+node_modules/
+
+# python
+.venv/
+__pycache__/
+*.pyc
+
+# env / secrets
+.env
+.env.local
+.env.*.local
+
+# build output
+dist/
+build/
+*.tsbuildinfo
+
+# terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+
+# localstack / docker volumes
+local/volume/
+.localstack/
+
+# os / editor
+.DS_Store
+Thumbs.db
+
+# claude code local (machine-specific)
+.claude/settings.local.json
+
+# personal design notes (not part of the repo's public purpose)
+docs/

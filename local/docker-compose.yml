@@ -1,0 +1,26 @@
+# ローカル開発用インフラ: DynamoDB Local + LocalStack
+# 起動:  cd local && docker compose up -d
+# 停止:  docker compose down          （データも消すなら -v）
+services:
+  dynamodb-local:
+    image: amazon/dynamodb-local:latest
+    container_name: aws-mon-dynamodb
+    command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-dbPath", "/data"]
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./volume/dynamodb:/data
+
+  localstack:
+    image: localstack/localstack:latest
+    container_name: aws-mon-localstack
+    ports:
+      - "4566:4566"
+    environment:
+      # 使うサービスに絞ると起動が速い。必要になったら追加する。
+      - SERVICES=cognito-idp,ssm,secretsmanager,s3
+      - DEBUG=0
+      - PERSISTENCE=1
+    volumes:
+      - ./volume/localstack:/var/lib/localstack
+      - /var/run/docker.sock:/var/run/docker.sock
