@@ -33,5 +33,5 @@ Thumbs.db
 # claude code local (machine-specific)
 .claude/settings.local.json
 
-# personal design notes (not part of the repo's public purpose)
-docs/
+# local dev notes / scratch memos (not part of the repo's public purpose)
+docs_local/
