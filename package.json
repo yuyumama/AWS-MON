@@ -1,0 +1,14 @@
+{
+  "name": "aws-mon",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/api"
+  ],
+  "scripts": {
+    "build": "npm run build -w @aws-mon/shared && npm run build -w @aws-mon/api",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  }
+}

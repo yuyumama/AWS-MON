@@ -91,6 +91,7 @@ GSI は必要属性だけを投影する。特に `correct` と `explanation` �
 
 - `bankBucket`: 2桁固定の `00`〜`03`。初期の cert×domain 別問題数は少ないため、16 bucket では空振りが増える。将来問題数が十分増えたら、別 GSI または別 bank key version で増やす。
 - `staleBucket`: 2桁固定の `00`〜`03`。stale 化 worker は全 bucket を順番に Query する。
+- `abandonBucket`: 2桁固定の `00`〜`03`。abandoned 化 worker は全 bucket を順番に Query する。
 - `jobBucket`: 2桁固定の `00`〜`15`。job queue は時刻集中しやすいため、question bank より広めに分散する。
 - `randomSort`: 12桁固定のゼロ埋め数値文字列（`000000000000`〜`999999999999`）。文字列ソートと数値順が一致するように固定桁にする。
 

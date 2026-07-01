@@ -1,6 +1,7 @@
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { DynamoDBClient, ListTablesCommand } from "@aws-sdk/client-dynamodb";
+import { resolveTableNames } from "@aws-mon/shared";
 
 // Lambda Web Adapter(LWA) は「PORTで待ち受ける普通のWebサーバ」をそのままLambda化する。
 // そのため、このファイルにLambda固有の実装(handlerなど)は一切書かない。
@@ -16,9 +17,14 @@ const dynamo = new DynamoDBClient({
 });
 
 const app = new Hono();
+const tableNames = resolveTableNames();
 
 app.get("/health", (c) =>
   c.json({ status: "ok", service: "api", time: new Date().toISOString() }),
+);
+
+app.get("/health/tables", (c) =>
+  c.json({ status: "ok", tables: tableNames }),
 );
 
 // ローカルインフラ(local/docker compose up -d)が起きていれば DynamoDB への接続を確認できる。

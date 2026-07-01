@@ -18,7 +18,22 @@ docker compose down -v    # 停止＋データ削除
 ```
 
 - データは `local/volume/`（gitignore済み）に永続化される。
-- テーブル作成や初期データ投入スクリプトは `local/seed/` に置く（今後追加）。
+- テーブル作成は `infra/envs/local` の Terraform で行う。
+- 初期データ投入スクリプトは `local/seed/` に置く。
+
+```bash
+cd ..
+npm install
+npm run build -w @aws-mon/shared
+
+cd infra/envs/local
+terraform init
+terraform apply
+
+cd ../../../local/seed
+npm install
+npm run seed
+```
 
 ## 接続情報（アプリ側の .env で使う想定）
 
