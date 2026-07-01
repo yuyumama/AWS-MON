@@ -43,9 +43,10 @@ docker build -t aws-mon-api .      # LWA同梱イメージ
 | GET | `/health/tables` | APIが参照するDynamoDBテーブル名 |
 | POST | `/dev/questions` | `QuizItem` をACTIVE問題として保存する開発用endpoint（返却DTOは `answering`） |
 | POST | `/sessions` | seed問題からセッション開始（Phase 1は `x-dev-user-id` ヘッダでユーザーを仮指定） |
+| GET | `/sessions?status=ACTIVE&limit=20` | ユーザーのセッション一覧（既定はACTIVE） |
 | GET | `/sessions/:sessionId` | セッション再開 |
 | POST | `/sessions/:sessionId/answers` | 現在問題への回答記録 |
 | POST | `/sessions/:sessionId/next` | 回答済みcurrentから次の問題へ進む（Phase 1はbank問題を取得） |
-| POST | `/dev/jobs/run` | `AwsMonGenerationJobs` の実行可能job(QUEUED/RETRY_WAIT)を処理する開発用worker tick |
+| POST | `/dev/jobs/run` | `AwsMonGenerationJobs` の実行可能job(QUEUED/RETRY_WAIT)を処理する開発用worker tick。bodyの `limit` で最大処理件数を指定可 |
 
 Phase 1 では Cognito 未実装のため、`x-dev-user-id` ヘッダがあればそれを `userId` として使い、無ければ `dev-user` を使う。

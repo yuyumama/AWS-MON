@@ -8,13 +8,10 @@ import {
 } from "@aws-sdk/lib-dynamodb";
 import {
   abandonKeys,
-  bankPkForBucket,
-  bucketCounts,
   domainStatKey,
   gsiNames,
   policy,
   questionStateKey,
-  randomSort,
   resolveTableNames,
   toQuestionDto,
   userStatusKeys,
@@ -25,7 +22,9 @@ import {
   type SessionMode,
 } from "@aws-mon/shared";
 import { dynamoDoc } from "./dynamo.js";
+import { ApiError } from "./errors.js";
 import { createAndRunPrefetchJob } from "./jobRepository.js";
+import { findBankQuestion, getQuestion } from "./questionBankRepository.js";
 
 const tables = resolveTableNames();
 
@@ -47,6 +46,31 @@ export type SessionDto = {
     answeredAt?: string;
     question: QuestionDto;
   };
+};
+
+export type SessionSummaryDto = {
+  sessionId: string;
+  status: SessionMetaItem["status"];
+  cert: string;
+  domainSelection: string;
+  mode: SessionMode;
+  stats: {
+    answeredCount: number;
+    correctCount: number;
+  };
+  current?: {
+    sequence: number;
+    state: "ANSWERING" | "ANSWERED";
+    domain: string;
+  };
+  prefetch?: {
+    sequence: number;
+    state: NonNullable<SessionMetaItem["prefetch"]>["state"];
+    domain?: string;
+  };
+  startedAt: string;
+  updatedAt: string;
+  completedAt?: string;
 };
 
 export type StartSessionInput = {
@@ -78,14 +102,11 @@ export type NextInput = {
   version?: number;
 };
 
-export class ApiError extends Error {
-  constructor(
-    message: string,
-    public readonly status: number,
-  ) {
-    super(message);
-  }
-}
+export type ListSessionsInput = {
+  userId: string;
+  status?: SessionMetaItem["status"];
+  limit?: number;
+};
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -170,8 +191,35 @@ function toSessionDto(meta: SessionMetaItem, question?: QuestionItem): SessionDt
   return dto;
 }
 
-function isQuestionItem(item: unknown): item is QuestionItem {
-  return typeof item === "object" && item !== null && "questionId" in item;
+function toSessionSummaryDto(meta: SessionMetaItem): SessionSummaryDto {
+  return {
+    sessionId: meta.sessionId,
+    status: meta.status,
+    cert: meta.cert,
+    domainSelection: meta.domainSelection,
+    mode: meta.mode,
+    stats: {
+      answeredCount: meta.answeredCount,
+      correctCount: meta.correctCount,
+    },
+    current: meta.current
+      ? {
+          sequence: meta.current.sequence,
+          state: meta.current.state,
+          domain: meta.current.domain,
+        }
+      : undefined,
+    prefetch: meta.prefetch
+      ? {
+          sequence: meta.prefetch.sequence,
+          state: meta.prefetch.state,
+          domain: meta.prefetch.domain,
+        }
+      : undefined,
+    startedAt: meta.startedAt,
+    updatedAt: meta.updatedAt,
+    completedAt: meta.completedAt,
+  };
 }
 
 function isSessionMetaItem(item: unknown): item is SessionMetaItem {
@@ -192,21 +240,6 @@ function isConditionalCheckFailed(error: unknown): boolean {
   return (
     error instanceof Error && error.name === "ConditionalCheckFailedException"
   );
-}
-
-async function getQuestion(questionId: string): Promise<QuestionItem> {
-  const out = await dynamoDoc.send(
-    new GetCommand({
-      TableName: tables.questions,
-      Key: { questionId },
-      ConsistentRead: true,
-    }),
-  );
-
-  if (!isQuestionItem(out.Item)) {
-    throw new ApiError("question not found", 404);
-  }
-  return out.Item;
 }
 
 async function getSessionMeta(sessionId: string): Promise<SessionMetaItem> {
@@ -238,72 +271,6 @@ async function getAttempt(
   return isAttemptItem(out.Item) ? out.Item : undefined;
 }
 
-export async function findBankQuestion(input: {
-  cert: string;
-  domain: string;
-  excludeQuestionIds?: string[];
-}): Promise<QuestionItem> {
-  const startBucket = Math.floor(Math.random() * bucketCounts.bank);
-  const sort = randomSort();
-  const excluded = new Set(input.excludeQuestionIds ?? []);
-  let fallbackQuestionId: string | undefined;
-
-  for (let offset = 0; offset < bucketCounts.bank; offset += 1) {
-    const bucket = String((startBucket + offset) % bucketCounts.bank).padStart(
-      2,
-      "0",
-    );
-    const bankPk = bankPkForBucket({ ...input, bucket });
-
-    const first = await dynamoDoc.send(
-      new QueryCommand({
-        TableName: tables.questions,
-        IndexName: gsiNames.questions.bankRandom,
-        KeyConditionExpression: "bankPk = :pk AND bankSk >= :sk",
-        ExpressionAttributeValues: {
-          ":pk": bankPk,
-          ":sk": `R#${sort}`,
-        },
-        Limit: 10,
-      }),
-    );
-
-    for (const item of first.Items ?? []) {
-      if (!isQuestionItem(item)) continue;
-      fallbackQuestionId ??= item.questionId;
-      if (!excluded.has(item.questionId)) {
-        return getQuestion(item.questionId);
-      }
-    }
-
-    const wrap = await dynamoDoc.send(
-      new QueryCommand({
-        TableName: tables.questions,
-        IndexName: gsiNames.questions.bankRandom,
-        KeyConditionExpression: "bankPk = :pk",
-        ExpressionAttributeValues: {
-          ":pk": bankPk,
-        },
-        Limit: 10,
-      }),
-    );
-
-    for (const item of wrap.Items ?? []) {
-      if (!isQuestionItem(item)) continue;
-      fallbackQuestionId ??= item.questionId;
-      if (!excluded.has(item.questionId)) {
-        return getQuestion(item.questionId);
-      }
-    }
-  }
-
-  if (fallbackQuestionId) {
-    return getQuestion(fallbackQuestionId);
-  }
-
-  throw new ApiError("no active question found for cert/domain", 404);
-}
-
 function nextDomain(meta: SessionMetaItem): string {
   if (meta.cert === "aip" && meta.domainSelection !== "all") {
     return meta.domainSelection;
@@ -313,6 +280,29 @@ function nextDomain(meta: SessionMetaItem): string {
 
 function appendLastSeen(ids: string[], nextQuestionId: string): string[] {
   return [...ids, nextQuestionId].slice(-policy.lastSeenQuestionIdsLimit);
+}
+
+export async function listSessions(
+  input: ListSessionsInput,
+): Promise<SessionSummaryDto[]> {
+  const status = input.status ?? "ACTIVE";
+  const limit = Math.max(1, Math.min(100, Math.floor(input.limit ?? 20)));
+  const out = await dynamoDoc.send(
+    new QueryCommand({
+      TableName: tables.sessions,
+      IndexName: gsiNames.sessions.userStatus,
+      KeyConditionExpression: "userStatusPk = :pk",
+      ExpressionAttributeValues: {
+        ":pk": `USER#${input.userId}#SESSION#${status}`,
+      },
+      ScanIndexForward: false,
+      Limit: limit,
+    }),
+  );
+
+  return (out.Items ?? [])
+    .filter(isSessionMetaItem)
+    .map((item) => toSessionSummaryDto(item));
 }
 
 export async function startSession(input: StartSessionInput): Promise<SessionDto> {

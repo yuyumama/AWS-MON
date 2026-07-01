@@ -11,7 +11,7 @@ import {
   type SessionMode,
 } from "@aws-mon/shared";
 import { dynamoDoc } from "./dynamo.js";
-import { findBankQuestion } from "./repository.js";
+import { findBankQuestion } from "./questionBankRepository.js";
 
 const tables = resolveTableNames();
 
@@ -175,6 +175,7 @@ async function attemptJob(
       cert: claimed.cert,
       domain: claimed.domain ?? claimed.domainSelection,
       excludeQuestionIds: exclude,
+      allowExcludedFallback: false,
     });
     await completeJobSuccess(claimed, question.questionId);
     return {
@@ -223,6 +224,7 @@ export async function createAndRunPrefetchJob(
     domainSelection: input.domainSelection,
     domain: input.domain,
     mode: input.mode,
+    sourceQuestionId: input.excludeQuestionIds[0],
     attemptCount: 0,
     maxAttempts: maxJobAttempts,
     runAfter: createdAt,
@@ -356,7 +358,8 @@ export type RunRunnableJobsResult = {
 };
 
 export async function runRunnableJobs(limit = 20): Promise<RunRunnableJobsResult> {
-  const cutoff = `${nowIso()}￿`;
+  const normalizedLimit = Math.max(0, Math.min(100, Math.floor(limit)));
+  const cutoff = `${nowIso()}#ZZZ`;
   const buckets = Array.from({ length: bucketCounts.job }, (_, i) =>
     String(i).padStart(2, "0"),
   );
@@ -371,7 +374,7 @@ export async function runRunnableJobs(limit = 20): Promise<RunRunnableJobsResult
     .flat()
     .filter((job): job is GenerationJobItem => isJobKey(job))
     .sort((a, b) => (a.runSk ?? "").localeCompare(b.runSk ?? ""))
-    .slice(0, limit);
+    .slice(0, normalizedLimit);
 
   const summary: RunRunnableJobsResult = {
     processed: 0,

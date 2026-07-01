@@ -20,7 +20,7 @@ import {
   type SourceRef,
 } from "@aws-mon/shared";
 import { dynamoDoc } from "./dynamo.js";
-import { ApiError } from "./repository.js";
+import { ApiError } from "./errors.js";
 
 const tables = resolveTableNames();
 

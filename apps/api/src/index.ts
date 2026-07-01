@@ -14,6 +14,7 @@ import {
 import {
   answerSession,
   getSession,
+  listSessions,
   nextSessionQuestion,
   startSession,
 } from "./repository.js";
@@ -63,6 +64,24 @@ app.post("/sessions", async (c) => {
     });
 
     return c.json({ status: "ok", session }, 201);
+  } catch (e) {
+    return errorResponse(c, e);
+  }
+});
+
+app.get("/sessions", async (c) => {
+  try {
+    const statusQuery = c.req.query("status");
+    const status =
+      statusQuery === "COMPLETED" || statusQuery === "ABANDONED"
+        ? statusQuery
+        : "ACTIVE";
+    const sessions = await listSessions({
+      userId: devUserId(c),
+      status,
+      limit: asNumber(Number(c.req.query("limit"))),
+    });
+    return c.json({ status: "ok", sessions });
   } catch (e) {
     return errorResponse(c, e);
   }
@@ -148,7 +167,8 @@ app.post("/dev/questions", async (c) => {
 
 app.post("/dev/jobs/run", async (c) => {
   try {
-    const result = await runRunnableJobs();
+    const body = asObject(await c.req.json().catch(() => ({})));
+    const result = await runRunnableJobs(asNumber(body.limit));
     return c.json({ status: "ok", ...result });
   } catch (e) {
     return errorResponse(c, e);
