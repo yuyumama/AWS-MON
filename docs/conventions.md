@@ -13,7 +13,7 @@ AWS-MON/
 ├─ docs/            確定・清書ドキュメント（git追跡）
 ├─ docs_local/      作業メモ・下書き（git追跡外）
 ├─ README.md        公開上の説明
-└─ CLAUDE.md        committed な作業ルール
+└─ AGENTS.md        committed な作業ルール
 ```
 
 - **役割で分ける**: 機能なら `apps/`、権限/インフラなら `infra/`。AIが「どこを触るか」を名前で判断できることを最優先。
