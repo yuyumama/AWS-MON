@@ -44,5 +44,6 @@ docker build -t aws-mon-api .      # LWA同梱イメージ
 | POST | `/sessions` | seed問題からセッション開始（Phase 1は `x-dev-user-id` ヘッダでユーザーを仮指定） |
 | GET | `/sessions/:sessionId` | セッション再開 |
 | POST | `/sessions/:sessionId/answers` | 現在問題への回答記録 |
+| POST | `/sessions/:sessionId/next` | 回答済みcurrentから次の問題へ進む（Phase 1はbank問題を取得） |
 
 Phase 1 では Cognito 未実装のため、`x-dev-user-id` ヘッダがあればそれを `userId` として使い、無ければ `dev-user` を使う。

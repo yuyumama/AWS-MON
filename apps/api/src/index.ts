@@ -11,7 +11,12 @@ import {
   devUserId,
   errorResponse,
 } from "./http.js";
-import { answerSession, getSession, startSession } from "./repository.js";
+import {
+  answerSession,
+  getSession,
+  nextSessionQuestion,
+  startSession,
+} from "./repository.js";
 
 // Lambda Web Adapter(LWA) は「PORTで待ち受ける普通のWebサーバ」をそのままLambda化する。
 // そのため、このファイルにLambda固有の実装(handlerなど)は一切書かない。
@@ -91,6 +96,21 @@ app.post("/sessions/:sessionId/answers", async (c) => {
     });
 
     return c.json({ status: "ok", ...result });
+  } catch (e) {
+    return errorResponse(c, e);
+  }
+});
+
+app.post("/sessions/:sessionId/next", async (c) => {
+  try {
+    const body = asObject(await c.req.json().catch(() => ({})));
+    const session = await nextSessionQuestion({
+      userId: devUserId(c),
+      sessionId: c.req.param("sessionId"),
+      version: asNumber(body.version),
+    });
+
+    return c.json({ status: "ok", session });
   } catch (e) {
     return errorResponse(c, e);
   }

@@ -4,6 +4,7 @@ import {
   PutCommand,
   QueryCommand,
   TransactWriteCommand,
+  UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
 import {
   abandonKeys,
@@ -68,6 +69,12 @@ export type AnswerResult = {
   session: SessionDto;
   isCorrect: boolean;
   correctAnswers: string[];
+};
+
+export type NextInput = {
+  userId: string;
+  sessionId: string;
+  version?: number;
 };
 
 export class ApiError extends Error {
@@ -180,6 +187,12 @@ function isAttemptItem(item: unknown): item is AttemptItem {
   return typeof item === "object" && item !== null && "selectedAnswers" in item;
 }
 
+function isConditionalCheckFailed(error: unknown): boolean {
+  return (
+    error instanceof Error && error.name === "ConditionalCheckFailedException"
+  );
+}
+
 async function getQuestion(questionId: string): Promise<QuestionItem> {
   const out = await dynamoDoc.send(
     new GetCommand({
@@ -227,9 +240,12 @@ async function getAttempt(
 async function findBankQuestion(input: {
   cert: string;
   domain: string;
+  excludeQuestionIds?: string[];
 }): Promise<QuestionItem> {
   const startBucket = Math.floor(Math.random() * bucketCounts.bank);
   const sort = randomSort();
+  const excluded = new Set(input.excludeQuestionIds ?? []);
+  let fallbackQuestionId: string | undefined;
 
   for (let offset = 0; offset < bucketCounts.bank; offset += 1) {
     const bucket = String((startBucket + offset) % bucketCounts.bank).padStart(
@@ -247,13 +263,16 @@ async function findBankQuestion(input: {
           ":pk": bankPk,
           ":sk": `R#${sort}`,
         },
-        Limit: 1,
+        Limit: 10,
       }),
     );
 
-    const firstItem = first.Items?.[0];
-    if (isQuestionItem(firstItem)) {
-      return getQuestion(firstItem.questionId);
+    for (const item of first.Items ?? []) {
+      if (!isQuestionItem(item)) continue;
+      fallbackQuestionId ??= item.questionId;
+      if (!excluded.has(item.questionId)) {
+        return getQuestion(item.questionId);
+      }
     }
 
     const wrap = await dynamoDoc.send(
@@ -264,17 +283,35 @@ async function findBankQuestion(input: {
         ExpressionAttributeValues: {
           ":pk": bankPk,
         },
-        Limit: 1,
+        Limit: 10,
       }),
     );
 
-    const wrapItem = wrap.Items?.[0];
-    if (isQuestionItem(wrapItem)) {
-      return getQuestion(wrapItem.questionId);
+    for (const item of wrap.Items ?? []) {
+      if (!isQuestionItem(item)) continue;
+      fallbackQuestionId ??= item.questionId;
+      if (!excluded.has(item.questionId)) {
+        return getQuestion(item.questionId);
+      }
     }
   }
 
+  if (fallbackQuestionId) {
+    return getQuestion(fallbackQuestionId);
+  }
+
   throw new ApiError("no active question found for cert/domain", 404);
+}
+
+function nextDomain(meta: SessionMetaItem): string {
+  if (meta.cert === "aip" && meta.domainSelection !== "all") {
+    return meta.domainSelection;
+  }
+  return meta.current?.domain ?? (meta.cert === "aip" ? "d1" : "general");
+}
+
+function appendLastSeen(ids: string[], nextQuestionId: string): string[] {
+  return [...ids, nextQuestionId].slice(-policy.lastSeenQuestionIdsLimit);
 }
 
 export async function startSession(input: StartSessionInput): Promise<SessionDto> {
@@ -536,4 +573,99 @@ export async function answerSession(input: AnswerInput): Promise<AnswerResult> {
     isCorrect,
     correctAnswers,
   };
+}
+
+export async function nextSessionQuestion(input: NextInput): Promise<SessionDto> {
+  const meta = await getSessionMeta(input.sessionId);
+  if (meta.userId !== input.userId) {
+    throw new ApiError("session not found", 404);
+  }
+  if (meta.status !== "ACTIVE") {
+    throw new ApiError("session is not active", 409);
+  }
+  if (!meta.current) {
+    throw new ApiError("session has no current question", 409);
+  }
+  if (meta.current.state !== "ANSWERED") {
+    throw new ApiError("current question must be answered before moving next", 409);
+  }
+
+  const question =
+    meta.prefetch?.state === "READY" && meta.prefetch.questionId
+      ? await getQuestion(meta.prefetch.questionId)
+      : await findBankQuestion({
+          cert: meta.cert,
+          domain: nextDomain(meta),
+          excludeQuestionIds: meta.lastSeenQuestionIds,
+        });
+
+  const updatedAt = nowIso();
+  const expectedVersion = input.version ?? meta.version;
+  const nextSequence = meta.current.sequence + 1;
+  const lastSeenQuestionIds = appendLastSeen(
+    meta.lastSeenQuestionIds,
+    question.questionId,
+  );
+  const abandonAfter = addDaysIso(updatedAt, policy.abandonAfterDays);
+  const statusKeys = userStatusKeys({
+    userId: input.userId,
+    status: "ACTIVE",
+    updatedAt,
+    sessionId: input.sessionId,
+  });
+  const activeAbandonKeys = abandonKeys({
+    sessionId: input.sessionId,
+    abandonAfter,
+  });
+
+  try {
+    await dynamoDoc.send(
+      new UpdateCommand({
+        TableName: tables.sessions,
+        Key: { sessionId: input.sessionId, itemKey: "META" },
+        ConditionExpression:
+          "userId = :userId AND version = :expectedVersion AND #status = :active AND #current.#state = :answered",
+        UpdateExpression:
+          "SET #current = :current, prefetch = :prefetch, lastSeenQuestionIds = :lastSeenQuestionIds, version = version + :one, updatedAt = :updatedAt, userStatusPk = :userStatusPk, userStatusSk = :userStatusSk, abandonAfter = :abandonAfter, abandonPk = :abandonPk, abandonSk = :abandonSk",
+        ExpressionAttributeNames: {
+          "#status": "status",
+          "#current": "current",
+          "#state": "state",
+        },
+        ExpressionAttributeValues: {
+          ":userId": input.userId,
+          ":expectedVersion": expectedVersion,
+          ":active": "ACTIVE",
+          ":answered": "ANSWERED",
+          ":current": {
+            sequence: nextSequence,
+            questionId: question.questionId,
+            domain: question.domain,
+            state: "ANSWERING",
+          },
+          ":prefetch": {
+            sequence: nextSequence + 1,
+            state: "IDLE",
+            updatedAt,
+          },
+          ":lastSeenQuestionIds": lastSeenQuestionIds,
+          ":one": 1,
+          ":updatedAt": updatedAt,
+          ":userStatusPk": statusKeys.userStatusPk,
+          ":userStatusSk": statusKeys.userStatusSk,
+          ":abandonAfter": abandonAfter,
+          ":abandonPk": activeAbandonKeys.abandonPk,
+          ":abandonSk": activeAbandonKeys.abandonSk,
+        },
+      }),
+    );
+  } catch (error) {
+    if (isConditionalCheckFailed(error)) {
+      throw new ApiError("session state changed, reload and retry", 409);
+    }
+    throw error;
+  }
+
+  const updatedMeta = await getSessionMeta(input.sessionId);
+  return toSessionDto(updatedMeta, question);
 }
