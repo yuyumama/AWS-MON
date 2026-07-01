@@ -41,6 +41,7 @@ docker build -t aws-mon-api .      # LWA同梱イメージ
 | GET | `/health` | 生存確認 |
 | GET | `/health/dynamo` | DynamoDB接続確認（ローカルインフラ起動時） |
 | GET | `/health/tables` | APIが参照するDynamoDBテーブル名 |
+| POST | `/dev/questions` | `QuizItem` をACTIVE問題として保存する開発用endpoint（返却DTOは `answering`） |
 | POST | `/sessions` | seed問題からセッション開始（Phase 1は `x-dev-user-id` ヘッダでユーザーを仮指定） |
 | GET | `/sessions/:sessionId` | セッション再開 |
 | POST | `/sessions/:sessionId/answers` | 現在問題への回答記録 |

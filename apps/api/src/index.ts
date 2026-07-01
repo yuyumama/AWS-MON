@@ -17,6 +17,7 @@ import {
   nextSessionQuestion,
   startSession,
 } from "./repository.js";
+import { saveGeneratedQuestion } from "./questionRepository.js";
 
 // Lambda Web Adapter(LWA) は「PORTで待ち受ける普通のWebサーバ」をそのままLambda化する。
 // そのため、このファイルにLambda固有の実装(handlerなど)は一切書かない。
@@ -111,6 +112,34 @@ app.post("/sessions/:sessionId/next", async (c) => {
     });
 
     return c.json({ status: "ok", session });
+  } catch (e) {
+    return errorResponse(c, e);
+  }
+});
+
+app.post("/dev/questions", async (c) => {
+  try {
+    const body = asObject(await c.req.json().catch(() => ({})));
+    const result = await saveGeneratedQuestion({
+      cert: asString(body.cert) ?? "",
+      domain: asString(body.domain) ?? "",
+      domainSelection: asString(body.domainSelection),
+      quiz: body.quiz,
+      generation: body.generation,
+      quality: body.quality,
+      sourceRefs: body.sourceRefs,
+    });
+
+    const response = {
+      status: "ok",
+      created: result.created,
+      deduplicated: result.deduplicated,
+      questionId: result.item.questionId,
+      contentHash: result.item.contentHash,
+      question: result.question,
+    };
+
+    return result.created ? c.json(response, 201) : c.json(response);
   } catch (e) {
     return errorResponse(c, e);
   }
