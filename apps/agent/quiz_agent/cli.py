@@ -2,7 +2,7 @@
 
 使い方:
     python -m quiz_agent.cli --cert aip --domain all
-    python -m quiz_agent.cli --cert saa --no-explanation
+    python -m quiz_agent.cli --cert saa
     python -m quiz_agent.cli --cert aip --evaluate
 """
 
@@ -12,7 +12,7 @@ import sys
 
 from dotenv import load_dotenv
 
-from .agent import evaluate_question, generate_explanation, generate_question
+from .agent import evaluate_question, generate_quiz
 from .certs import AIP_DOMAINS, CERT_FULL_NAMES
 from .schema import Evaluation, Explanation, Question
 
@@ -68,9 +68,6 @@ def main(argv: list[str] | None = None) -> int:
         help="AIP-C01 のドメイン（既定: all。AIP以外では無視）",
     )
     parser.add_argument(
-        "--no-explanation", action="store_true", help="解説を生成しない",
-    )
-    parser.add_argument(
         "--evaluate", action="store_true", help="生成後に問題の妥当性を検証する",
     )
     parser.add_argument(
@@ -79,34 +76,27 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        print(f"問題を生成中... ({CERT_FULL_NAMES[args.cert]})", file=sys.stderr)
-        question = generate_question(args.cert, args.domain)
-
-        explanation: Explanation | None = None
-        if not args.no_explanation:
-            print("解説を生成中...", file=sys.stderr)
-            explanation = generate_explanation(question)
+        print(f"問題と解説を生成中... ({CERT_FULL_NAMES[args.cert]})", file=sys.stderr)
+        item = generate_quiz(args.cert, args.domain)
 
         evaluation: Evaluation | None = None
         if args.evaluate:
             print("問題を検証中...", file=sys.stderr)
-            evaluation = evaluate_question(question)
+            evaluation = evaluate_question(item.question)
     except Exception as e:  # noqa: BLE001
         print(f"エラー: {e}", file=sys.stderr)
         return 1
 
     if args.json:
         out = {
-            "question": question.model_dump(),
-            "explanation": explanation.model_dump() if explanation else None,
+            "quiz": item.model_dump(),
             "evaluation": evaluation.model_dump() if evaluation else None,
         }
         print(json.dumps(out, ensure_ascii=False, indent=2))
         return 0
 
-    _print_question(question)
-    if explanation:
-        _print_explanation(explanation)
+    _print_question(item.question)
+    _print_explanation(item.explanation)
     if evaluation:
         _print_evaluation(evaluation)
     return 0

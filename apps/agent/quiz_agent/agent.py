@@ -11,14 +11,12 @@ from strands import Agent
 from strands.models import BedrockModel
 
 from .prompts import (
-    EXPLANATION_SYSTEM_PROMPT,
-    QUESTION_SYSTEM_PROMPT,
+    QUIZ_SYSTEM_PROMPT,
     REVIEW_SYSTEM_PROMPT,
-    build_explanation_prompt,
-    build_question_prompt,
+    build_quiz_prompt,
     build_review_prompt,
 )
-from .schema import Evaluation, Explanation, Question
+from .schema import Evaluation, Question, QuizItem
 
 DEFAULT_MODEL_ID = "us.anthropic.claude-sonnet-4-6"
 
@@ -50,16 +48,9 @@ def _generate(system_prompt: str, output_model: type[T], prompt: str, retries: i
     raise RuntimeError(f"{output_model.__name__} の生成に失敗しました: {last_err}") from last_err
 
 
-def generate_question(cert: str, domain: str | None = None) -> Question:
-    """問題を1問生成する。"""
-    return _generate(QUESTION_SYSTEM_PROMPT, Question, build_question_prompt(cert, domain))
-
-
-def generate_explanation(question: Question) -> Explanation:
-    """与えられた問題の解説を生成する。"""
-    return _generate(
-        EXPLANATION_SYSTEM_PROMPT, Explanation, build_explanation_prompt(question), retries=3
-    )
+def generate_quiz(cert: str, domain: str | None = None) -> QuizItem:
+    """問題と解説を1回の生成でまとめて作る。"""
+    return _generate(QUIZ_SYSTEM_PROMPT, QuizItem, build_quiz_prompt(cert, domain), retries=3)
 
 
 def evaluate_question(question: Question) -> Evaluation:

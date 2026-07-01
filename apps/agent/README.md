@@ -36,11 +36,11 @@ Bedrock を呼ぶには、以下のいずれかが必要:
 ## 実行
 
 ```bash
-# AIP-C01 を全ドメイン重み付きで1問（問題＋解説）
+# AIP-C01 を全ドメイン重み付きで1問（問題＋解説を同時生成）
 python -m quiz_agent.cli --cert aip --domain all
 
-# SAA-C03 を問題のみ（解説なし）
-python -m quiz_agent.cli --cert saa --no-explanation
+# SAA-C03 を1問
+python -m quiz_agent.cli --cert saa
 
 # 生成後に妥当性を検証
 python -m quiz_agent.cli --cert aip --evaluate
@@ -54,9 +54,9 @@ python -m quiz_agent.cli --cert aip --json
 | ファイル | 役割 |
 |---------|------|
 | `quiz_agent/certs.py` | 資格・AIPドメイン定義、重み付き抽選 |
-| `quiz_agent/schema.py` | 構造化出力のPydanticスキーマ（Question/Explanation/Evaluation） |
-| `quiz_agent/prompts.py` | 問題・解説・レビューのプロンプト生成（内容面のみ） |
-| `quiz_agent/agent.py` | Strands + Bedrock の `structured_output` 呼び出し |
+| `quiz_agent/schema.py` | 構造化出力のPydanticスキーマ（QuizItem=Question+Explanation / Evaluation） |
+| `quiz_agent/prompts.py` | 問題＋解説（同時）・レビューのプロンプト生成（内容面のみ） |
+| `quiz_agent/agent.py` | Strands + Bedrock の `structured_output` 呼び出し（`generate_quiz` / `evaluate_question`） |
 | `quiz_agent/grading.py` | 正誤判定ユーティリティ |
 | `quiz_agent/cli.py` | ローカル実行用CLI |
 
