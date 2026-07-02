@@ -9,7 +9,7 @@
 ```mermaid
 flowchart TB
     subgraph Client["クライアント"]
-        Browser["ブラウザ<br/>apps/web（未着手）"]
+        Browser["ブラウザ<br/>apps/web（Vite+React SPA）"]
     end
 
     subgraph Cognito["Cognito（クラウド専用）"]
@@ -35,12 +35,12 @@ flowchart TB
             TJobs["AwsMonGenerationJobs<br/>生成job状態"]
         end
 
-        CFS3["CloudFront + S3<br/>apps/web 配信（未着手）"]
+        CFS3["CloudFront + S3<br/>apps/web 配信（配備未着手）"]
     end
 
     Browser -- "ログイン (JWT)" --> UserPool
     Browser -- "HTTPS + JWT" --> API
-    Browser -. "静的アセット取得（未着手）" .-> CFS3
+    Browser -. "静的アセット取得（配備未着手。ローカルはvite dev serverが/apiをプロキシ）" .-> CFS3
 
     API -- "JWT検証(JWKS)（未実装）" --> UserPool
     API -- "CRUD / TransactWrite" --> DDB
@@ -57,7 +57,7 @@ flowchart TB
 
 | コンポーネント | 技術 | 実行/配信場所 | 状態 |
 |---|---|---|---|
-| `apps/web` | Vite + React + TS | S3 + CloudFront | 未着手 |
+| `apps/web` | Vite + React + TS | S3 + CloudFront | 主要画面(資格選択/出題/解説/セッション再開/復習リスト)を実装済み。Cognito接続は未着手。ローカルは vite dev server(:5173) が `/api` を api(:8080) にプロキシ |
 | `apps/api` | Hono + Lambda Web Adapter (TS) | Lambda | セッション/回答/次問/一覧/dev用endpoint、agent HTTP連携を実装済み |
 | `apps/agent` | Strands Agents + Bedrock (Python) | AgentCore Runtime | CLI + local HTTP server (`/health`, `/generate`) を実装済み。既定モデルは `us.anthropic.claude-haiku-4-5-20251001-v1:0` |
 | `packages/shared` | TS型 + テーブル定義 | web/apiがimport | 実装済み |
@@ -107,6 +107,7 @@ sequenceDiagram
 ```
 
 - 回答判定は常にAPI側で行い、`correct`はクライアントへ返さない（answering DTO）。回答後のレスポンスのみ`correct`/`explanation`を含む（answered DTO）。
+- 不正解の回答は、同じTransactWrite内の`QUESTION#` Updateで自動的に復習リストへ入る（`reviewMarked=true` + `GSI1_ReviewList`キー設定。正解時は既存マークに触らない。解除は`PUT /reviews/:questionId`で手動）。
 - `/sessions/:id/answers` と `/sessions/:id/next` はどちらも `version`（楽観ロック）と `userId` 一致をDynamoDBの`ConditionExpression`で強制する。
 - job作成とsession更新は非トランザクション。`nextSessionQuestion`側の楽観ロックが競合すると作成済みjobが孤立し得る。BANKモードは読み取り専用のため実害なしだが、GENERATE/MIXEDの孤立jobは`/dev/jobs/run`にいずれ拾われて実行されるため、誰も使わない問題のためにBedrock課金が発生し得る（`apps/api/src/jobRepository.ts`のコメント参照）。
 
@@ -182,7 +183,8 @@ sequenceDiagram
 |---|---|---|
 | JWT検証ミドルウェア | 未実装。devシムのみ | [ADR 0006](adr/0006-auth-cognito-cloud-only.md) |
 | agent ⇄ API の生成連携 | local HTTP境界で実装済み。クラウドではAgentCore Runtime呼び出しへ差し替え予定 | `docs/data-model.md` 実装順序 |
-| `apps/web` | 未着手 | `README.md` |
+| spaced repetition（復習期限） | 未実装。`GSI2_DueList` の属性予約のみ（復習マーク/一覧のAP-06/07は実装済み: `/reviews`） | `docs/data-model.md` |
+| `apps/web` のS3+CloudFront配備 | ローカルのみ（vite dev server） | フェーズ4 |
 | stale化 / abandoned化 job | 未実装（GSI設計のみ存在） | `docs/data-model.md` AP-08, AP-12 |
 | `ops/`（readonlyポリシー・スケジューラ） | 未着手 | [ADR 0003](adr/0003-monorepo-and-terraform-envs.md) |
 | `.claude/skills/`（監視・issue発行） | 未着手 | [ADR 0003](adr/0003-monorepo-and-terraform-envs.md) |

@@ -167,6 +167,20 @@ export function questionStateKey(questionId: string): `QUESTION#${string}` {
   return `QUESTION#${questionId}`;
 }
 
+// GSI1_ReviewList 用キー。マーク時のみ設定し、解除時は属性ごと削除する(sparse GSI)
+export function reviewKeys(input: {
+  userId: string;
+  cert: string;
+  domain: string;
+  updatedAt: string;
+  questionId: string;
+}) {
+  return {
+    reviewPk: `USER#${input.userId}#REVIEW#MARKED`,
+    reviewSk: `CERT#${input.cert}#DOMAIN#${input.domain}#UPDATED#${input.updatedAt}#Q#${input.questionId}`,
+  };
+}
+
 export function domainStatKey(input: {
   cert: string;
   domain: string;

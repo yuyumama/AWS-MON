@@ -13,13 +13,16 @@ import {
   policy,
   questionStateKey,
   resolveTableNames,
+  reviewKeys,
   toQuestionDto,
   userStatusKeys,
+  type AnswerResultDto,
   type AttemptItem,
-  type QuestionDto,
   type QuestionItem,
+  type SessionDto,
   type SessionMetaItem,
   type SessionMode,
+  type SessionSummaryDto,
 } from "@aws-mon/shared";
 import { generateAndSaveQuestion } from "./agentClient.js";
 import { dynamoDoc } from "./dynamo.js";
@@ -29,50 +32,9 @@ import { findBankQuestion, getQuestion } from "./questionBankRepository.js";
 
 const tables = resolveTableNames();
 
-export type SessionDto = {
-  sessionId: string;
-  status: SessionMetaItem["status"];
-  cert: string;
-  domainSelection: string;
-  mode: SessionMode;
-  stats: {
-    answeredCount: number;
-    correctCount: number;
-  };
-  version: number;
-  current?: {
-    sequence: number;
-    state: "ANSWERING" | "ANSWERED";
-    selectedAnswers?: string[];
-    answeredAt?: string;
-    question: QuestionDto;
-  };
-};
-
-export type SessionSummaryDto = {
-  sessionId: string;
-  status: SessionMetaItem["status"];
-  cert: string;
-  domainSelection: string;
-  mode: SessionMode;
-  stats: {
-    answeredCount: number;
-    correctCount: number;
-  };
-  current?: {
-    sequence: number;
-    state: "ANSWERING" | "ANSWERED";
-    domain: string;
-  };
-  prefetch?: {
-    sequence: number;
-    state: NonNullable<SessionMetaItem["prefetch"]>["state"];
-    domain?: string;
-  };
-  startedAt: string;
-  updatedAt: string;
-  completedAt?: string;
-};
+// SessionDto / SessionSummaryDto / AnswerResultDto は web と共有するため
+// packages/shared/src/api.ts に定義している。
+export type { SessionDto, SessionSummaryDto } from "@aws-mon/shared";
 
 export type StartSessionInput = {
   userId: string;
@@ -91,11 +53,7 @@ export type AnswerInput = {
   elapsedMs?: number;
 };
 
-export type AnswerResult = {
-  session: SessionDto;
-  isCorrect: boolean;
-  correctAnswers: string[];
-};
+export type AnswerResult = AnswerResultDto;
 
 export type NextInput = {
   userId: string;
@@ -469,6 +427,28 @@ export async function answerSession(input: AnswerInput): Promise<AnswerResult> {
     abandonAfter,
   });
 
+  // 不正解の問題は自動で復習リストへ入れる(reviewMarked + sparse GSIキー設定)。
+  // 正解時は既存のマーク状態に触らない。解除は手動(PUT /reviews/:questionId)。
+  const autoReviewKeys = isCorrect
+    ? undefined
+    : reviewKeys({
+        userId: input.userId,
+        cert: String(question.cert),
+        domain: question.domain,
+        updatedAt: answeredAt,
+        questionId: question.questionId,
+      });
+  const reviewExpression = autoReviewKeys
+    ? "reviewMarked = :marked, reviewMarkedAt = :answeredAt, reviewPk = :reviewPk, reviewSk = :reviewSk"
+    : "reviewMarked = if_not_exists(reviewMarked, :marked)";
+  const reviewValues = autoReviewKeys
+    ? {
+        ":marked": true,
+        ":reviewPk": autoReviewKeys.reviewPk,
+        ":reviewSk": autoReviewKeys.reviewSk,
+      }
+    : { ":marked": false };
+
   const attempt: AttemptItem = {
     sessionId: input.sessionId,
     itemKey: key,
@@ -541,7 +521,7 @@ export async function answerSession(input: AnswerInput): Promise<AnswerResult> {
                 itemKey: questionStateKey(question.questionId),
               },
               UpdateExpression:
-                "SET schemaVersion = :schemaVersion, questionId = if_not_exists(questionId, :questionId), cert = if_not_exists(cert, :cert), #domain = if_not_exists(#domain, :domain), firstAnsweredAt = if_not_exists(firstAnsweredAt, :answeredAt), lastAnsweredAt = :answeredAt, lastSessionId = :sessionId, lastCorrect = :isCorrect, lastSelectedAnswers = :selectedAnswers, reviewMarked = if_not_exists(reviewMarked, :false), createdAt = if_not_exists(createdAt, :answeredAt), updatedAt = :answeredAt ADD answerCount :one, correctCount :correctInc",
+                `SET schemaVersion = :schemaVersion, questionId = if_not_exists(questionId, :questionId), cert = if_not_exists(cert, :cert), #domain = if_not_exists(#domain, :domain), firstAnsweredAt = if_not_exists(firstAnsweredAt, :answeredAt), lastAnsweredAt = :answeredAt, lastSessionId = :sessionId, lastCorrect = :isCorrect, lastSelectedAnswers = :selectedAnswers, ${reviewExpression}, createdAt = if_not_exists(createdAt, :answeredAt), updatedAt = :answeredAt ADD answerCount :one, correctCount :correctInc`,
               ExpressionAttributeNames: {
                 "#domain": "domain",
               },
@@ -554,9 +534,9 @@ export async function answerSession(input: AnswerInput): Promise<AnswerResult> {
                 ":sessionId": input.sessionId,
                 ":isCorrect": isCorrect,
                 ":selectedAnswers": selectedAnswers,
-                ":false": false,
                 ":one": 1,
                 ":correctInc": isCorrect ? 1 : 0,
+                ...reviewValues,
               },
             },
           },

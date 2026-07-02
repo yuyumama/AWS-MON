@@ -5,10 +5,11 @@
   "type": "module",
   "workspaces": [
     "packages/*",
-    "apps/api"
+    "apps/api",
+    "apps/web"
   ],
   "scripts": {
-    "build": "npm run build -w @aws-mon/shared && npm run build -w @aws-mon/api",
+    "build": "npm run build -w @aws-mon/shared && npm run build -w @aws-mon/api && npm run build -w @aws-mon/web",
     "typecheck": "npm run typecheck --workspaces --if-present"
   }
 }

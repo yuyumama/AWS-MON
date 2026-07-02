@@ -618,6 +618,7 @@ worker は session を更新するとき、必ず次を condition に入れる�
 1. `AwsMonUserActivity` の `QUESTION#<questionId>` item を Update。
 2. マーク時は `reviewPk/reviewSk` を設定。
 3. 解除時は `reviewPk/reviewSk` を削除。
+4. **不正解の回答は自動でマークする**: 回答記録トランザクションの `QUESTION#` Update 内で、`isCorrect=false` のときだけ `reviewMarked=true` と `reviewPk/reviewSk` を設定する。正解時は既存のマーク状態に触らない。解除は常に手動。
 4. 問題が `STALE` でも復習 state は残す。表示時に stale 表示し、必要なら再生成導線を出す。
 
 ### stale 化

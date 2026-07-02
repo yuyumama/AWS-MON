@@ -20,6 +20,11 @@ import {
 } from "./repository.js";
 import { saveGeneratedQuestion } from "./questionRepository.js";
 import { runRunnableJobs } from "./jobRepository.js";
+import {
+  getReviewState,
+  listReviewItems,
+  setReviewMark,
+} from "./reviewRepository.js";
 
 // Lambda Web Adapter(LWA) は「PORTで待ち受ける普通のWebサーバ」をそのままLambda化する。
 // そのため、このファイルにLambda固有の実装(handlerなど)は一切書かない。
@@ -132,6 +137,50 @@ app.post("/sessions/:sessionId/next", async (c) => {
     });
 
     return c.json({ status: "ok", session });
+  } catch (e) {
+    return errorResponse(c, e);
+  }
+});
+
+// 復習マーク済み問題の一覧(AP-06)
+app.get("/reviews", async (c) => {
+  try {
+    const items = await listReviewItems({
+      userId: devUserId(c),
+      cert: asString(c.req.query("cert")),
+      limit: asNumber(Number(c.req.query("limit"))),
+    });
+    return c.json({ status: "ok", items });
+  } catch (e) {
+    return errorResponse(c, e);
+  }
+});
+
+// ユーザー×問題の復習状態の取得/更新(AP-07)。回答済み問題のみ対象。
+app.get("/reviews/:questionId", async (c) => {
+  try {
+    const state = await getReviewState({
+      userId: devUserId(c),
+      questionId: c.req.param("questionId"),
+    });
+    return c.json({ status: "ok", ...state });
+  } catch (e) {
+    return errorResponse(c, e);
+  }
+});
+
+app.put("/reviews/:questionId", async (c) => {
+  try {
+    const body = asObject(await c.req.json().catch(() => ({})));
+    if (typeof body.marked !== "boolean") {
+      return c.json({ status: "error", message: "marked is required" }, 400);
+    }
+    const state = await setReviewMark({
+      userId: devUserId(c),
+      questionId: c.req.param("questionId"),
+      marked: body.marked,
+    });
+    return c.json({ status: "ok", ...state });
   } catch (e) {
     return errorResponse(c, e);
   }

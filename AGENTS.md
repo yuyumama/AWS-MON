@@ -11,7 +11,7 @@ git-ignored `docs_local/`).
 
 ## Directories
 
-- `apps/web` … frontend (Vite+React+TS, not started yet)
+- `apps/web` … frontend (Vite+React+TS; quiz/resume/review screens implemented, Cognito pending)
 - `apps/api` … business logic API (Hono + Lambda Web Adapter, TS)
 - `apps/agent` … question generation agent (Strands + Bedrock, Python)
 - `packages/shared` … TS types and DynamoDB table definitions shared between
@@ -42,6 +42,9 @@ cd local/seed && npm install && npm run seed
 # API
 cd apps/api && npm run dev      # http://localhost:8080/health
 npm run typecheck --workspaces --if-present   # type check (from repo root)
+
+# Web (dev server proxies /api -> localhost:8080)
+cd apps/web && npm run dev      # http://localhost:5173
 
 # Question generation agent (requires AWS auth + Bedrock model access)
 cd apps/agent && python -m quiz_agent.cli --cert aip

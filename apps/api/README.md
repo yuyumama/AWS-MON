@@ -49,8 +49,11 @@ docker build -t aws-mon-api .      # LWA同梱イメージ
 | POST | `/sessions` | seed問題からセッション開始（Phase 1は `x-dev-user-id` ヘッダでユーザーを仮指定） |
 | GET | `/sessions?status=ACTIVE&limit=20` | ユーザーのセッション一覧（既定はACTIVE） |
 | GET | `/sessions/:sessionId` | セッション再開 |
-| POST | `/sessions/:sessionId/answers` | 現在問題への回答記録 |
+| POST | `/sessions/:sessionId/answers` | 現在問題への回答記録。不正解の場合は同一トランザクションで復習リストへ自動追加 |
 | POST | `/sessions/:sessionId/next` | 回答済みcurrentから次の問題へ進む（Phase 1はbank問題を取得） |
+| GET | `/reviews?cert=aip&limit=50` | 復習マーク済み問題の一覧（AP-06。問題本体+解説を含むanswered DTOを返す） |
+| GET | `/reviews/:questionId` | ユーザー×問題の復習マーク状態を取得（AP-07） |
+| PUT | `/reviews/:questionId` | 復習マークの設定/解除。body `{"marked": true|false}`。回答済み問題のみ対象（未回答は404）。不正解時の自動追加の解除もここで行う |
 | POST | `/dev/jobs/run` | `AwsMonGenerationJobs` の実行可能job(QUEUED/RETRY_WAIT)を処理する開発用worker tick。bodyの `limit` で最大処理件数を指定可 |
 
 Phase 1 では Cognito 未実装のため、`x-dev-user-id` ヘッダがあればそれを `userId` として使い、無ければ `dev-user` を使う。
