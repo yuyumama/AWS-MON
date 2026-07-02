@@ -42,9 +42,6 @@ python -m quiz_agent.cli --cert aip --domain all
 # SAA-C03 を1問
 python -m quiz_agent.cli --cert saa
 
-# 生成後に妥当性を検証
-python -m quiz_agent.cli --cert aip --evaluate
-
 # JSONで出力（後でAPI化するときの形に近い）
 python -m quiz_agent.cli --cert aip --json
 ```
@@ -62,12 +59,17 @@ python3 -m quiz_agent.server
 | ファイル | 役割 |
 |---------|------|
 | `quiz_agent/certs.py` | 資格・AIPドメイン定義、重み付き抽選 |
-| `quiz_agent/schema.py` | 構造化出力のPydanticスキーマ（QuizItem=Question+Explanation / Evaluation） |
-| `quiz_agent/prompts.py` | 問題＋解説（同時）・レビューのプロンプト生成（内容面のみ） |
-| `quiz_agent/agent.py` | Strands + Bedrock の `structured_output` 呼び出し（`generate_quiz` / `evaluate_question`） |
+| `quiz_agent/schema.py` | 構造化出力のPydanticスキーマ（QuizItem=Question+Explanation） |
+| `quiz_agent/prompts.py` | 問題＋解説（同時）のプロンプト生成（内容面のみ） |
+| `quiz_agent/agent.py` | Strands + Bedrock の `structured_output` 呼び出し（`generate_quiz` → `GenerationResult`） |
+| `quiz_agent/guardrail.py` | Guardrails文脈的グラウンディングチェック（インライン品質ゲート） |
 | `quiz_agent/server.py` | APIから呼ぶローカルHTTPサーバ（`/health`, `/generate`） |
 | `quiz_agent/grading.py` | 正誤判定ユーティリティ |
 | `quiz_agent/cli.py` | ローカル実行用CLI |
+| `scripts/setup_observability.sh` | Transaction Search有効化＋ロググループ作成（一度きり） |
+| `scripts/run_server_otel.sh` | OTel(ADOT)計装つきでサーバ起動 |
+| `scripts/create_guardrail.py` | グラウンディングチェック用ガードレール作成（一度きり） |
+| `scripts/setup_evaluations.py` | AgentCore Evaluations オンライン評価の設定作成（一度きり） |
 
 > 出力フォーマットは**構造化出力（Pydanticスキーマ）で保証**しているため、
 > モデル出力のJSONパースや末尾カンマ除去などの後処理は不要。
@@ -85,9 +87,55 @@ python3 -m quiz_agent.server
 - 起動コマンドは `AGENT_DOCS_MCP_COMMAND` で差し替え可（例: `uvx awslabs.aws-documentation-mcp-server@latest`）
 - ツール呼び出しが増えるぶん、1問あたりのBedrockトークン消費と生成時間は増える
 
+## オブザーバビリティ（フェーズ3-1、詳細は ADR 0007）
+
+計装は**オプトイン**。通常起動では何も送らない。実AWSで観測する場合:
+
+```bash
+# 一度きり: Transaction Search有効化 + ロググループ作成（要AWS権限）
+./scripts/setup_observability.sh
+
+# OTel(ADOT SDK)計装つきでサーバ起動（CloudWatch OTLPエンドポイントへ直送）
+./scripts/run_server_otel.sh
+```
+
+- CloudWatchコンソール > **GenAI Observability** でトレース（トークン・プロンプト・MCPツール呼び出し）を確認
+- APIから渡される `sessionId` は OTel baggage `session.id` に載り、セッション単位で束なる
+- service.name / ロググループは `.env` の `AGENT_OTEL_*` で変更（既定: `aws-mon-quiz-agent` / `/aws/aws-mon/quiz-agent`）
+
+## Guardrails文脈的グラウンディングチェック（フェーズ3-3）
+
+MCP調査で取得したドキュメント原文を根拠(grounding_source)に、生成した問題の
+正解＋解説が根拠づいているかを `ApplyGuardrail` で判定するインラインゲート。
+
+```bash
+# 一度きり: ガードレール作成（guardrailIdが表示される）
+python scripts/create_guardrail.py
+
+# .env に設定すると有効化
+# AGENT_GUARDRAIL_ID=xxxxxxxx
+```
+
+- ブロック時は再生成（`AGENT_GUARDRAIL_RETRIES`、既定1回）。通らなければ生成失敗(422 `grounding_blocked`)
+- `AGENT_GUARDRAIL_ENFORCE=0` でレポートのみ（しきい値チューニング用）
+- MCP調査なし生成やガードレール自体の障害時は判定なし（fail-open、`inlineGate=not_run`）
+- 結果は `/generate` レスポンスの `quality.inlineGate` / `quality.score` としてAPI側に保存される
+
+## AgentCore Evaluations（フェーズ3-2）
+
+旧 `evaluate_question`（自己批評）の置き換え。OTel計装で送ったトレースを
+LLM-as-a-Judge（`Builtin.Correctness` / `Builtin.Faithfulness`）が非同期に採点する。
+
+```bash
+# 一度きり: 実行ロール + オンライン評価設定を作成
+python scripts/setup_evaluations.py
+```
+
+結果は CloudWatch > GenAI Observability の Evaluations に蓄積（DynamoDBには書き戻さない）。
+
 ## TODO（次の段階）
 
 - [x] 最新AWS情報の取得（AWSドキュメントMCPで実装。Web検索ツールは必要になったら追加）
-- [ ] `evaluate_question` を AgentCore evaluate に置き換え
+- [x] `evaluate_question` を AgentCore Evaluations（オンライン評価）に置き換え
 - [ ] 生成済み問題を DynamoDB に保存 →「生成済みから出題」モード
 - [ ] AgentCore Runtime へのデプロイ

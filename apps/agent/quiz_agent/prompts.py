@@ -12,10 +12,8 @@ from .certs import (
     get_cert_full_name,
     pick_weighted_domain,
 )
-from .schema import Question
 
 QUIZ_SYSTEM_PROMPT = "あなたはAWS認定試験の問題・解説作成の専門家です。"
-REVIEW_SYSTEM_PROMPT = "あなたはAWS認定試験の問題レビュー専門家です。"
 
 
 def build_quiz_prompt(cert: str, domain: str | None = None) -> str:
@@ -86,18 +84,5 @@ QUIZ_FROM_RESEARCH_PROMPT = (
 )
 
 
-def build_review_prompt(question: Question) -> str:
-    """問題の妥当性を検証するプロンプトを構築する。"""
-    opts = "\n".join(f"{o.label}: {o.text}" for o in question.options)
-    correct_join = ", ".join(question.correct)
-    return f"""次のAWS認定試験の問題を批判的にレビューしてください。
-
-問題: {question.question}
-選択肢:
-{opts}
-作成者が示した正解: {correct_join}
-
-確認事項:
-- 示された正解は本当に正しいか（最新のAWS仕様に照らして）
-- 設問・選択肢に技術的な誤りや曖昧さがないか
-- 複数選択なら必要な正解数が設問に明記されているか"""
+# 旧レビュー用プロンプト(REVIEW_SYSTEM_PROMPT / build_review_prompt)はフェーズ3-2で
+# AgentCore Evaluations オンライン評価に置き換えたため削除した。

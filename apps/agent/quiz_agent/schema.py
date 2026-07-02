@@ -52,9 +52,5 @@ class QuizItem(BaseModel):
     explanation: Explanation = Field(description="上記の問題に対する解説")
 
 
-class Evaluation(BaseModel):
-    valid: bool = Field(description="問題と示された正解が技術的に妥当か")
-    correct_answers: list[str] = Field(
-        description="レビュアーが判定した正しい正解ラベルの配列"
-    )
-    issues: str = Field(description="技術的な誤りや曖昧さ。問題なければ空文字")
+# 旧 Evaluation(自己批評の構造化出力)はフェーズ3-2で AgentCore Evaluations に
+# 置き換えたため削除した。

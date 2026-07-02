@@ -7,7 +7,8 @@ import os
 import shlex
 import sys
 import time
-from typing import TypeVar
+from dataclasses import dataclass, field
+from typing import Any, TypeVar
 
 from mcp import StdioServerParameters, stdio_client
 from pydantic import BaseModel
@@ -15,15 +16,21 @@ from strands import Agent
 from strands.models import BedrockModel
 from strands.tools.mcp import MCPClient
 
+from .guardrail import (
+    GateResult,
+    GroundingBlockedError,
+    check_grounding,
+    gate_enabled,
+    gate_enforced,
+    gate_retries,
+)
 from .prompts import (
     QUIZ_FROM_RESEARCH_PROMPT,
     QUIZ_SYSTEM_PROMPT,
-    REVIEW_SYSTEM_PROMPT,
     build_docs_research_prompt,
     build_quiz_prompt,
-    build_review_prompt,
 )
-from .schema import Evaluation, Question, QuizItem
+from .schema import QuizItem
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +96,29 @@ def _docs_mcp_client() -> MCPClient:
     )
 
 
-def _generate_quiz_with_docs(quiz_prompt: str) -> QuizItem:
+def _tool_result_texts(messages: list[Any]) -> list[str]:
+    """会話履歴からMCPツール結果のテキスト(ドキュメント原文)を抜き出す。
+
+    グラウンディングチェックの grounding_source として使う。
+    """
+    texts: list[str] = []
+    for message in messages:
+        content = message.get("content") if isinstance(message, dict) else None
+        for block in content or []:
+            if not isinstance(block, dict):
+                continue
+            tool_result = block.get("toolResult")
+            if not isinstance(tool_result, dict):
+                continue
+            for part in tool_result.get("content") or []:
+                text = part.get("text") if isinstance(part, dict) else None
+                if isinstance(text, str) and text:
+                    texts.append(text)
+    return texts
+
+
+def _generate_quiz_with_docs(quiz_prompt: str) -> tuple[QuizItem, list[str]]:
+    """MCP調査つき生成。生成結果と、調査で得たドキュメント原文を返す。"""
     client = _docs_mcp_client()
     with client:
         agent = Agent(
@@ -99,13 +128,83 @@ def _generate_quiz_with_docs(quiz_prompt: str) -> QuizItem:
         )
         # 1ターン目: ドキュメント調査(ツール使用)。2ターン目: 会話履歴を踏まえた構造化出力。
         agent(build_docs_research_prompt(quiz_prompt))
-        return agent.structured_output(QuizItem, QUIZ_FROM_RESEARCH_PROMPT)
+        item = agent.structured_output(QuizItem, QUIZ_FROM_RESEARCH_PROMPT)
+        return item, _tool_result_texts(agent.messages)
 
 
-def generate_quiz(cert: str, domain: str | None = None) -> QuizItem:
+@dataclass
+class GenerationResult:
+    """生成結果とインライン品質ゲートの結果。"""
+
+    item: QuizItem
+    gate: GateResult = field(default_factory=lambda: GateResult(status="not_run"))
+
+
+def _gate_query(item: QuizItem) -> str:
+    return item.question.question
+
+
+def _gate_guard_content(item: QuizItem) -> str:
+    """ゲート対象のテキスト = 正解の選択肢 + 解説(根拠の主張部分)。"""
+    option_text = {o.label: o.text for o in item.question.options}
+    lines = [f"正解: {', '.join(item.question.correct)}"]
+    lines.extend(
+        f"{label}: {option_text.get(label, '')}" for label in item.question.correct
+    )
+    lines.append(item.explanation.overview)
+    lines.append(item.explanation.correct_reason)
+    return "\n".join(lines)
+
+
+def _generate_quiz_with_docs_and_gate(quiz_prompt: str) -> GenerationResult:
+    """MCP調査つき生成 + Guardrailsグラウンディングチェック(有効時)。
+
+    ブロックされたら再生成し、それでも通らなければ enforce 設定に応じて
+    エラー(弾く)か、failed のまま返す(レポートのみ)。
+    """
+    attempts = (gate_retries() + 1) if gate_enabled() else 1
+    last: GenerationResult | None = None
+
+    for attempt in range(attempts):
+        item, source_texts = _generate_quiz_with_docs(quiz_prompt)
+        if not gate_enabled():
+            return GenerationResult(item=item)
+        if not source_texts:
+            # 調査ターンでツールが使われなかった場合は根拠が無いので判定不能
+            return GenerationResult(
+                item=item,
+                gate=GateResult(status="not_run", detail="no research documents"),
+            )
+
+        gate = check_grounding(
+            grounding_source="\n\n".join(source_texts),
+            query=_gate_query(item),
+            guard_content=_gate_guard_content(item),
+        )
+        if gate.status != "failed":
+            return GenerationResult(item=item, gate=gate)
+
+        last = GenerationResult(item=item, gate=gate)
+        logger.warning(
+            "グラウンディングチェックでブロックされました (%d/%d回目, %s)",
+            attempt + 1,
+            attempts,
+            gate.detail,
+        )
+
+    assert last is not None
+    if gate_enforced():
+        raise GroundingBlockedError(
+            f"グラウンディングチェックを{attempts}回通過できませんでした ({last.gate.detail})"
+        )
+    return last
+
+
+def generate_quiz(cert: str, domain: str | None = None) -> GenerationResult:
     """問題と解説を1回の生成でまとめて作る。
 
-    AGENT_DOCS_MCP が有効なら、AWSドキュメントMCPで最新情報を調査してから生成する。
+    AGENT_DOCS_MCP が有効なら、AWSドキュメントMCPで最新情報を調査してから生成し、
+    AGENT_GUARDRAIL_ID が設定されていれば調査原文を根拠にグラウンディングチェックする。
     """
     retries = int(os.environ.get("AGENT_GENERATE_RETRIES", "3"))
     # ドメイン抽選(all時)を1回に固定するため、プロンプトを先に確定させる
@@ -113,19 +212,19 @@ def generate_quiz(cert: str, domain: str | None = None) -> QuizItem:
 
     if _docs_mcp_enabled():
         try:
-            return _generate_quiz_with_docs(quiz_prompt)
+            return _generate_quiz_with_docs_and_gate(quiz_prompt)
+        except GroundingBlockedError:
+            raise
         except Exception:  # noqa: BLE001 - MCP起動/調査失敗は生成なしにフォールバック
             logger.warning(
                 "AWSドキュメントMCPでの生成に失敗したため、ドキュメントなし生成へフォールバックします",
                 exc_info=True,
             )
 
-    return _generate(QUIZ_SYSTEM_PROMPT, QuizItem, quiz_prompt, retries=retries)
+    item = _generate(QUIZ_SYSTEM_PROMPT, QuizItem, quiz_prompt, retries=retries)
+    return GenerationResult(item=item)
 
 
-def evaluate_question(question: Question) -> Evaluation:
-    """生成された問題の品質・正解の妥当性を別呼び出しで検証する（簡易版）。
-
-    将来 AgentCore evaluate / Web検索ツールに置き換える前提のプレースホルダ。
-    """
-    return _generate(REVIEW_SYSTEM_PROMPT, Evaluation, build_review_prompt(question), retries=2)
+# 旧 evaluate_question(自己批評のプレースホルダ)はフェーズ3-2で AgentCore Evaluations の
+# オンライン評価(scripts/setup_evaluations.py)に置き換えた。品質採点はトレースに対して
+# 非同期に行われ、結果はCloudWatch(GenAI Observability)側に蓄積される。

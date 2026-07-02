@@ -9,9 +9,10 @@ from __future__ import annotations
 import json
 import os
 import time
+from contextlib import contextmanager
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any
+from typing import Any, Iterator
 
 try:
     from dotenv import load_dotenv
@@ -19,6 +20,7 @@ except ModuleNotFoundError:
     def load_dotenv() -> bool:
         return False
 
+from .guardrail import GateResult, GroundingBlockedError
 from .schema import Explanation, Option, OptionReason, Question, QuizItem
 
 AGENT_VERSION = "local-http-v1"
@@ -62,13 +64,61 @@ def _stub_quiz(cert: str, domain: str | None) -> QuizItem:
     )
 
 
-def _generate_quiz(cert: str, domain: str | None) -> QuizItem:
+def _generate_quiz(cert: str, domain: str | None) -> tuple[QuizItem, GateResult]:
     if os.environ.get("AGENT_STUB") == "1":
-        return _stub_quiz(cert, domain)
+        return _stub_quiz(cert, domain), GateResult(status="not_run", detail="stub")
 
     from .agent import generate_quiz
 
-    return generate_quiz(cert=cert, domain=domain)
+    result = generate_quiz(cert=cert, domain=domain)
+    return result.item, result.gate
+
+
+def _evaluator_label() -> str:
+    """オンライン評価(AgentCore Evaluations)の対象になっているかをメタデータとして残す。
+
+    OTel計装つき(scripts/run_server_otel.sh)で起動していればトレースが送信され、
+    設定済みのオンライン評価が非同期に採点する。
+    """
+    if os.environ.get("AGENT_OBSERVABILITY_ENABLED", "").lower() == "true":
+        return "agentcore_evaluate"
+    return "none"
+
+
+def _quality(gate: GateResult, evaluated_at: str) -> dict[str, Any]:
+    quality: dict[str, Any] = {
+        "inlineGate": gate.status,
+        "evaluator": _evaluator_label(),
+    }
+    if gate.status != "not_run":
+        quality["evaluatedAt"] = evaluated_at
+        if gate.grounding_score is not None:
+            quality["score"] = gate.grounding_score
+    if gate.detail:
+        quality["issues"] = gate.detail
+    return quality
+
+
+@contextmanager
+def _otel_session(session_id: str | None) -> Iterator[None]:
+    """出題セッションIDをOTel baggageの session.id に載せる(フェーズ3-1)。
+
+    CloudWatch生成AIオブザーバビリティはbaggageの session.id でトレースを
+    セッション単位に束ねる。OTel未計装(通常起動)なら何もしない。
+    """
+    if not session_id:
+        yield
+        return
+    try:
+        from opentelemetry import baggage, context
+    except ImportError:
+        yield
+        return
+    token = context.attach(baggage.set_baggage("session.id", session_id))
+    try:
+        yield
+    finally:
+        context.detach(token)
 
 
 def _now_iso() -> str:
@@ -132,7 +182,9 @@ class Handler(BaseHTTPRequestHandler):
             cert = _str_value(body.get("cert"), "aip")
             domain = _str_value(body.get("domain"))
             domain_selection = _str_value(body.get("domainSelection"), domain)
-            item = _generate_quiz(cert=cert or "aip", domain=domain)
+            session_id = _str_value(body.get("sessionId"))
+            with _otel_session(session_id):
+                item, gate = _generate_quiz(cert=cert or "aip", domain=domain)
             generated_at = _now_iso()
             latency_ms = int((time.perf_counter() - started) * 1000)
             source = item.explanation.source
@@ -152,11 +204,20 @@ class Handler(BaseHTTPRequestHandler):
                         "generatedAt": generated_at,
                         "latencyMs": latency_ms,
                     },
-                    "quality": {
-                        "inlineGate": "not_run",
-                        "evaluator": "none",
-                    },
+                    "quality": _quality(gate, generated_at),
                     "sourceRefs": [{"url": source, "retrievedAt": generated_at}],
+                },
+            )
+        except GroundingBlockedError as exc:
+            # ドキュメントに根拠づかない問題は保存させない(フェーズ3-3のインラインゲート)
+            self._send_json(
+                HTTPStatus.UNPROCESSABLE_ENTITY,
+                {
+                    "status": "error",
+                    "code": "grounding_blocked",
+                    "message": str(exc),
+                    "modelId": _model_id(),
+                    "agentVersion": AGENT_VERSION,
                 },
             )
         except Exception as exc:  # noqa: BLE001 - HTTP boundary returns JSON error

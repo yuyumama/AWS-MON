@@ -182,6 +182,7 @@ async function attemptJob(
             domain,
             domainSelection: claimed.domainSelection,
             jobId: claimed.jobId,
+            sessionId: claimed.sessionId,
           })
         : claimed.mode === "MIXED"
           ? await findBankQuestion({
@@ -196,6 +197,7 @@ async function attemptJob(
                   domain,
                   domainSelection: claimed.domainSelection,
                   jobId: claimed.jobId,
+                  sessionId: claimed.sessionId,
                 });
               }
               throw error;

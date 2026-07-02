@@ -3,7 +3,6 @@
 使い方:
     python -m quiz_agent.cli --cert aip --domain all
     python -m quiz_agent.cli --cert saa
-    python -m quiz_agent.cli --cert aip --evaluate
 """
 
 import argparse
@@ -12,9 +11,9 @@ import sys
 
 from dotenv import load_dotenv
 
-from .agent import evaluate_question, generate_quiz
+from .agent import generate_quiz
 from .certs import AIP_DOMAINS, CERT_FULL_NAMES
-from .schema import Evaluation, Explanation, Question
+from .schema import Explanation, Question
 
 
 def _print_question(q: Question) -> None:
@@ -47,14 +46,6 @@ def _print_explanation(ex: Explanation) -> None:
         print(f"\n[参考資料]\n{ex.source}")
 
 
-def _print_evaluation(ev: Evaluation) -> None:
-    print("\n--- 検証 ---")
-    print(f"妥当: {ev.valid}")
-    print(f"判定された正解: {', '.join(ev.correct_answers)}")
-    if ev.issues:
-        print(f"指摘: {ev.issues}")
-
-
 def main(argv: list[str] | None = None) -> int:
     load_dotenv()
 
@@ -68,21 +59,14 @@ def main(argv: list[str] | None = None) -> int:
         help="AIP-C01 のドメイン（既定: all。AIP以外では無視）",
     )
     parser.add_argument(
-        "--evaluate", action="store_true", help="生成後に問題の妥当性を検証する",
-    )
-    parser.add_argument(
         "--json", action="store_true", help="整形せずJSONで出力する",
     )
     args = parser.parse_args(argv)
 
     try:
         print(f"問題と解説を生成中... ({CERT_FULL_NAMES[args.cert]})", file=sys.stderr)
-        item = generate_quiz(args.cert, args.domain)
-
-        evaluation: Evaluation | None = None
-        if args.evaluate:
-            print("問題を検証中...", file=sys.stderr)
-            evaluation = evaluate_question(item.question)
+        result = generate_quiz(args.cert, args.domain)
+        item = result.item
     except Exception as e:  # noqa: BLE001
         print(f"エラー: {e}", file=sys.stderr)
         return 1
@@ -90,15 +74,23 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         out = {
             "quiz": item.model_dump(),
-            "evaluation": evaluation.model_dump() if evaluation else None,
+            "gate": {
+                "status": result.gate.status,
+                "groundingScore": result.gate.grounding_score,
+                "relevanceScore": result.gate.relevance_score,
+                "detail": result.gate.detail,
+            },
         }
         print(json.dumps(out, ensure_ascii=False, indent=2))
         return 0
 
     _print_question(item.question)
     _print_explanation(item.explanation)
-    if evaluation:
-        _print_evaluation(evaluation)
+    if result.gate.status != "not_run":
+        print(
+            f"\n--- グラウンディングチェック ---\n判定: {result.gate.status}"
+            f" (grounding={result.gate.grounding_score}, relevance={result.gate.relevance_score})"
+        )
     return 0
 
 

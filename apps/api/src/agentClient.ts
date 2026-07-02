@@ -34,6 +34,8 @@ export type GenerateAndSaveQuestionInput = {
   domain: string;
   domainSelection: string;
   jobId?: string;
+  // agent側でOTel baggage(session.id)に載せ、トレースをセッション単位に束ねる
+  sessionId?: string;
 };
 
 export async function generateAndSaveQuestion(
@@ -51,6 +53,7 @@ export async function generateAndSaveQuestion(
         cert: input.cert,
         domain: input.domain,
         domainSelection: input.domainSelection,
+        sessionId: input.sessionId,
       }),
       signal: controller.signal,
     });
