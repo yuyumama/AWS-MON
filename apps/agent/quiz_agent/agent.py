@@ -18,14 +18,18 @@ from .prompts import (
 )
 from .schema import Evaluation, Question, QuizItem
 
-DEFAULT_MODEL_ID = "us.anthropic.claude-sonnet-4-6"
+DEFAULT_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+
+def model_id() -> str:
+    return os.environ.get("BEDROCK_MODEL_ID", DEFAULT_MODEL_ID)
 
 T = TypeVar("T", bound=BaseModel)
 
 
 def _model() -> BedrockModel:
     return BedrockModel(
-        model_id=os.environ.get("BEDROCK_MODEL_ID", DEFAULT_MODEL_ID),
+        model_id=model_id(),
         region_name=os.environ.get("AWS_REGION", "us-east-1"),
     )
 
@@ -50,7 +54,8 @@ def _generate(system_prompt: str, output_model: type[T], prompt: str, retries: i
 
 def generate_quiz(cert: str, domain: str | None = None) -> QuizItem:
     """問題と解説を1回の生成でまとめて作る。"""
-    return _generate(QUIZ_SYSTEM_PROMPT, QuizItem, build_quiz_prompt(cert, domain), retries=3)
+    retries = int(os.environ.get("AGENT_GENERATE_RETRIES", "3"))
+    return _generate(QUIZ_SYSTEM_PROMPT, QuizItem, build_quiz_prompt(cert, domain), retries=retries)
 
 
 def evaluate_question(question: Question) -> Evaluation:

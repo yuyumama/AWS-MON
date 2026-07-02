@@ -648,12 +648,12 @@ GENERATION_JOBS_TABLE=aws-mon-local-generation-jobs
 
 ## 実装順序
 
-1. `local/seed/` に4テーブル作成スクリプトを追加する。GSI の key schema と projection は本書どおりに作る。
-2. seed 後に `DescribeTable` 相当で GSI projection を検証する。
-3. `apps/api` に DynamoDB repository 層と DTO 変換層を作る。
-4. セッション開始/再開/回答記録を、生成 agent なしで固定 seed question に対して通す。
-5. `AwsMonQuestions` の保存・bank random 取得・contentHash 重複候補検出を実装する。
-6. `AwsMonGenerationJobs` を使って先読み状態を保存する。最初は API 内同期/疑似 worker でよい。
-7. agent 連携後、生成された `QuizItem{question, explanation}` を `ACTIVE` な `QuestionItem` として保存する。
+1. ~~`local/seed/` に4テーブル作成スクリプトを追加する。GSI の key schema と projection は本書どおりに作る。~~ 完了
+2. ~~seed 後に `DescribeTable` 相当で GSI projection を検証する。~~ 完了
+3. ~~`apps/api` に DynamoDB repository 層と DTO 変換層を作る。~~ 完了
+4. ~~セッション開始/再開/回答記録を、生成 agent なしで固定 seed question に対して通す。~~ 完了
+5. ~~`AwsMonQuestions` の保存・bank random 取得・contentHash 重複候補検出を実装する。~~ 完了(`apps/api/src/questionRepository.ts`, `questionBankRepository.ts`)
+6. ~~`AwsMonGenerationJobs` を使って先読み状態を保存する。最初は API 内同期/疑似 worker でよい。~~ 完了(`apps/api/src/jobRepository.ts`。`mode=BANK`はinline実行、`GENERATE/MIXED`は`/dev/jobs/run`で処理)
+7. ~~agent 連携後、生成された `QuizItem{question, explanation}` を `ACTIVE` な `QuestionItem` として保存する。~~ 完了。`apps/agent`にローカルHTTPサーバ(`quiz_agent/server.py`, `/generate`)を追加し、`apps/api/src/agentClient.ts`経由でHTTP呼び出し→`saveGeneratedQuestion`で保存する。本番では同じ境界をAgentCore Runtime呼び出しに差し替える想定。
 8. stale 化 job、abandoned 化 job、復習一覧を追加する。
 9. sparse GSI の SET/REMOVE 規律を結合テストで検証する。

@@ -21,6 +21,7 @@ import {
   type SessionMetaItem,
   type SessionMode,
 } from "@aws-mon/shared";
+import { generateAndSaveQuestion } from "./agentClient.js";
 import { dynamoDoc } from "./dynamo.js";
 import { ApiError } from "./errors.js";
 import { createAndRunPrefetchJob } from "./jobRepository.js";
@@ -159,6 +160,40 @@ function resolveDomain(input: {
     domainSelection: input.domainSelection ?? "all",
     domain: "general",
   };
+}
+
+async function selectQuestion(input: {
+  cert: string;
+  domain: string;
+  domainSelection: string;
+  mode: SessionMode;
+  excludeQuestionIds?: string[];
+}): Promise<QuestionItem> {
+  if (input.mode === "GENERATE") {
+    return generateAndSaveQuestion(input);
+  }
+
+  if (input.mode === "MIXED") {
+    try {
+      return await findBankQuestion({
+        cert: input.cert,
+        domain: input.domain,
+        excludeQuestionIds: input.excludeQuestionIds,
+        allowExcludedFallback: false,
+      });
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) {
+        return generateAndSaveQuestion(input);
+      }
+      throw error;
+    }
+  }
+
+  return findBankQuestion({
+    cert: input.cert,
+    domain: input.domain,
+    excludeQuestionIds: input.excludeQuestionIds,
+  });
 }
 
 function toSessionDto(meta: SessionMetaItem, question?: QuestionItem): SessionDto {
@@ -308,7 +343,12 @@ export async function listSessions(
 export async function startSession(input: StartSessionInput): Promise<SessionDto> {
   const mode = input.mode ?? "BANK";
   const { domainSelection, domain } = resolveDomain(input);
-  const question = await findBankQuestion({ cert: input.cert, domain });
+  const question = await selectQuestion({
+    cert: input.cert,
+    domain,
+    domainSelection,
+    mode,
+  });
   const createdAt = nowIso();
   const sessionId = newSessionId();
   const abandonAfter = addDaysIso(createdAt, policy.abandonAfterDays);
@@ -591,9 +631,11 @@ export async function nextSessionQuestion(input: NextInput): Promise<SessionDto>
   const question =
     meta.prefetch?.state === "READY" && meta.prefetch.questionId
       ? await getQuestion(meta.prefetch.questionId)
-      : await findBankQuestion({
+      : await selectQuestion({
           cert: meta.cert,
           domain: nextDomain(meta),
+          domainSelection: meta.domainSelection,
+          mode: meta.mode,
           excludeQuestionIds: meta.lastSeenQuestionIds,
         });
 

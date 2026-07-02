@@ -25,6 +25,10 @@ npm run dev
 #   2) cp .env.example .env
 #   3) npx tsx watch --env-file=.env src/index.ts
 #   → http://localhost:8080/health/dynamo  でテーブル一覧が返る
+
+# GENERATE/MIXED モードで agent 生成を使う場合:
+#   1) cd ../agent && python3 -m quiz_agent.server
+#   2) apps/api 側の AGENT_BASE_URL=http://127.0.0.1:8090 を有効化
 ```
 
 ## ビルド & コンテナ化（本番）
@@ -50,3 +54,4 @@ docker build -t aws-mon-api .      # LWA同梱イメージ
 | POST | `/dev/jobs/run` | `AwsMonGenerationJobs` の実行可能job(QUEUED/RETRY_WAIT)を処理する開発用worker tick。bodyの `limit` で最大処理件数を指定可 |
 
 Phase 1 では Cognito 未実装のため、`x-dev-user-id` ヘッダがあればそれを `userId` として使い、無ければ `dev-user` を使う。
+`mode=GENERATE` は `apps/agent` をHTTPで呼び出して問題を生成・保存する。`mode=MIXED` はbankを優先し、候補がない場合だけagent生成にフォールバックする。

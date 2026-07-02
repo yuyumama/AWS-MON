@@ -10,7 +10,9 @@ import {
   type SessionMetaItem,
   type SessionMode,
 } from "@aws-mon/shared";
+import { generateAndSaveQuestion } from "./agentClient.js";
 import { dynamoDoc } from "./dynamo.js";
+import { ApiError } from "./errors.js";
 import { findBankQuestion } from "./questionBankRepository.js";
 
 const tables = resolveTableNames();
@@ -148,8 +150,9 @@ type AttemptOutcome = {
   state: "SUCCEEDED" | "RETRY_WAIT" | "FAILED";
 };
 
-// bank(GSI1_BankRandom)から次問題を選ぶだけの疑似worker。
-// 実際のAI生成(apps/agent)はHTTP経由で呼べないため、agent連携までの間はこれが唯一の実行手段。
+// mode=BANKはGSI1_BankRandomから次問題を選ぶだけの疑似worker。
+// mode=GENERATEはapps/agentをHTTP経由で呼び出して新規生成する。mode=MIXEDはbank優先、
+// 候補が尽きたら(404)agent生成にフォールバックする。
 //
 // excludeQuestionIdsはinline実行(createAndRunPrefetchJob)時に呼び出し元から直接渡す。
 // GenerationJobItemには除外リストを永続化するフィールドが無い(data-model通り)ため、
@@ -171,12 +174,38 @@ async function attemptJob(
         : [];
 
   try {
-    const question = await findBankQuestion({
-      cert: claimed.cert,
-      domain: claimed.domain ?? claimed.domainSelection,
-      excludeQuestionIds: exclude,
-      allowExcludedFallback: false,
-    });
+    const domain = claimed.domain ?? claimed.domainSelection;
+    const question =
+      claimed.mode === "GENERATE"
+        ? await generateAndSaveQuestion({
+            cert: claimed.cert,
+            domain,
+            domainSelection: claimed.domainSelection,
+            jobId: claimed.jobId,
+          })
+        : claimed.mode === "MIXED"
+          ? await findBankQuestion({
+              cert: claimed.cert,
+              domain,
+              excludeQuestionIds: exclude,
+              allowExcludedFallback: false,
+            }).catch((error: unknown) => {
+              if (error instanceof ApiError && error.status === 404) {
+                return generateAndSaveQuestion({
+                  cert: claimed.cert,
+                  domain,
+                  domainSelection: claimed.domainSelection,
+                  jobId: claimed.jobId,
+                });
+              }
+              throw error;
+            })
+          : await findBankQuestion({
+              cert: claimed.cert,
+              domain,
+              excludeQuestionIds: exclude,
+              allowExcludedFallback: false,
+            });
     await completeJobSuccess(claimed, question.questionId);
     return {
       job: { ...claimed, state: "SUCCEEDED", questionId: question.questionId },
@@ -184,7 +213,10 @@ async function attemptJob(
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : "prefetch job failed";
-    const errorCode = "no_bank_question";
+    const errorCode =
+      error instanceof ApiError && error.status === 404
+        ? "no_bank_question"
+        : "generation_failed";
     const state = await completeJobRetryOrFail(claimed, errorCode, message);
     return { job: { ...claimed, state, errorCode, errorMessage: message }, state };
   }
@@ -203,7 +235,10 @@ export type CreatePrefetchJobInput = {
 
 // job作成とsession書き込みは非トランザクションのため、nextSessionQuestion側で
 // セッション更新の楽観ロックが失敗した場合はここで作ったjobが孤立しうる。
-// BANKモードは読み取り専用なので実害はない。実生成(agent連携)を繋ぐ際に要見直し。
+// BANKモードは読み取り専用なので実害はない。GENERATE/MIXEDは孤立してもいずれ
+// /dev/jobs/run に拾われて実行される(reflectJobOnSessionはprefetch.jobId不一致を
+// 無視するだけで実行自体は止めない)ため、誰も使わない問題のためにBedrock課金が
+// 発生し得る。頻発するようならjob作成側でもsessionの整合性を確認してから作るなど要見直し。
 export async function createAndRunPrefetchJob(
   input: CreatePrefetchJobInput,
 ): Promise<NonNullable<SessionMetaItem["prefetch"]>> {
@@ -240,6 +275,16 @@ export async function createAndRunPrefetchJob(
       ConditionExpression: "attribute_not_exists(jobId)",
     }),
   );
+
+  if (input.mode !== "BANK") {
+    return {
+      sequence: input.targetSequence,
+      state: "QUEUED",
+      jobId,
+      domain: input.domain,
+      updatedAt: createdAt,
+    };
+  }
 
   const outcome = await attemptJob(job, input.excludeQuestionIds);
   const updatedAt = nowIso();

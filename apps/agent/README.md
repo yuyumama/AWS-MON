@@ -30,7 +30,7 @@ Bedrock を呼ぶには、以下のいずれかが必要:
 （AWSコンソール → Bedrock → Model access）。
 
 > モデルIDはリージョンやクロスリージョン推論プロファイルにより異なる。
-> 既定は `us.anthropic.claude-sonnet-4-6`。動かない場合は `.env` の `BEDROCK_MODEL_ID` を
+> 既定は `us.anthropic.claude-haiku-4-5-20251001-v1:0`。動かない場合は `.env` の `BEDROCK_MODEL_ID` を
 > 自分のアカウントで有効なIDに変更する。
 
 ## 実行
@@ -49,6 +49,14 @@ python -m quiz_agent.cli --cert aip --evaluate
 python -m quiz_agent.cli --cert aip --json
 ```
 
+API から呼び出すローカルHTTPサーバ:
+
+```bash
+python3 -m quiz_agent.server
+# http://127.0.0.1:8090/health
+# POST /generate { "cert": "aip", "domain": "d1", "domainSelection": "all" }
+```
+
 ## 構成
 
 | ファイル | 役割 |
@@ -57,6 +65,7 @@ python -m quiz_agent.cli --cert aip --json
 | `quiz_agent/schema.py` | 構造化出力のPydanticスキーマ（QuizItem=Question+Explanation / Evaluation） |
 | `quiz_agent/prompts.py` | 問題＋解説（同時）・レビューのプロンプト生成（内容面のみ） |
 | `quiz_agent/agent.py` | Strands + Bedrock の `structured_output` 呼び出し（`generate_quiz` / `evaluate_question`） |
+| `quiz_agent/server.py` | APIから呼ぶローカルHTTPサーバ（`/health`, `/generate`） |
 | `quiz_agent/grading.py` | 正誤判定ユーティリティ |
 | `quiz_agent/cli.py` | ローカル実行用CLI |
 
