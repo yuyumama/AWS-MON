@@ -42,6 +42,7 @@ export type StartSessionInput = {
   domainSelection?: string;
   domain?: string;
   mode?: SessionMode;
+  canGenerateQuestions: boolean;
 };
 
 export type AnswerInput = {
@@ -59,6 +60,7 @@ export type NextInput = {
   userId: string;
   sessionId: string;
   version?: number;
+  canGenerateQuestions: boolean;
 };
 
 export type ListSessionsInput = {
@@ -298,8 +300,23 @@ export async function listSessions(
     .map((item) => toSessionSummaryDto(item));
 }
 
+// GENERATE/MIXED は Bedrock/LLM 課金に到達し得るため生成権限を必須にする(ADR 0006)。
+// MIXED は bank 優先でも枯渇時に生成へフォールバックするので同じ扱い。
+function assertGenerationAllowed(
+  mode: SessionMode,
+  canGenerateQuestions: boolean,
+): void {
+  if (mode !== "BANK" && !canGenerateQuestions) {
+    throw new ApiError(
+      `mode=${mode} requires question generation permission`,
+      403,
+    );
+  }
+}
+
 export async function startSession(input: StartSessionInput): Promise<SessionDto> {
   const mode = input.mode ?? "BANK";
+  assertGenerationAllowed(mode, input.canGenerateQuestions);
   const { domainSelection, domain } = resolveDomain(input);
   const question = await selectQuestion({
     cert: input.cert,
@@ -607,6 +624,9 @@ export async function nextSessionQuestion(input: NextInput): Promise<SessionDto>
   if (meta.current.state !== "ANSWERED") {
     throw new ApiError("current question must be answered before moving next", 409);
   }
+  // セッション作成後に生成権限が取り消された場合も、生成フォールバックや
+  // GENERATE/MIXED のprefetch job作成に進ませない。
+  assertGenerationAllowed(meta.mode, input.canGenerateQuestions);
 
   const question =
     meta.prefetch?.state === "READY" && meta.prefetch.questionId

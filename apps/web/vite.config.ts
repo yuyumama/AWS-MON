@@ -5,6 +5,11 @@ import { defineConfig } from "vite";
 // 本番は CloudFront で同一オリジンに載せる想定(フェーズ4で対応)。
 export default defineConfig({
   plugins: [react()],
+  // amazon-cognito-identity-js は Node.js の `global` を参照するため、
+  // ブラウザ(Vite)向けに globalThis へエイリアスする。
+  define: {
+    global: "globalThis",
+  },
   server: {
     proxy: {
       "/api": {

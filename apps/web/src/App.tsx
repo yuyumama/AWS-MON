@@ -1,7 +1,9 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { SessionDto } from "@aws-mon/shared";
-import { devUserId } from "./lib/api";
+import { errorMessage, getMe } from "./lib/api";
+import { authMode, displayName, initAuth, logout } from "./lib/auth";
 import { HomeView } from "./views/HomeView";
+import { LoginView } from "./views/LoginView";
 import { QuizView } from "./views/QuizView";
 import { ReviewView } from "./views/ReviewView";
 
@@ -19,8 +21,15 @@ function parseRoute(): Route {
   return { view: "home" };
 }
 
+// 認証の起動状態。cognitoモードではログイン完了+/me取得までアプリを描画しない。
+type AuthState =
+  | { phase: "loading" }
+  | { phase: "login"; error?: string }
+  | { phase: "ready"; canGenerate: boolean };
+
 export function App() {
   const [route, setRoute] = useState<Route>(parseRoute);
+  const [auth, setAuth] = useState<AuthState>({ phase: "loading" });
   // セッション開始直後のDTOを再フェッチせずQuizViewへ渡すための引き継ぎ。
   // リロード時は null になり、QuizView が GET /sessions/:id で復元する。
   const [handoff, setHandoff] = useState<SessionDto | null>(null);
@@ -30,6 +39,34 @@ export function App() {
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
+
+  // 生成権限はAPI(/me)を正とする。devモードはシムなので常に許可。
+  // ログイン完了時(LoginViewのonAuthenticated)にも呼ぶ。
+  const loadMe = useCallback(async () => {
+    try {
+      const canGenerate =
+        authMode === "cognito" ? (await getMe()).canGenerateQuestions : true;
+      setAuth({ phase: "ready", canGenerate });
+    } catch (error) {
+      setAuth({ phase: "login", error: errorMessage(error) });
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const authed = await initAuth();
+      if (cancelled) return;
+      if (!authed) {
+        setAuth({ phase: "login" });
+        return;
+      }
+      await loadMe();
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [loadMe]);
 
   const openSession = (session: SessionDto) => {
     setHandoff(session);
@@ -46,32 +83,63 @@ export function App() {
       <header className="masthead">
         <div>
           <p className="masthead-kicker">AWS Certification Drill</p>
-          <h1 className="masthead-title">模擬問題演習帳</h1>
+          <a className="masthead-title-link" href="#/">
+            <h1 className="masthead-title">AWS資格問題集</h1>
+          </a>
         </div>
-        <dl className="masthead-meta">
-          <div>
-            <dt>system</dt>
-            <dd>AWS-MON</dd>
-          </div>
-          <div>
-            <dt>user</dt>
-            <dd>{devUserId}</dd>
-          </div>
-        </dl>
+        {auth.phase === "ready" && (
+          <dl className="masthead-meta">
+            <div>
+              <dt>user</dt>
+              <dd>{displayName()}</dd>
+            </div>
+            {authMode === "cognito" && (
+              <div>
+                <dt>auth</dt>
+                <dd>
+                  <button
+                    type="button"
+                    className="link-button"
+                    onClick={() => {
+                      logout();
+                      window.location.hash = "";
+                      setAuth({ phase: "login" });
+                    }}
+                  >
+                    ログアウト
+                  </button>
+                </dd>
+              </div>
+            )}
+          </dl>
+        )}
       </header>
 
-      <nav className="nav" aria-label="メイン">
-        <a href="#/" data-current={route.view === "home"}>
-          演習
-        </a>
-        <a href="#/review" data-current={route.view === "review"}>
-          復習リスト
-        </a>
-      </nav>
+      {auth.phase === "ready" && (
+        <nav className="nav" aria-label="メイン">
+          <a href="#/" data-current={route.view === "home"}>
+            演習
+          </a>
+          <a href="#/review" data-current={route.view === "review"}>
+            復習リスト
+          </a>
+        </nav>
+      )}
 
       <main>
-        {route.view === "home" ? (
-          <HomeView onOpenSession={openSession} onResume={resumeSession} />
+        {auth.phase === "loading" ? (
+          <p className="notice">認証情報を確認しています…</p>
+        ) : auth.phase === "login" ? (
+          <>
+            {auth.error && <p className="notice notice-error">{auth.error}</p>}
+            <LoginView onAuthenticated={() => void loadMe()} />
+          </>
+        ) : route.view === "home" ? (
+          <HomeView
+            canGenerate={auth.canGenerate}
+            onOpenSession={openSession}
+            onResume={resumeSession}
+          />
         ) : route.view === "review" ? (
           <ReviewView />
         ) : (
@@ -88,9 +156,7 @@ export function App() {
         )}
       </main>
 
-      <footer className="colophon">
-        ローカル開発ビルド — 認証は devシム(x-dev-user-id)。Cognito・AWS配備はフェーズ2後半以降。
-      </footer>
+      <footer className="colophon">© 2026 Gorillaburg Inc.</footer>
     </div>
   );
 }

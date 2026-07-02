@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@aws-mon/shared": "file:../../packages/shared",
+    "amazon-cognito-identity-js": "^6.3.18",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },

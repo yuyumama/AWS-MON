@@ -1,10 +1,6 @@
 import type { Context } from "hono";
 import { ApiError } from "./errors.js";
 
-export function devUserId(c: Context): string {
-  return c.req.header("x-dev-user-id") ?? "dev-user";
-}
-
 export function errorResponse(c: Context, error: unknown) {
   if (error instanceof ApiError) {
     return new Response(

@@ -21,7 +21,7 @@ AWS認定試験の模擬問題を生成するWebアプリ。生成AIで問題・
 | `apps/api` | Hono + Lambda Web Adapter (TS) | Lambda |
 | `apps/agent` | Strands Agents + Bedrock (Python) | AgentCore Runtime |
 | データ | DynamoDB | — |
-| 認証 | Cognito（ログインのみ / 登録機能なし） | — |
+| 認証/認可 | 既存 Cognito User Pool（別AWSアカウント / ログインのみ / 登録機能なし） | `BANK` は登録済みユーザー可、`GENERATE`/`MIXED` は生成権限必須 |
 | IaC | Terraform（envs = local / prod） | — |
 
 ```
@@ -65,4 +65,4 @@ python -m quiz_agent.cli --cert aip
 ## セキュリティ
 
 - Bedrock等の認証情報を **クライアント側やコミットに露出させない**（クラウド=IAMロール、ローカル=`.env`。`.env`はコミットしない）。
-- Cognitoログイン必須・self-signup（登録機能）なし。
+- Cognitoログイン必須・self-signup（登録機能）なし。User Pool は別AWSアカウントの既存基盤を共通利用する。問題バンクからの出題（`BANK`）は登録済みユーザーに許可し、新規生成や生成へフォールバックする `GENERATE` / `MIXED` は Bedrock/LLM 課金保護のため追加の生成権限を必須にする。

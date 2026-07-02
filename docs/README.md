@@ -14,7 +14,7 @@
   - [0003](adr/0003-monorepo-and-terraform-envs.md) モノレポ構成と Terraform 環境(local/prod)
   - [0004](adr/0004-local-first-dev.md) ローカルファースト開発
   - [0005](adr/0005-combined-generation.md) 問題と解説を同時生成する
-  - [0006](adr/0006-auth-cognito-cloud-only.md) 認証はクラウド専用Cognito＋ローカルは devシム
+  - [0006](adr/0006-auth-cognito-cloud-only.md) 認証は既存Cognito User Pool＋生成権限制御＋ローカルは devシム
 
 ## 運用ルール
 

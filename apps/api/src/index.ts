@@ -8,9 +8,15 @@ import {
   asObject,
   asString,
   asStringArray,
-  devUserId,
   errorResponse,
 } from "./http.js";
+import {
+  authMiddleware,
+  authMode,
+  devRoutesEnabled,
+  getAuth,
+  type AuthEnv,
+} from "./auth.js";
 import {
   answerSession,
   getSession,
@@ -31,12 +37,38 @@ import {
 // ローカルでも本番でも、同じサーバをそのまま起動する。
 const port = Number(process.env.PORT ?? 8080);
 
-const app = new Hono();
+const app = new Hono<AuthEnv>();
 const tableNames = resolveTableNames();
+
+// /health* 以外は認証必須。devモードは x-dev-user-id シム、cognitoモードはJWT検証。
+app.use("/sessions/*", authMiddleware());
+app.use("/sessions", authMiddleware());
+app.use("/reviews/*", authMiddleware());
+app.use("/reviews", authMiddleware());
+app.use("/me", authMiddleware());
+
+// /dev/* はローカル開発専用。cognitoモード(本番)では露出させない。
+app.use("/dev/*", async (c, next) => {
+  if (!devRoutesEnabled()) {
+    return c.json({ status: "error", message: "not found" }, 404);
+  }
+  await next();
+});
 
 app.get("/health", (c) =>
   c.json({ status: "ok", service: "api", time: new Date().toISOString() }),
 );
+
+// フロントが認証状態と生成権限(UI表示制御)を知るためのエンドポイント。
+app.get("/me", (c) => {
+  const auth = getAuth(c);
+  return c.json({
+    status: "ok",
+    userId: auth.userId,
+    canGenerateQuestions: auth.canGenerateQuestions,
+    authMode: authMode(),
+  });
+});
 
 app.get("/health/tables", (c) =>
   c.json({ status: "ok", tables: tableNames }),
@@ -60,12 +92,14 @@ app.post("/sessions", async (c) => {
     const domain = asString(body.domain);
     const mode = asString(body.mode);
 
+    const auth = getAuth(c);
     const session = await startSession({
-      userId: devUserId(c),
+      userId: auth.userId,
       cert,
       domainSelection,
       domain,
       mode: mode === "GENERATE" || mode === "MIXED" ? mode : "BANK",
+      canGenerateQuestions: auth.canGenerateQuestions,
     });
 
     return c.json({ status: "ok", session }, 201);
@@ -82,7 +116,7 @@ app.get("/sessions", async (c) => {
         ? statusQuery
         : "ACTIVE";
     const sessions = await listSessions({
-      userId: devUserId(c),
+      userId: getAuth(c).userId,
       status,
       limit: asNumber(Number(c.req.query("limit"))),
     });
@@ -95,7 +129,7 @@ app.get("/sessions", async (c) => {
 app.get("/sessions/:sessionId", async (c) => {
   try {
     const session = await getSession({
-      userId: devUserId(c),
+      userId: getAuth(c).userId,
       sessionId: c.req.param("sessionId"),
     });
     return c.json({ status: "ok", session });
@@ -113,7 +147,7 @@ app.post("/sessions/:sessionId/answers", async (c) => {
     }
 
     const result = await answerSession({
-      userId: devUserId(c),
+      userId: getAuth(c).userId,
       sessionId: c.req.param("sessionId"),
       sequence,
       selectedAnswers: asStringArray(body.selectedAnswers),
@@ -130,10 +164,12 @@ app.post("/sessions/:sessionId/answers", async (c) => {
 app.post("/sessions/:sessionId/next", async (c) => {
   try {
     const body = asObject(await c.req.json().catch(() => ({})));
+    const auth = getAuth(c);
     const session = await nextSessionQuestion({
-      userId: devUserId(c),
+      userId: auth.userId,
       sessionId: c.req.param("sessionId"),
       version: asNumber(body.version),
+      canGenerateQuestions: auth.canGenerateQuestions,
     });
 
     return c.json({ status: "ok", session });
@@ -146,7 +182,7 @@ app.post("/sessions/:sessionId/next", async (c) => {
 app.get("/reviews", async (c) => {
   try {
     const items = await listReviewItems({
-      userId: devUserId(c),
+      userId: getAuth(c).userId,
       cert: asString(c.req.query("cert")),
       limit: asNumber(Number(c.req.query("limit"))),
     });
@@ -160,7 +196,7 @@ app.get("/reviews", async (c) => {
 app.get("/reviews/:questionId", async (c) => {
   try {
     const state = await getReviewState({
-      userId: devUserId(c),
+      userId: getAuth(c).userId,
       questionId: c.req.param("questionId"),
     });
     return c.json({ status: "ok", ...state });
@@ -176,7 +212,7 @@ app.put("/reviews/:questionId", async (c) => {
       return c.json({ status: "error", message: "marked is required" }, 400);
     }
     const state = await setReviewMark({
-      userId: devUserId(c),
+      userId: getAuth(c).userId,
       questionId: c.req.param("questionId"),
       marked: body.marked,
     });
@@ -223,6 +259,9 @@ app.post("/dev/jobs/run", async (c) => {
     return errorResponse(c, e);
   }
 });
+
+// ミドルウェア(認証)で投げられたApiErrorもルートと同じ形式で返す。
+app.onError((error, c) => errorResponse(c, error));
 
 serve({ fetch: app.fetch, port }, (info) => {
   console.log(`api listening on http://localhost:${info.port}`);

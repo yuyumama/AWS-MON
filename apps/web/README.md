@@ -9,11 +9,14 @@ Vite + React + TypeScript のSPA。ビルド成果物は S3 + CloudFront で配�
 - **復習/チェック**: 間違えた問題は回答時に自動で復習リストへ入る。正解した問題も解説画面の「☆ 復習リストに追加」トグルでマークでき、`#/review` の復習リストで一覧・資格フィルタ・正解/解説の展開・マーク解除ができる(`/reviews` API、AP-06/AP-07)。
 - ルーティングはハッシュベース(`#/review`, `#/session/:id`)の最小実装。リロードすると `GET /sessions/:id` で復元する。
 - レスポンスDTOの型は `@aws-mon/shared`(`SessionDto` / `SessionSummaryDto` / `AnswerResultDto` / `ReviewItemDto` 等)を api と共有。
+- **Cognito 認証/認可**(`src/lib/auth.ts`, `src/views/LoginView.tsx`): `VITE_AUTH_MODE` で切替([ADR 0006](../../docs/adr/0006-auth-cognito-cloud-only.md))。
+  - `dev`(既定): `x-dev-user-id` devシムで `VITE_DEV_USER_ID`(既定 `dev-user`)を送る。
+  - `cognito`: **自前ログインフォーム + SRP**(`amazon-cognito-identity-js`)。Hosted UIへのリダイレクトはせず、SRP-6aにより**パスワードはネットワークに送信されない**(クライアント側で導出した証明のみ送る)。管理者作成ユーザーの初回ログイン(新パスワード設定チャレンジ)に対応。access token を `Authorization: Bearer` で送り、refresh はSDKが自動で行う。起動時に `GET /me` で生成権限を取得し、権限が無いユーザーには `GENERATE` / `MIXED` モードを表示しない。要 `VITE_COGNITO_USER_POOL_ID` / `VITE_COGNITO_CLIENT_ID`、App Client の `ALLOW_USER_SRP_AUTH`(`.env.example` 参照)。
 
 ## 未実装
 
-- **Cognito 認証**: クラウド専用([ADR 0006](../../docs/adr/0006-auth-cognito-cloud-only.md))。現状は `x-dev-user-id` devシムで、`VITE_DEV_USER_ID`(既定 `dev-user`)を送る。
 - 復習の発展系(spaced repetition の `GSI2_DueList`、復習問題からの演習開始、苦手ドメイン分析)は未着手。
+- cognito モードの実 User Pool を使った動作確認(App Client 等の設定値待ち)。
 
 ## 動かし方
 

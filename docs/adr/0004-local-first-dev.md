@@ -7,7 +7,7 @@
 AIエージェント（および人間）が素早く反復開発できるよう、可能な限りローカルで検証してからAWSへ上げたい。
 
 ## 決定
-- **ビジネスロジックはローカル完結**: `apps/api`(LWA) + DynamoDB Local + LocalStack（`local/docker-compose.yml`、`SERVICES=cognito-idp,ssm,secretsmanager,s3`）で検証。
+- **ビジネスロジックはローカル完結**: `apps/api`(LWA) + DynamoDB Local + LocalStack（`local/docker-compose.yml`、`SERVICES=ssm,secretsmanager,s3`）で検証。認証(Cognito)はLocalStack Community未対応のため対象外(詳細は[ADR 0006](0006-auth-cognito-cloud-only.md))。
 - **AI部分（Strands→Bedrock）はコード同一・認証だけ差し替え**。ローカルでも **Bedrockは実物を叩く**（LocalStackはBedrock生成を再現しない）。
 - **AgentCore Runtime という「ホスティングの箱」だけがローカル非対応**。中身のエージェントロジックはローカルで100%書ける → デプロイ時に箱を被せる。
 

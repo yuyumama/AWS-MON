@@ -1,6 +1,6 @@
 # data-model — DynamoDB データモデル（確定版）
 
-最終更新: 2026-07-01
+最終更新: 2026-07-02
 
 > **ステータス: 確定。** Phase 1 の次工程は、この設計に沿って `local/seed/` のテーブル作成スクリプトと `apps/api` の CRUD ルートを実装する。
 
@@ -25,6 +25,7 @@ DynamoDB は **単一テーブルではなく、責務別の4テーブル**で�
 ## 設計原則
 
 - Cognito の `sub` を `userId` として使う。メール等のユーザー本体情報は原則 DynamoDB に持たない。
+- `BANK` モードは登録済みユーザーであれば利用できる。`GENERATE` / `MIXED` / stale 再生成など Bedrock/LLM 呼び出しに到達し得る処理は、追加の生成権限を必須にする。
 - API は問題取得時に `correct` をクライアントへ返さない。回答後にだけ正解・解説を返す。
 - セッションには問題本文を埋め込まず、`questionId` 参照を保持する。問題の source of truth は `AwsMonQuestions`。
 - 問題と解説は `QuizItem{question, explanation}` として **1回の生成で同時に作る**。DynamoDB には問題だけ・解説未完了の部分状態を持たない。
@@ -582,13 +583,14 @@ worker は session を更新するとき、必ず次を condition に入れる�
 ### セッション開始
 
 1. API が `cert` と `domainSelection` を受け取る。
-2. `domainSelection="all"` の場合、アプリ側で具体 `domain` を重み付き抽選する。
-3. `mode` に応じて `AwsMonQuestions.GSI1_BankRandom` から候補を探す。未回答表示に必要な属性は GSI projection で足りる。
-4. 候補がなければ `GenerationJob(kind=INITIAL)` を作り、同期または worker で問題＋解説を同時生成する。
-5. 新規生成時は `contentHash` を計算し、`GSI3_ContentHash` で重複候補を確認してから `ACTIVE` な question として保存する。
-6. `AwsMonSessions` に `META` item を Put し、`current.questionId` を設定する。
-7. `lastSeenQuestionIds` は current の `questionId` を含め、最大50件で初期化する。
-8. 次 sequence の `GenerationJob(kind=PREFETCH)` を作り、`META.prefetch` に `jobId` を保存する。
+2. Cognito JWT 検証済みの `sub` を `userId` とする。`mode=BANK` は登録済みユーザーなら許可する。`mode=GENERATE` / `mode=MIXED` は Bedrock/LLM 課金に到達し得るため、追加の生成権限 `canGenerateQuestions` を確認する。
+3. `domainSelection="all"` の場合、アプリ側で具体 `domain` を重み付き抽選する。
+4. `mode` に応じて `AwsMonQuestions.GSI1_BankRandom` から候補を探す。未回答表示に必要な属性は GSI projection で足りる。
+5. 候補がなく、かつ `mode=GENERATE` または `mode=MIXED` の場合だけ `GenerationJob(kind=INITIAL)` を作り、同期または worker で問題＋解説を同時生成する。`mode=BANK` では新規生成にフォールバックせず、候補なしとして返す。
+6. 新規生成時は `contentHash` を計算し、`GSI3_ContentHash` で重複候補を確認してから `ACTIVE` な question として保存する。
+7. `AwsMonSessions` に `META` item を Put し、`current.questionId` を設定する。
+8. `lastSeenQuestionIds` は current の `questionId` を含め、最大50件で初期化する。
+9. 次 sequence の `GenerationJob(kind=PREFETCH)` を作り、`META.prefetch` に `jobId` を保存する。`GENERATE` / `MIXED` の prefetch は生成権限を持つセッションに限って作成・実行する。
 
 ### セッション再開
 
@@ -611,7 +613,7 @@ worker は session を更新するとき、必ず次を condition に入れる�
 2. `prefetch.state` が `READY` なら、その `questionId` を `current` に昇格する。
 3. `prefetch` を空にし、新しい sequence の `PREFETCH` job を作る。
 4. `lastSeenQuestionIds` に新しい current を追加し、最大50件へ切り詰める。
-5. prefetch が失敗/未完了なら、bank 取得または同期生成にフォールバックする。
+5. prefetch が失敗/未完了なら、bank 取得にフォールバックする。同期生成にフォールバックするのは `mode=GENERATE` / `mode=MIXED` かつ生成権限が確認できる場合だけにする。
 
 ### 復習マーク
 

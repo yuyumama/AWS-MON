@@ -9,12 +9,10 @@ import type {
   SessionSummaryDto,
 } from "@aws-mon/shared";
 
+import { getAuthHeaders } from "./auth";
+
 const apiBase =
   (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "/api";
-
-// Cognito接続までの仮認証(devシム)。apps/api は x-dev-user-id で userId を決める。
-export const devUserId =
-  (import.meta.env.VITE_DEV_USER_ID as string | undefined) ?? "dev-user";
 
 export class ApiClientError extends Error {
   constructor(
@@ -40,13 +38,15 @@ export function isConflict(error: unknown): boolean {
 type Envelope = { status?: string; message?: string };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  // devモードは x-dev-user-id、cognitoモードは Authorization: Bearer を付ける
+  const authHeaders = await getAuthHeaders();
   let res: Response;
   try {
     res = await fetch(`${apiBase}${path}`, {
       ...init,
       headers: {
         "content-type": "application/json",
-        "x-dev-user-id": devUserId,
+        ...authHeaders,
         ...init?.headers,
       },
     });
@@ -65,6 +65,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiClientError(body?.message ?? `HTTP ${res.status}`, res.status);
   }
   return body as T;
+}
+
+export type MeDto = {
+  userId: string;
+  canGenerateQuestions: boolean;
+  authMode: "dev" | "cognito";
+};
+
+// 認証状態と生成権限(GENERATE/MIXEDのUI表示制御)を取得する
+export async function getMe(): Promise<MeDto> {
+  return request<MeDto>("/me");
 }
 
 export async function startSession(input: {

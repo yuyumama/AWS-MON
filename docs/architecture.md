@@ -12,8 +12,10 @@ flowchart TB
         Browser["ブラウザ<br/>apps/web（Vite+React SPA）"]
     end
 
-    subgraph Cognito["Cognito（クラウド専用）"]
-        UserPool["User Pool<br/>ログインのみ・self-signup無し"]
+    subgraph Cognito["Cognito（別AWSアカウント / クラウド専用）"]
+        UserPool["既存 User Pool<br/>共通認証基盤<br/>ログインのみ・self-signup無し"]
+        AppClient["AWS-MON App Client<br/>サービス別 client"]
+        Scopes["生成権限<br/>group / custom scope / allowlist"]
     end
 
     subgraph AWS["AWS"]
@@ -38,11 +40,13 @@ flowchart TB
         CFS3["CloudFront + S3<br/>apps/web 配信（配備未着手）"]
     end
 
-    Browser -- "ログイン (JWT)" --> UserPool
+    Browser -- "ログイン (JWT)" --> AppClient
+    AppClient --> UserPool
+    AppClient --> Scopes
     Browser -- "HTTPS + JWT" --> API
     Browser -. "静的アセット取得（配備未着手。ローカルはvite dev serverが/apiをプロキシ）" .-> CFS3
 
-    API -- "JWT検証(JWKS)（未実装）" --> UserPool
+    API -- "JWT検証(JWKS) + 生成権限検証（AUTH_MODE=cognito）" --> UserPool
     API -- "CRUD / TransactWrite" --> DDB
     API -- "job作成・実行トリガー" --> TJobs
 
@@ -57,15 +61,15 @@ flowchart TB
 
 | コンポーネント | 技術 | 実行/配信場所 | 状態 |
 |---|---|---|---|
-| `apps/web` | Vite + React + TS | S3 + CloudFront | 主要画面(資格選択/出題/解説/セッション再開/復習リスト)を実装済み。Cognito接続は未着手。ローカルは vite dev server(:5173) が `/api` を api(:8080) にプロキシ |
-| `apps/api` | Hono + Lambda Web Adapter (TS) | Lambda | セッション/回答/次問/一覧/dev用endpoint、agent HTTP連携を実装済み |
-| `apps/agent` | Strands Agents + Bedrock (Python) | AgentCore Runtime | CLI + local HTTP server (`/health`, `/generate`) を実装済み。既定モデルは `us.anthropic.claude-haiku-4-5-20251001-v1:0` |
+| `apps/web` | Vite + React + TS | S3 + CloudFront | 主要画面(資格選択/出題/解説/セッション再開/復習リスト)を実装済み。Cognitoログインは自前フォーム+SRP(`amazon-cognito-identity-js`、`VITE_AUTH_MODE=cognito`)。ローカルは vite dev server(:5173) が `/api` を api(:8080) にプロキシ |
+| `apps/api` | Hono + Lambda Web Adapter (TS) | Lambda | セッション/回答/次問/一覧/dev用endpoint、agent HTTP連携、認証・生成権限(`src/auth.ts`)を実装済み |
+| `apps/agent` | Strands Agents + Bedrock (Python) | AgentCore Runtime | CLI + local HTTP server (`/health`, `/generate`) を実装済み。AWSドキュメントMCPで調査してから生成(失敗時は調査なしへフォールバック)。既定モデルは `us.anthropic.claude-haiku-4-5-20251001-v1:0` |
 | `packages/shared` | TS型 + テーブル定義 | web/apiがimport | 実装済み |
 | DynamoDB | 4テーブル構成 | AWS / DynamoDB Local | テーブル定義確定、Terraform適用可能 |
-| 認証 | Cognito User Pool | AWS | クラウド専用。ローカルは `x-dev-user-id` devシムで代替（[ADR 0006](adr/0006-auth-cognito-cloud-only.md)） |
+| 認証/認可 | 既存 Cognito User Pool + AWS-MON App Client | 別AWSアカウント / AWS | User Pool は共通。登録済みユーザーは `BANK` 出題可、Bedrock課金に到達する `GENERATE` / `MIXED` / 再生成は生成権限で制限。ローカルは `x-dev-user-id` devシムで代替（[ADR 0006](adr/0006-auth-cognito-cloud-only.md)） |
 | IaC | Terraform | — | `infra/envs/{local,prod}` |
 
-**ローカルとクラウドの差はほぼ認証のみ**（[ADR 0004](adr/0004-local-first-dev.md)）。`apps/api` はLWA前提で書かれているため、ローカルでは普通のNode Webサーバとして起動し、DynamoDB LocalとLocalStack（`ssm,secretsmanager,s3`のみ、`cognito-idp`は含まない）に接続する。Bedrock/AgentCore Runtimeだけはローカルで再現せず、ロジックはローカル、観測は実AWS、と役割分担する。
+**ローカルとクラウドの差はほぼ認証のみ**（[ADR 0004](adr/0004-local-first-dev.md)）。`apps/api` はLWA前提で書かれているため、ローカルでは普通のNode Webサーバとして起動し、DynamoDB LocalとLocalStack（`ssm,secretsmanager,s3`のみ、`cognito-idp`は含まない）に接続する。Cognito は別AWSアカウントの既存 User Pool を参照し、AWS-MON 側 Terraform では新規作成しない。Bedrock/AgentCore Runtimeだけはローカルで再現せず、ロジックはローカル、観測は実AWS、と役割分担する。
 
 ## リクエストフロー
 
@@ -170,18 +174,21 @@ sequenceDiagram
 
 `BANK` のPREFETCH jobは同一リクエスト内でinline実行される。`GENERATE/MIXED` は不要なBedrock呼び出しを避けるためQUEUEDのまま保存し、`/dev/jobs/run`で明示的に実行する。このendpointはローカル/簡易worker用で、将来SQSやAgentCore Runtime連携に置き換える余地を残す。
 
+クラウドでは、`GENERATE` と `MIXED` の job 処理は Bedrock/LLM 課金につながるため、job 作成時だけでなく worker 実行時にも生成権限または信頼済み内部実行コンテキストを確認する。`BANK` job は保存済み問題の取得だけなので、登録済みユーザーであれば実行できる。
+
 ## データフローの原則（実装との対応）
 
 - 問題本文はセッションに埋め込まず`questionId`参照のみ保持する。source of truthは`AwsMonQuestions`（`apps/api/src/questionBankRepository.ts`の`getQuestion`）。
 - 未回答の問題を返すAPIは必ず`toQuestionDto(item, visibility)`を通し、`answering`時は`correct`/`explanation`を落とす（`packages/shared`）。
 - 先読みは`Session.prefetch`に問題本体を埋め込まず、`GenerationJob`と`questionId`参照で表現する（`apps/api/src/jobRepository.ts`の`reflectJobOnSession`）。
-- 認証は本番Cognito JWT前提で設計されているが、JWT検証ミドルウェアは未実装。現状は全endpointが`x-dev-user-id`ヘッダ（無ければ`dev-user`）で`userId`を決定する（`apps/api/src/http.ts`の`devUserId`）。**クラウド配備前に必ず実装すること**（[ADR 0006](adr/0006-auth-cognito-cloud-only.md)のセキュリティ上の必須事項）。
+- 認証・認可は `apps/api/src/auth.ts` に実装。`AUTH_MODE=dev`（既定）は `x-dev-user-id` devシム（無ければ `dev-user`）、`AUTH_MODE=cognito` は別AWSアカウントの既存 Cognito User Pool の access token を `aws-jwt-verify` で検証（issuer / client_id / token_use / 署名）して `sub` を `userId` にする。生成権限 `canGenerateQuestions` は `cognito:groups` に `COGNITO_GENERATE_GROUP` が含まれるかで判定し、`GENERATE` / `MIXED`（セッション開始・`next` の生成フォールバック・prefetch job 作成）は権限が無いと403。**クラウド配備は `AUTH_MODE=cognito` を必須とし、devシムは信用しない**（[ADR 0006](adr/0006-auth-cognito-cloud-only.md)）。
 
 ## 未実装・今後の接続ポイント
 
 | 項目 | 現状 | 対応するADR/設計 |
 |---|---|---|
-| JWT検証ミドルウェア | 未実装。devシムのみ | [ADR 0006](adr/0006-auth-cognito-cloud-only.md) |
+| JWT検証ミドルウェア | 実装済み（`apps/api/src/auth.ts`、`AUTH_MODE=cognito`）。実 User Pool の設定値での動作確認は未実施 | [ADR 0006](adr/0006-auth-cognito-cloud-only.md) |
+| 生成権限チェック | 実装済み。`BANK` は登録済みユーザー可、`GENERATE` / `MIXED` は生成グループ必須（権限なしは403）。stale 再生成は job 種別ごと未実装で、実装時に権限確認を入れる | [ADR 0006](adr/0006-auth-cognito-cloud-only.md) |
 | agent ⇄ API の生成連携 | local HTTP境界で実装済み。クラウドではAgentCore Runtime呼び出しへ差し替え予定 | `docs/data-model.md` 実装順序 |
 | spaced repetition（復習期限） | 未実装。`GSI2_DueList` の属性予約のみ（復習マーク/一覧のAP-06/07は実装済み: `/reviews`） | `docs/data-model.md` |
 | `apps/web` のS3+CloudFront配備 | ローカルのみ（vite dev server） | フェーズ4 |

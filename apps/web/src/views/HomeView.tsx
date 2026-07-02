@@ -5,6 +5,8 @@ import { aipDomains, certOptions, modeLabel, modeOptions } from "../lib/certs";
 import { useElapsedSeconds } from "../lib/useElapsedSeconds";
 
 type Props = {
+  // 生成権限(/me の canGenerateQuestions)。無いユーザーには GENERATE/MIXED を出さない。
+  canGenerate: boolean;
   onOpenSession: (session: SessionDto) => void;
   onResume: (sessionId: string) => void;
 };
@@ -20,7 +22,10 @@ function formatUpdatedAt(iso: string): string {
   });
 }
 
-export function HomeView({ onOpenSession, onResume }: Props) {
+export function HomeView({ canGenerate, onOpenSession, onResume }: Props) {
+  const availableModes = canGenerate
+    ? modeOptions
+    : modeOptions.filter((option) => option.value === "BANK");
   const [cert, setCert] = useState("aip");
   const [domainSelection, setDomainSelection] = useState("all");
   const [mode, setMode] = useState<SessionMode>("BANK");
@@ -109,7 +114,7 @@ export function HomeView({ onOpenSession, onResume }: Props) {
 
         <fieldset className="field mode-field">
           <legend className="field-label">出題モード</legend>
-          {modeOptions.map((option) => (
+          {availableModes.map((option) => (
             <label
               key={option.value}
               className="mode-option"
