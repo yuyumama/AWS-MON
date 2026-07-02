@@ -1,3 +1,6 @@
 strands-agents>=0.1.0
 pydantic>=2.0
 python-dotenv>=1.0.0
+# AWSドキュメントMCP(フェーズ2-4)。strandsのMCPClient(stdio)から起動する
+mcp>=1.0
+awslabs.aws-documentation-mcp-server>=1.0

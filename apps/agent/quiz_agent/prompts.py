@@ -59,6 +59,33 @@ def build_quiz_prompt(cert: str, domain: str | None = None) -> str:
 - 関連するAWSサービス/概念に触れ、参考になるAWS公式ドキュメントのURLを示す"""
 
 
+def build_docs_research_prompt(quiz_prompt: str) -> str:
+    """出題前にAWSドキュメントMCPで最新情報を調査させるプロンプト。
+
+    quiz_prompt: build_quiz_prompt の出力。ドメイン抽選を2回走らせないよう、
+    調査と生成で同じプロンプト文字列を使い回す。
+    """
+    return f"""これから次の指示に従ってAWS認定試験の問題を1問作成します。
+
+---
+{quiz_prompt}
+---
+
+まず問題を作成する前に、search_documentation と read_documentation ツールで
+出題テーマに関連するAWS公式ドキュメントを調査してください。
+
+- 出題対象のサービス/機能を1〜2個決め、その最新仕様・制約・ユースケースを確認する
+- 陳腐化した知識（古い上限値・旧機能名・非推奨機能）を出題しないための裏取りをする
+- 調査結果を「出題に使う事実」として箇条書きでまとめ、参照したドキュメントURLを控える"""
+
+
+# 調査ターンの後に structured_output で最終生成させる指示。
+QUIZ_FROM_RESEARCH_PROMPT = (
+    "上記の調査結果に基づいて、最初に示した出題指示どおり問題と解説を作成してください。"
+    "解説の参考URLには、実際に調査で参照したAWS公式ドキュメントのURLを使うこと。"
+)
+
+
 def build_review_prompt(question: Question) -> str:
     """問題の妥当性を検証するプロンプトを構築する。"""
     opts = "\n".join(f"{o.label}: {o.text}" for o in question.options)

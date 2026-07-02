@@ -72,9 +72,22 @@ python3 -m quiz_agent.server
 > 出力フォーマットは**構造化出力（Pydanticスキーマ）で保証**しているため、
 > モデル出力のJSONパースや末尾カンマ除去などの後処理は不要。
 
+## AWSドキュメントMCP（フェーズ2-4）
+
+生成前に [AWS Documentation MCP Server](https://github.com/awslabs/mcp)
+（`awslabs.aws-documentation-mcp-server`、requirementsに同梱）を Strands の
+`MCPClient`（stdio）で起動し、`search_documentation` / `read_documentation` で
+最新の公式ドキュメントを調査してから問題を生成する（`agent.py` の
+`_generate_quiz_with_docs`。調査1ターン → 会話履歴を踏まえた `structured_output`）。
+
+- `AGENT_DOCS_MCP=0` で無効化（従来どおり調査なしで生成）
+- MCPサーバーの起動や調査に失敗した場合は、生成を止めず**調査なし生成へ自動フォールバック**する
+- 起動コマンドは `AGENT_DOCS_MCP_COMMAND` で差し替え可（例: `uvx awslabs.aws-documentation-mcp-server@latest`）
+- ツール呼び出しが増えるぶん、1問あたりのBedrockトークン消費と生成時間は増える
+
 ## TODO（次の段階）
 
-- [ ] Web検索ツール（Strands `@tool`）で最新AWS情報を取得し問題に反映
+- [x] 最新AWS情報の取得（AWSドキュメントMCPで実装。Web検索ツールは必要になったら追加）
 - [ ] `evaluate_question` を AgentCore evaluate に置き換え
 - [ ] 生成済み問題を DynamoDB に保存 →「生成済みから出題」モード
 - [ ] AgentCore Runtime へのデプロイ
