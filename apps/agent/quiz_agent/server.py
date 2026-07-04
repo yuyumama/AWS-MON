@@ -17,8 +17,10 @@ from typing import Any, Iterator
 try:
     from dotenv import load_dotenv
 except ModuleNotFoundError:
+
     def load_dotenv() -> bool:
         return False
+
 
 from .guardrail import GateResult, GroundingBlockedError
 from .schema import Explanation, Option, OptionReason, Question, QuizItem
@@ -54,10 +56,21 @@ def _stub_quiz(cert: str, domain: str | None) -> QuizItem:
             overview="Knowledge Bases は外部データを検索して生成時の根拠として使うRAG構成を支援します。",
             correct_reason="選択肢BがKnowledge Basesの用途に該当します。",
             option_reasons=[
-                OptionReason(label="A", reason="Knowledge Basesは事前学習の仕組みではありません。"),
-                OptionReason(label="B", reason="外部データ検索とRAGでの利用に該当します。"),
-                OptionReason(label="C", reason="CloudWatch Logsの設定であり、Knowledge Basesとは無関係です。"),
-                OptionReason(label="D", reason="VPC設計の話であり、Knowledge Basesとは無関係です。"),
+                OptionReason(
+                    label="A",
+                    reason="Knowledge Basesは事前学習の仕組みではありません。",
+                ),
+                OptionReason(
+                    label="B", reason="外部データ検索とRAGでの利用に該当します。"
+                ),
+                OptionReason(
+                    label="C",
+                    reason="CloudWatch Logsの設定であり、Knowledge Basesとは無関係です。",
+                ),
+                OptionReason(
+                    label="D",
+                    reason="VPC設計の話であり、Knowledge Basesとは無関係です。",
+                ),
             ],
             source="https://docs.aws.amazon.com/bedrock/latest/userguide/knowledge-base.html",
         ),
@@ -122,7 +135,10 @@ def _otel_session(session_id: str | None) -> Iterator[None]:
 
 
 def _now_iso() -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + f".{int((time.time() % 1) * 1000):03d}Z"
+    return (
+        time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
+        + f".{int((time.time() % 1) * 1000):03d}Z"
+    )
 
 
 def _as_json_bytes(value: object) -> bytes:
@@ -169,11 +185,15 @@ class Handler(BaseHTTPRequestHandler):
                 },
             )
             return
-        self._send_json(HTTPStatus.NOT_FOUND, {"status": "error", "message": "not found"})
+        self._send_json(
+            HTTPStatus.NOT_FOUND, {"status": "error", "message": "not found"}
+        )
 
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
         if self.path != "/generate":
-            self._send_json(HTTPStatus.NOT_FOUND, {"status": "error", "message": "not found"})
+            self._send_json(
+                HTTPStatus.NOT_FOUND, {"status": "error", "message": "not found"}
+            )
             return
 
         started = time.perf_counter()

@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
 import type { SessionDto } from "@aws-mon/shared";
+import { useCallback, useEffect, useState } from "react";
 import { errorMessage, getMe } from "./lib/api";
 import { authMode, displayName, initAuth, logout } from "./lib/auth";
 import { HomeView } from "./views/HomeView";
@@ -10,153 +10,153 @@ import { ReviewView } from "./views/ReviewView";
 // 依存を増やさないためのハッシュベース最小ルーティング。
 // ""(home) / #/review / #/session/:sessionId の3ルートのみ。
 type Route =
-  | { view: "home" }
-  | { view: "review" }
-  | { view: "session"; sessionId: string };
+	| { view: "home" }
+	| { view: "review" }
+	| { view: "session"; sessionId: string };
 
 function parseRoute(): Route {
-  const match = window.location.hash.match(/^#\/session\/([^/]+)$/);
-  if (match?.[1]) return { view: "session", sessionId: match[1] };
-  if (window.location.hash === "#/review") return { view: "review" };
-  return { view: "home" };
+	const match = window.location.hash.match(/^#\/session\/([^/]+)$/);
+	if (match?.[1]) return { view: "session", sessionId: match[1] };
+	if (window.location.hash === "#/review") return { view: "review" };
+	return { view: "home" };
 }
 
 // 認証の起動状態。cognitoモードではログイン完了+/me取得までアプリを描画しない。
 type AuthState =
-  | { phase: "loading" }
-  | { phase: "login"; error?: string }
-  | { phase: "ready"; canGenerate: boolean };
+	| { phase: "loading" }
+	| { phase: "login"; error?: string }
+	| { phase: "ready"; canGenerate: boolean };
 
 export function App() {
-  const [route, setRoute] = useState<Route>(parseRoute);
-  const [auth, setAuth] = useState<AuthState>({ phase: "loading" });
-  // セッション開始直後のDTOを再フェッチせずQuizViewへ渡すための引き継ぎ。
-  // リロード時は null になり、QuizView が GET /sessions/:id で復元する。
-  const [handoff, setHandoff] = useState<SessionDto | null>(null);
+	const [route, setRoute] = useState<Route>(parseRoute);
+	const [auth, setAuth] = useState<AuthState>({ phase: "loading" });
+	// セッション開始直後のDTOを再フェッチせずQuizViewへ渡すための引き継ぎ。
+	// リロード時は null になり、QuizView が GET /sessions/:id で復元する。
+	const [handoff, setHandoff] = useState<SessionDto | null>(null);
 
-  useEffect(() => {
-    const onHashChange = () => setRoute(parseRoute());
-    window.addEventListener("hashchange", onHashChange);
-    return () => window.removeEventListener("hashchange", onHashChange);
-  }, []);
+	useEffect(() => {
+		const onHashChange = () => setRoute(parseRoute());
+		window.addEventListener("hashchange", onHashChange);
+		return () => window.removeEventListener("hashchange", onHashChange);
+	}, []);
 
-  // 生成権限はAPI(/me)を正とする。devモードはシムなので常に許可。
-  // ログイン完了時(LoginViewのonAuthenticated)にも呼ぶ。
-  const loadMe = useCallback(async () => {
-    try {
-      const canGenerate =
-        authMode === "cognito" ? (await getMe()).canGenerateQuestions : true;
-      setAuth({ phase: "ready", canGenerate });
-    } catch (error) {
-      setAuth({ phase: "login", error: errorMessage(error) });
-    }
-  }, []);
+	// 生成権限はAPI(/me)を正とする。devモードはシムなので常に許可。
+	// ログイン完了時(LoginViewのonAuthenticated)にも呼ぶ。
+	const loadMe = useCallback(async () => {
+		try {
+			const canGenerate =
+				authMode === "cognito" ? (await getMe()).canGenerateQuestions : true;
+			setAuth({ phase: "ready", canGenerate });
+		} catch (error) {
+			setAuth({ phase: "login", error: errorMessage(error) });
+		}
+	}, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const authed = await initAuth();
-      if (cancelled) return;
-      if (!authed) {
-        setAuth({ phase: "login" });
-        return;
-      }
-      await loadMe();
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [loadMe]);
+	useEffect(() => {
+		let cancelled = false;
+		(async () => {
+			const authed = await initAuth();
+			if (cancelled) return;
+			if (!authed) {
+				setAuth({ phase: "login" });
+				return;
+			}
+			await loadMe();
+		})();
+		return () => {
+			cancelled = true;
+		};
+	}, [loadMe]);
 
-  const openSession = (session: SessionDto) => {
-    setHandoff(session);
-    window.location.hash = `/session/${session.sessionId}`;
-  };
+	const openSession = (session: SessionDto) => {
+		setHandoff(session);
+		window.location.hash = `/session/${session.sessionId}`;
+	};
 
-  const resumeSession = (sessionId: string) => {
-    setHandoff(null);
-    window.location.hash = `/session/${sessionId}`;
-  };
+	const resumeSession = (sessionId: string) => {
+		setHandoff(null);
+		window.location.hash = `/session/${sessionId}`;
+	};
 
-  return (
-    <div className="frame">
-      <header className="masthead">
-        <div>
-          <p className="masthead-kicker">AWS Certification Drill</p>
-          <a className="masthead-title-link" href="#/">
-            <h1 className="masthead-title">AWS資格問題集</h1>
-          </a>
-        </div>
-        {auth.phase === "ready" && (
-          <dl className="masthead-meta">
-            <div>
-              <dt>user</dt>
-              <dd>{displayName()}</dd>
-            </div>
-            {authMode === "cognito" && (
-              <div>
-                <dt>auth</dt>
-                <dd>
-                  <button
-                    type="button"
-                    className="link-button"
-                    onClick={() => {
-                      logout();
-                      window.location.hash = "";
-                      setAuth({ phase: "login" });
-                    }}
-                  >
-                    ログアウト
-                  </button>
-                </dd>
-              </div>
-            )}
-          </dl>
-        )}
-      </header>
+	return (
+		<div className="frame">
+			<header className="masthead">
+				<div>
+					<p className="masthead-kicker">AWS Certification Drill</p>
+					<a className="masthead-title-link" href="#/">
+						<h1 className="masthead-title">AWS資格問題集</h1>
+					</a>
+				</div>
+				{auth.phase === "ready" && (
+					<dl className="masthead-meta">
+						<div>
+							<dt>user</dt>
+							<dd>{displayName()}</dd>
+						</div>
+						{authMode === "cognito" && (
+							<div>
+								<dt>auth</dt>
+								<dd>
+									<button
+										type="button"
+										className="link-button"
+										onClick={() => {
+											logout();
+											window.location.hash = "";
+											setAuth({ phase: "login" });
+										}}
+									>
+										ログアウト
+									</button>
+								</dd>
+							</div>
+						)}
+					</dl>
+				)}
+			</header>
 
-      {auth.phase === "ready" && (
-        <nav className="nav" aria-label="メイン">
-          <a href="#/" data-current={route.view === "home"}>
-            演習
-          </a>
-          <a href="#/review" data-current={route.view === "review"}>
-            復習リスト
-          </a>
-        </nav>
-      )}
+			{auth.phase === "ready" && (
+				<nav className="nav" aria-label="メイン">
+					<a href="#/" data-current={route.view === "home"}>
+						演習
+					</a>
+					<a href="#/review" data-current={route.view === "review"}>
+						復習リスト
+					</a>
+				</nav>
+			)}
 
-      <main>
-        {auth.phase === "loading" ? (
-          <p className="notice">認証情報を確認しています…</p>
-        ) : auth.phase === "login" ? (
-          <>
-            {auth.error && <p className="notice notice-error">{auth.error}</p>}
-            <LoginView onAuthenticated={() => void loadMe()} />
-          </>
-        ) : route.view === "home" ? (
-          <HomeView
-            canGenerate={auth.canGenerate}
-            onOpenSession={openSession}
-            onResume={resumeSession}
-          />
-        ) : route.view === "review" ? (
-          <ReviewView />
-        ) : (
-          <QuizView
-            key={route.sessionId}
-            sessionId={route.sessionId}
-            initialSession={
-              handoff?.sessionId === route.sessionId ? handoff : null
-            }
-            onExit={() => {
-              window.location.hash = "";
-            }}
-          />
-        )}
-      </main>
+			<main>
+				{auth.phase === "loading" ? (
+					<p className="notice">認証情報を確認しています…</p>
+				) : auth.phase === "login" ? (
+					<>
+						{auth.error && <p className="notice notice-error">{auth.error}</p>}
+						<LoginView onAuthenticated={() => void loadMe()} />
+					</>
+				) : route.view === "home" ? (
+					<HomeView
+						canGenerate={auth.canGenerate}
+						onOpenSession={openSession}
+						onResume={resumeSession}
+					/>
+				) : route.view === "review" ? (
+					<ReviewView />
+				) : (
+					<QuizView
+						key={route.sessionId}
+						sessionId={route.sessionId}
+						initialSession={
+							handoff?.sessionId === route.sessionId ? handoff : null
+						}
+						onExit={() => {
+							window.location.hash = "";
+						}}
+					/>
+				)}
+			</main>
 
-      <footer className="colophon">© 2026 Gorillaburg Inc.</footer>
-    </div>
-  );
+			<footer className="colophon">© 2026 Gorillaburg Inc.</footer>
+		</div>
+	);
 }

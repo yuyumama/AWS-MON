@@ -44,7 +44,11 @@ def gate_enabled() -> bool:
 
 def gate_enforced() -> bool:
     """1(既定)ならブロックを強制。0ならレポートのみ(結果は残すが弾かない)。"""
-    return os.environ.get("AGENT_GUARDRAIL_ENFORCE", "1").lower() not in ("0", "false", "off")
+    return os.environ.get("AGENT_GUARDRAIL_ENFORCE", "1").lower() not in (
+        "0",
+        "false",
+        "off",
+    )
 
 
 def gate_retries() -> int:
@@ -52,7 +56,9 @@ def gate_retries() -> int:
     return int(os.environ.get("AGENT_GUARDRAIL_RETRIES", "1"))
 
 
-def check_grounding(grounding_source: str, query: str, guard_content: str) -> GateResult:
+def check_grounding(
+    grounding_source: str, query: str, guard_content: str
+) -> GateResult:
     """ApplyGuardrail で guard_content が grounding_source に根拠づくか確認する。
 
     ガードレール自体のエラー(権限・リージョン等)は not_run として返し、生成は止めない。
@@ -94,14 +100,18 @@ def check_grounding(grounding_source: str, query: str, guard_content: str) -> Ga
             ],
         )
     except Exception as e:  # noqa: BLE001 - ゲート自体の障害で生成を止めない
-        logger.warning("ApplyGuardrail の呼び出しに失敗したためチェックを省略します", exc_info=True)
+        logger.warning(
+            "ApplyGuardrail の呼び出しに失敗したためチェックを省略します", exc_info=True
+        )
         return GateResult(status="not_run", detail=f"apply_guardrail error: {e}")
 
     grounding_score: float | None = None
     relevance_score: float | None = None
     blocked = False
     for assessment in response.get("assessments") or []:
-        for f in (assessment.get("contextualGroundingPolicy") or {}).get("filters") or []:
+        for f in (assessment.get("contextualGroundingPolicy") or {}).get(
+            "filters"
+        ) or []:
             if f.get("type") == "GROUNDING":
                 grounding_score = f.get("score")
             elif f.get("type") == "RELEVANCE":

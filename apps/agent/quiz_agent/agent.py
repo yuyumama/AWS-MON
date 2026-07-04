@@ -40,6 +40,7 @@ DEFAULT_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 def model_id() -> str:
     return os.environ.get("BEDROCK_MODEL_ID", DEFAULT_MODEL_ID)
 
+
 T = TypeVar("T", bound=BaseModel)
 
 
@@ -52,7 +53,9 @@ def _model() -> BedrockModel:
     )
 
 
-def _generate(system_prompt: str, output_model: type[T], prompt: str, retries: int = 2) -> T:
+def _generate(
+    system_prompt: str, output_model: type[T], prompt: str, retries: int = 2
+) -> T:
     """構造化出力でスキーマ準拠のオブジェクトを生成する。失敗時はリトライ。
 
     問題ごとに独立させるため、呼び出しごとに新しい Agent を生成する。
@@ -67,13 +70,16 @@ def _generate(system_prompt: str, output_model: type[T], prompt: str, retries: i
             last_err = e
             if attempt < retries:
                 time.sleep(0.8 * (attempt + 1))
-    raise RuntimeError(f"{output_model.__name__} の生成に失敗しました: {last_err}") from last_err
+    raise RuntimeError(
+        f"{output_model.__name__} の生成に失敗しました: {last_err}"
+    ) from last_err
 
 
 # --- AWSドキュメントMCP(フェーズ2-4) -----------------------------------------
 # 生成前に search_documentation / read_documentation で最新の公式ドキュメントを
 # 調査させてから出題する。MCPサーバーの起動・調査に失敗した場合は、生成自体を
 # 止めないよう従来のドキュメントなし生成にフォールバックする。
+
 
 def _docs_mcp_enabled() -> bool:
     return os.environ.get("AGENT_DOCS_MCP", "1").lower() not in ("0", "false", "off")
@@ -82,7 +88,9 @@ def _docs_mcp_enabled() -> bool:
 def _default_docs_mcp_command() -> str:
     # pipで同梱した console script を実行中のPythonと同じ環境(venvのbin)から探す。
     # venv未activateのままモジュール実行されてもPATHに依存せず起動できるようにする。
-    script = os.path.join(os.path.dirname(sys.executable), "awslabs.aws-documentation-mcp-server")
+    script = os.path.join(
+        os.path.dirname(sys.executable), "awslabs.aws-documentation-mcp-server"
+    )
     return script if os.path.exists(script) else "awslabs.aws-documentation-mcp-server"
 
 

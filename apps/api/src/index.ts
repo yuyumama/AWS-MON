@@ -1,35 +1,35 @@
+import { resolveTableNames } from "@aws-mon/shared";
+import { ListTablesCommand } from "@aws-sdk/client-dynamodb";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
-import { ListTablesCommand } from "@aws-sdk/client-dynamodb";
-import { resolveTableNames } from "@aws-mon/shared";
+import {
+	type AuthEnv,
+	authMiddleware,
+	authMode,
+	devRoutesEnabled,
+	getAuth,
+} from "./auth.js";
 import { dynamoClient } from "./dynamo.js";
 import {
-  asNumber,
-  asObject,
-  asString,
-  asStringArray,
-  errorResponse,
+	asNumber,
+	asObject,
+	asString,
+	asStringArray,
+	errorResponse,
 } from "./http.js";
-import {
-  authMiddleware,
-  authMode,
-  devRoutesEnabled,
-  getAuth,
-  type AuthEnv,
-} from "./auth.js";
-import {
-  answerSession,
-  getSession,
-  listSessions,
-  nextSessionQuestion,
-  startSession,
-} from "./repository.js";
-import { saveGeneratedQuestion } from "./questionRepository.js";
 import { runRunnableJobs } from "./jobRepository.js";
+import { saveGeneratedQuestion } from "./questionRepository.js";
 import {
-  getReviewState,
-  listReviewItems,
-  setReviewMark,
+	answerSession,
+	getSession,
+	listSessions,
+	nextSessionQuestion,
+	startSession,
+} from "./repository.js";
+import {
+	getReviewState,
+	listReviewItems,
+	setReviewMark,
 } from "./reviewRepository.js";
 
 // Lambda Web Adapter(LWA) は「PORTで待ち受ける普通のWebサーバ」をそのままLambda化する。
@@ -49,220 +49,218 @@ app.use("/me", authMiddleware());
 
 // /dev/* はローカル開発専用。cognitoモード(本番)では露出させない。
 app.use("/dev/*", async (c, next) => {
-  if (!devRoutesEnabled()) {
-    return c.json({ status: "error", message: "not found" }, 404);
-  }
-  await next();
+	if (!devRoutesEnabled()) {
+		return c.json({ status: "error", message: "not found" }, 404);
+	}
+	await next();
 });
 
 app.get("/health", (c) =>
-  c.json({ status: "ok", service: "api", time: new Date().toISOString() }),
+	c.json({ status: "ok", service: "api", time: new Date().toISOString() }),
 );
 
 // フロントが認証状態と生成権限(UI表示制御)を知るためのエンドポイント。
 app.get("/me", (c) => {
-  const auth = getAuth(c);
-  return c.json({
-    status: "ok",
-    userId: auth.userId,
-    canGenerateQuestions: auth.canGenerateQuestions,
-    authMode: authMode(),
-  });
+	const auth = getAuth(c);
+	return c.json({
+		status: "ok",
+		userId: auth.userId,
+		canGenerateQuestions: auth.canGenerateQuestions,
+		authMode: authMode(),
+	});
 });
 
-app.get("/health/tables", (c) =>
-  c.json({ status: "ok", tables: tableNames }),
-);
+app.get("/health/tables", (c) => c.json({ status: "ok", tables: tableNames }));
 
 // ローカルインフラ(local/docker compose up -d)が起きていれば DynamoDB への接続を確認できる。
 app.get("/health/dynamo", async (c) => {
-  try {
-    const out = await dynamoClient.send(new ListTablesCommand({}));
-    return c.json({ status: "ok", tables: out.TableNames ?? [] });
-  } catch (e) {
-    return c.json({ status: "error", message: (e as Error).message }, 500);
-  }
+	try {
+		const out = await dynamoClient.send(new ListTablesCommand({}));
+		return c.json({ status: "ok", tables: out.TableNames ?? [] });
+	} catch (e) {
+		return c.json({ status: "error", message: (e as Error).message }, 500);
+	}
 });
 
 app.post("/sessions", async (c) => {
-  try {
-    const body = asObject(await c.req.json().catch(() => ({})));
-    const cert = asString(body.cert) ?? "aip";
-    const domainSelection = asString(body.domainSelection);
-    const domain = asString(body.domain);
-    const mode = asString(body.mode);
+	try {
+		const body = asObject(await c.req.json().catch(() => ({})));
+		const cert = asString(body.cert) ?? "aip";
+		const domainSelection = asString(body.domainSelection);
+		const domain = asString(body.domain);
+		const mode = asString(body.mode);
 
-    const auth = getAuth(c);
-    const session = await startSession({
-      userId: auth.userId,
-      cert,
-      domainSelection,
-      domain,
-      mode: mode === "GENERATE" || mode === "MIXED" ? mode : "BANK",
-      canGenerateQuestions: auth.canGenerateQuestions,
-    });
+		const auth = getAuth(c);
+		const session = await startSession({
+			userId: auth.userId,
+			cert,
+			domainSelection,
+			domain,
+			mode: mode === "GENERATE" || mode === "MIXED" ? mode : "BANK",
+			canGenerateQuestions: auth.canGenerateQuestions,
+		});
 
-    return c.json({ status: "ok", session }, 201);
-  } catch (e) {
-    return errorResponse(c, e);
-  }
+		return c.json({ status: "ok", session }, 201);
+	} catch (e) {
+		return errorResponse(c, e);
+	}
 });
 
 app.get("/sessions", async (c) => {
-  try {
-    const statusQuery = c.req.query("status");
-    const status =
-      statusQuery === "COMPLETED" || statusQuery === "ABANDONED"
-        ? statusQuery
-        : "ACTIVE";
-    const sessions = await listSessions({
-      userId: getAuth(c).userId,
-      status,
-      limit: asNumber(Number(c.req.query("limit"))),
-    });
-    return c.json({ status: "ok", sessions });
-  } catch (e) {
-    return errorResponse(c, e);
-  }
+	try {
+		const statusQuery = c.req.query("status");
+		const status =
+			statusQuery === "COMPLETED" || statusQuery === "ABANDONED"
+				? statusQuery
+				: "ACTIVE";
+		const sessions = await listSessions({
+			userId: getAuth(c).userId,
+			status,
+			limit: asNumber(Number(c.req.query("limit"))),
+		});
+		return c.json({ status: "ok", sessions });
+	} catch (e) {
+		return errorResponse(c, e);
+	}
 });
 
 app.get("/sessions/:sessionId", async (c) => {
-  try {
-    const session = await getSession({
-      userId: getAuth(c).userId,
-      sessionId: c.req.param("sessionId"),
-    });
-    return c.json({ status: "ok", session });
-  } catch (e) {
-    return errorResponse(c, e);
-  }
+	try {
+		const session = await getSession({
+			userId: getAuth(c).userId,
+			sessionId: c.req.param("sessionId"),
+		});
+		return c.json({ status: "ok", session });
+	} catch (e) {
+		return errorResponse(c, e);
+	}
 });
 
 app.post("/sessions/:sessionId/answers", async (c) => {
-  try {
-    const body = asObject(await c.req.json().catch(() => ({})));
-    const sequence = asNumber(body.sequence);
-    if (!sequence) {
-      return c.json({ status: "error", message: "sequence is required" }, 400);
-    }
+	try {
+		const body = asObject(await c.req.json().catch(() => ({})));
+		const sequence = asNumber(body.sequence);
+		if (!sequence) {
+			return c.json({ status: "error", message: "sequence is required" }, 400);
+		}
 
-    const result = await answerSession({
-      userId: getAuth(c).userId,
-      sessionId: c.req.param("sessionId"),
-      sequence,
-      selectedAnswers: asStringArray(body.selectedAnswers),
-      version: asNumber(body.version),
-      elapsedMs: asNumber(body.elapsedMs),
-    });
+		const result = await answerSession({
+			userId: getAuth(c).userId,
+			sessionId: c.req.param("sessionId"),
+			sequence,
+			selectedAnswers: asStringArray(body.selectedAnswers),
+			version: asNumber(body.version),
+			elapsedMs: asNumber(body.elapsedMs),
+		});
 
-    return c.json({ status: "ok", ...result });
-  } catch (e) {
-    return errorResponse(c, e);
-  }
+		return c.json({ status: "ok", ...result });
+	} catch (e) {
+		return errorResponse(c, e);
+	}
 });
 
 app.post("/sessions/:sessionId/next", async (c) => {
-  try {
-    const body = asObject(await c.req.json().catch(() => ({})));
-    const auth = getAuth(c);
-    const session = await nextSessionQuestion({
-      userId: auth.userId,
-      sessionId: c.req.param("sessionId"),
-      version: asNumber(body.version),
-      canGenerateQuestions: auth.canGenerateQuestions,
-    });
+	try {
+		const body = asObject(await c.req.json().catch(() => ({})));
+		const auth = getAuth(c);
+		const session = await nextSessionQuestion({
+			userId: auth.userId,
+			sessionId: c.req.param("sessionId"),
+			version: asNumber(body.version),
+			canGenerateQuestions: auth.canGenerateQuestions,
+		});
 
-    return c.json({ status: "ok", session });
-  } catch (e) {
-    return errorResponse(c, e);
-  }
+		return c.json({ status: "ok", session });
+	} catch (e) {
+		return errorResponse(c, e);
+	}
 });
 
 // 復習マーク済み問題の一覧(AP-06)
 app.get("/reviews", async (c) => {
-  try {
-    const items = await listReviewItems({
-      userId: getAuth(c).userId,
-      cert: asString(c.req.query("cert")),
-      limit: asNumber(Number(c.req.query("limit"))),
-    });
-    return c.json({ status: "ok", items });
-  } catch (e) {
-    return errorResponse(c, e);
-  }
+	try {
+		const items = await listReviewItems({
+			userId: getAuth(c).userId,
+			cert: asString(c.req.query("cert")),
+			limit: asNumber(Number(c.req.query("limit"))),
+		});
+		return c.json({ status: "ok", items });
+	} catch (e) {
+		return errorResponse(c, e);
+	}
 });
 
 // ユーザー×問題の復習状態の取得/更新(AP-07)。回答済み問題のみ対象。
 app.get("/reviews/:questionId", async (c) => {
-  try {
-    const state = await getReviewState({
-      userId: getAuth(c).userId,
-      questionId: c.req.param("questionId"),
-    });
-    return c.json({ status: "ok", ...state });
-  } catch (e) {
-    return errorResponse(c, e);
-  }
+	try {
+		const state = await getReviewState({
+			userId: getAuth(c).userId,
+			questionId: c.req.param("questionId"),
+		});
+		return c.json({ status: "ok", ...state });
+	} catch (e) {
+		return errorResponse(c, e);
+	}
 });
 
 app.put("/reviews/:questionId", async (c) => {
-  try {
-    const body = asObject(await c.req.json().catch(() => ({})));
-    if (typeof body.marked !== "boolean") {
-      return c.json({ status: "error", message: "marked is required" }, 400);
-    }
-    const state = await setReviewMark({
-      userId: getAuth(c).userId,
-      questionId: c.req.param("questionId"),
-      marked: body.marked,
-    });
-    return c.json({ status: "ok", ...state });
-  } catch (e) {
-    return errorResponse(c, e);
-  }
+	try {
+		const body = asObject(await c.req.json().catch(() => ({})));
+		if (typeof body.marked !== "boolean") {
+			return c.json({ status: "error", message: "marked is required" }, 400);
+		}
+		const state = await setReviewMark({
+			userId: getAuth(c).userId,
+			questionId: c.req.param("questionId"),
+			marked: body.marked,
+		});
+		return c.json({ status: "ok", ...state });
+	} catch (e) {
+		return errorResponse(c, e);
+	}
 });
 
 app.post("/dev/questions", async (c) => {
-  try {
-    const body = asObject(await c.req.json().catch(() => ({})));
-    const result = await saveGeneratedQuestion({
-      cert: asString(body.cert) ?? "",
-      domain: asString(body.domain) ?? "",
-      domainSelection: asString(body.domainSelection),
-      quiz: body.quiz,
-      generation: body.generation,
-      quality: body.quality,
-      sourceRefs: body.sourceRefs,
-    });
+	try {
+		const body = asObject(await c.req.json().catch(() => ({})));
+		const result = await saveGeneratedQuestion({
+			cert: asString(body.cert) ?? "",
+			domain: asString(body.domain) ?? "",
+			domainSelection: asString(body.domainSelection),
+			quiz: body.quiz,
+			generation: body.generation,
+			quality: body.quality,
+			sourceRefs: body.sourceRefs,
+		});
 
-    const response = {
-      status: "ok",
-      created: result.created,
-      deduplicated: result.deduplicated,
-      questionId: result.item.questionId,
-      contentHash: result.item.contentHash,
-      question: result.question,
-    };
+		const response = {
+			status: "ok",
+			created: result.created,
+			deduplicated: result.deduplicated,
+			questionId: result.item.questionId,
+			contentHash: result.item.contentHash,
+			question: result.question,
+		};
 
-    return result.created ? c.json(response, 201) : c.json(response);
-  } catch (e) {
-    return errorResponse(c, e);
-  }
+		return result.created ? c.json(response, 201) : c.json(response);
+	} catch (e) {
+		return errorResponse(c, e);
+	}
 });
 
 app.post("/dev/jobs/run", async (c) => {
-  try {
-    const body = asObject(await c.req.json().catch(() => ({})));
-    const result = await runRunnableJobs(asNumber(body.limit));
-    return c.json({ status: "ok", ...result });
-  } catch (e) {
-    return errorResponse(c, e);
-  }
+	try {
+		const body = asObject(await c.req.json().catch(() => ({})));
+		const result = await runRunnableJobs(asNumber(body.limit));
+		return c.json({ status: "ok", ...result });
+	} catch (e) {
+		return errorResponse(c, e);
+	}
 });
 
 // ミドルウェア(認証)で投げられたApiErrorもルートと同じ形式で返す。
 app.onError((error, c) => errorResponse(c, error));
 
 serve({ fetch: app.fetch, port }, (info) => {
-  console.log(`api listening on http://localhost:${info.port}`);
+	console.log(`api listening on http://localhost:${info.port}`);
 });

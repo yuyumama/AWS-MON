@@ -1,16 +1,16 @@
 export const certs = [
-  "clf",
-  "aif",
-  "saa",
-  "dva",
-  "soa",
-  "dea",
-  "mla",
-  "sap",
-  "dop",
-  "aip",
-  "ans",
-  "scs",
+	"clf",
+	"aif",
+	"saa",
+	"dva",
+	"soa",
+	"dea",
+	"mla",
+	"sap",
+	"dop",
+	"aip",
+	"ans",
+	"scs",
 ] as const;
 
 export type Cert = (typeof certs)[number];
@@ -23,280 +23,280 @@ export type PrefetchState = "IDLE" | "QUEUED" | "READY" | "FAILED";
 export type AttemptSource = "GENERATED" | "BANK" | "PREFETCH";
 export type JobKind = "INITIAL" | "PREFETCH" | "REGENERATE_STALE";
 export type JobState =
-  | "QUEUED"
-  | "RUNNING"
-  | "SUCCEEDED"
-  | "FAILED"
-  | "CANCELLED"
-  | "RETRY_WAIT";
+	| "QUEUED"
+	| "RUNNING"
+	| "SUCCEEDED"
+	| "FAILED"
+	| "CANCELLED"
+	| "RETRY_WAIT";
 export type Visibility = "answering" | "answered";
 
 export type Option = {
-  label: string;
-  text: string;
+	label: string;
+	text: string;
 };
 
 export type Question = {
-  type: QuestionType;
-  question: string;
-  options: Option[];
-  correct: string[];
+	type: QuestionType;
+	question: string;
+	options: Option[];
+	correct: string[];
 };
 
 export type OptionReason = {
-  label: string;
-  reason: string;
+	label: string;
+	reason: string;
 };
 
 export type Explanation = {
-  overview: string;
-  correct_reason: string;
-  option_reasons: OptionReason[];
-  source: string;
+	overview: string;
+	correct_reason: string;
+	option_reasons: OptionReason[];
+	source: string;
 };
 
 export type QuizItem = {
-  question: Question;
-  explanation: Explanation;
+	question: Question;
+	explanation: Explanation;
 };
 
 export type SourceRef = {
-  url: string;
-  title?: string;
-  retrievedAt?: string;
-  hash?: string;
+	url: string;
+	title?: string;
+	retrievedAt?: string;
+	hash?: string;
 };
 
 export type QuestionItem = {
-  questionId: string;
-  schemaVersion: 1;
-  status: QuestionStatus;
-  cert: Cert | string;
-  domain: string;
-  domainSelection?: string;
-  type: QuestionType;
-  question: string;
-  options: Option[];
-  correct: string[];
-  explanation: Explanation;
-  sourceRefs?: SourceRef[];
-  generation: {
-    jobId?: string;
-    modelId: string;
-    promptVersion: string;
-    agentVersion?: string;
-    generatedAt: string;
-    latencyMs?: number;
-    inputTokens?: number;
-    outputTokens?: number;
-  };
-  quality?: {
-    inlineGate: "not_run" | "passed" | "failed";
-    evaluator: "none" | "self_review" | "agentcore_evaluate";
-    valid?: boolean;
-    score?: number;
-    issues?: string;
-    evaluatedAt?: string;
-  };
-  contentHash: string;
-  validUntil: string;
-  staleReason?: string;
-  randomBucket?: string;
-  randomSort?: string;
-  bankPk?: string;
-  bankSk?: string;
-  stalePk?: string;
-  staleSk?: string;
-  hashPk?: string;
-  hashSk?: string;
-  createdAt: string;
-  updatedAt: string;
-  deleteAt?: number;
+	questionId: string;
+	schemaVersion: 1;
+	status: QuestionStatus;
+	cert: Cert | string;
+	domain: string;
+	domainSelection?: string;
+	type: QuestionType;
+	question: string;
+	options: Option[];
+	correct: string[];
+	explanation: Explanation;
+	sourceRefs?: SourceRef[];
+	generation: {
+		jobId?: string;
+		modelId: string;
+		promptVersion: string;
+		agentVersion?: string;
+		generatedAt: string;
+		latencyMs?: number;
+		inputTokens?: number;
+		outputTokens?: number;
+	};
+	quality?: {
+		inlineGate: "not_run" | "passed" | "failed";
+		evaluator: "none" | "self_review" | "agentcore_evaluate";
+		valid?: boolean;
+		score?: number;
+		issues?: string;
+		evaluatedAt?: string;
+	};
+	contentHash: string;
+	validUntil: string;
+	staleReason?: string;
+	randomBucket?: string;
+	randomSort?: string;
+	bankPk?: string;
+	bankSk?: string;
+	stalePk?: string;
+	staleSk?: string;
+	hashPk?: string;
+	hashSk?: string;
+	createdAt: string;
+	updatedAt: string;
+	deleteAt?: number;
 };
 
 export type SessionMetaItem = {
-  sessionId: string;
-  itemKey: "META";
-  schemaVersion: 1;
-  userId: string;
-  status: SessionStatus;
-  cert: Cert | string;
-  domainSelection: string;
-  mode: SessionMode;
-  current?: {
-    sequence: number;
-    questionId: string;
-    domain: string;
-    state: CurrentQuestionState;
-    selectedAnswers?: string[];
-    attemptId?: string;
-    answeredAt?: string;
-  };
-  prefetch?: {
-    sequence: number;
-    state: PrefetchState;
-    jobId?: string;
-    questionId?: string;
-    domain?: string;
-    errorCode?: string;
-    updatedAt?: string;
-  };
-  answeredCount: number;
-  correctCount: number;
-  lastSeenQuestionIds: string[];
-  version: number;
-  startedAt: string;
-  updatedAt: string;
-  completedAt?: string;
-  userStatusPk: string;
-  userStatusSk: string;
-  abandonAfter?: string;
-  abandonPk?: string;
-  abandonSk?: string;
-  deleteAt?: number;
+	sessionId: string;
+	itemKey: "META";
+	schemaVersion: 1;
+	userId: string;
+	status: SessionStatus;
+	cert: Cert | string;
+	domainSelection: string;
+	mode: SessionMode;
+	current?: {
+		sequence: number;
+		questionId: string;
+		domain: string;
+		state: CurrentQuestionState;
+		selectedAnswers?: string[];
+		attemptId?: string;
+		answeredAt?: string;
+	};
+	prefetch?: {
+		sequence: number;
+		state: PrefetchState;
+		jobId?: string;
+		questionId?: string;
+		domain?: string;
+		errorCode?: string;
+		updatedAt?: string;
+	};
+	answeredCount: number;
+	correctCount: number;
+	lastSeenQuestionIds: string[];
+	version: number;
+	startedAt: string;
+	updatedAt: string;
+	completedAt?: string;
+	userStatusPk: string;
+	userStatusSk: string;
+	abandonAfter?: string;
+	abandonPk?: string;
+	abandonSk?: string;
+	deleteAt?: number;
 };
 
 export type AttemptItem = {
-  sessionId: string;
-  itemKey: `ATTEMPT#${string}`;
-  schemaVersion: 1;
-  userId: string;
-  sequence: number;
-  questionId: string;
-  cert: Cert | string;
-  domain: string;
-  selectedAnswers: string[];
-  correctAnswersSnapshot: string[];
-  isCorrect: boolean;
-  elapsedMs?: number;
-  answeredAt: string;
-  source: AttemptSource;
-  sessionVersionAfterWrite: number;
-  createdAt: string;
-  updatedAt: string;
+	sessionId: string;
+	itemKey: `ATTEMPT#${string}`;
+	schemaVersion: 1;
+	userId: string;
+	sequence: number;
+	questionId: string;
+	cert: Cert | string;
+	domain: string;
+	selectedAnswers: string[];
+	correctAnswersSnapshot: string[];
+	isCorrect: boolean;
+	elapsedMs?: number;
+	answeredAt: string;
+	source: AttemptSource;
+	sessionVersionAfterWrite: number;
+	createdAt: string;
+	updatedAt: string;
 };
 
 export type UserQuestionStateItem = {
-  userId: string;
-  itemKey: `QUESTION#${string}`;
-  schemaVersion: 1;
-  questionId: string;
-  cert: Cert | string;
-  domain: string;
-  answerCount: number;
-  correctCount: number;
-  lastCorrect?: boolean;
-  lastSelectedAnswers?: string[];
-  firstAnsweredAt?: string;
-  lastAnsweredAt?: string;
-  lastSessionId?: string;
-  reviewMarked: boolean;
-  reviewMarkedAt?: string;
-  reviewNote?: string;
-  nextReviewAt?: string;
-  weaknessScore?: number;
-  reviewPk?: string;
-  reviewSk?: string;
-  duePk?: string;
-  dueSk?: string;
-  createdAt: string;
-  updatedAt: string;
+	userId: string;
+	itemKey: `QUESTION#${string}`;
+	schemaVersion: 1;
+	questionId: string;
+	cert: Cert | string;
+	domain: string;
+	answerCount: number;
+	correctCount: number;
+	lastCorrect?: boolean;
+	lastSelectedAnswers?: string[];
+	firstAnsweredAt?: string;
+	lastAnsweredAt?: string;
+	lastSessionId?: string;
+	reviewMarked: boolean;
+	reviewMarkedAt?: string;
+	reviewNote?: string;
+	nextReviewAt?: string;
+	weaknessScore?: number;
+	reviewPk?: string;
+	reviewSk?: string;
+	duePk?: string;
+	dueSk?: string;
+	createdAt: string;
+	updatedAt: string;
 };
 
 export type UserDomainStatItem = {
-  userId: string;
-  itemKey: `STAT#CERT#${string}#DOMAIN#${string}`;
-  schemaVersion: 1;
-  cert: Cert | string;
-  domain: string;
-  answeredCount: number;
-  correctCount: number;
-  reviewMarkedCount: number;
-  lastAnsweredAt?: string;
-  weaknessScore?: number;
-  createdAt: string;
-  updatedAt: string;
+	userId: string;
+	itemKey: `STAT#CERT#${string}#DOMAIN#${string}`;
+	schemaVersion: 1;
+	cert: Cert | string;
+	domain: string;
+	answeredCount: number;
+	correctCount: number;
+	reviewMarkedCount: number;
+	lastAnsweredAt?: string;
+	weaknessScore?: number;
+	createdAt: string;
+	updatedAt: string;
 };
 
 export type GenerationJobItem = {
-  jobId: string;
-  schemaVersion: 1;
-  kind: JobKind;
-  state: JobState;
-  userId?: string;
-  sessionId?: string;
-  targetSequence?: number;
-  cert: Cert | string;
-  domainSelection: string;
-  domain?: string;
-  mode: SessionMode;
-  questionId?: string;
-  sourceQuestionId?: string;
-  attemptCount: number;
-  maxAttempts: number;
-  runAfter: string;
-  lockedBy?: string;
-  lockedUntil?: string;
-  errorCode?: string;
-  errorMessage?: string;
-  runPk?: string;
-  runSk?: string;
-  createdAt: string;
-  updatedAt: string;
-  finishedAt?: string;
-  deleteAt?: number;
+	jobId: string;
+	schemaVersion: 1;
+	kind: JobKind;
+	state: JobState;
+	userId?: string;
+	sessionId?: string;
+	targetSequence?: number;
+	cert: Cert | string;
+	domainSelection: string;
+	domain?: string;
+	mode: SessionMode;
+	questionId?: string;
+	sourceQuestionId?: string;
+	attemptCount: number;
+	maxAttempts: number;
+	runAfter: string;
+	lockedBy?: string;
+	lockedUntil?: string;
+	errorCode?: string;
+	errorMessage?: string;
+	runPk?: string;
+	runSk?: string;
+	createdAt: string;
+	updatedAt: string;
+	finishedAt?: string;
+	deleteAt?: number;
 };
 
 export type AnsweringQuestionDto = {
-  visibility: "answering";
-  questionId: string;
-  cert: string;
-  domain: string;
-  type: QuestionType;
-  question: string;
-  options: Option[];
-  validUntil: string;
+	visibility: "answering";
+	questionId: string;
+	cert: string;
+	domain: string;
+	type: QuestionType;
+	question: string;
+	options: Option[];
+	validUntil: string;
 };
 
 export type AnsweredQuestionDto = Omit<AnsweringQuestionDto, "visibility"> & {
-  visibility: "answered";
-  correct: string[];
-  explanation: Explanation;
+	visibility: "answered";
+	correct: string[];
+	explanation: Explanation;
 };
 
 export type QuestionDto = AnsweringQuestionDto | AnsweredQuestionDto;
 
 export function toQuestionDto(
-  item: QuestionItem,
-  visibility: "answering",
+	item: QuestionItem,
+	visibility: "answering",
 ): AnsweringQuestionDto;
 export function toQuestionDto(
-  item: QuestionItem,
-  visibility: "answered",
+	item: QuestionItem,
+	visibility: "answered",
 ): AnsweredQuestionDto;
 export function toQuestionDto(
-  item: QuestionItem,
-  visibility: Visibility,
+	item: QuestionItem,
+	visibility: Visibility,
 ): QuestionDto {
-  const base: AnsweringQuestionDto = {
-    visibility: "answering",
-    questionId: item.questionId,
-    cert: item.cert,
-    domain: item.domain,
-    type: item.type,
-    question: item.question,
-    options: item.options,
-    validUntil: item.validUntil,
-  };
+	const base: AnsweringQuestionDto = {
+		visibility: "answering",
+		questionId: item.questionId,
+		cert: item.cert,
+		domain: item.domain,
+		type: item.type,
+		question: item.question,
+		options: item.options,
+		validUntil: item.validUntil,
+	};
 
-  if (visibility === "answering") {
-    return base;
-  }
+	if (visibility === "answering") {
+		return base;
+	}
 
-  return {
-    ...base,
-    visibility: "answered",
-    correct: item.correct,
-    explanation: item.explanation,
-  };
+	return {
+		...base,
+		visibility: "answered",
+		correct: item.correct,
+		explanation: item.explanation,
+	};
 }

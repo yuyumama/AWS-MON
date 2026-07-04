@@ -51,15 +51,21 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(description="AWS認定クイズをローカル生成する")
     parser.add_argument(
-        "--cert", default="aip", choices=list(CERT_FULL_NAMES),
+        "--cert",
+        default="aip",
+        choices=list(CERT_FULL_NAMES),
         help="資格コード（既定: aip）",
     )
     parser.add_argument(
-        "--domain", default="all", choices=[d.value for d in AIP_DOMAINS],
+        "--domain",
+        default="all",
+        choices=[d.value for d in AIP_DOMAINS],
         help="AIP-C01 のドメイン（既定: all。AIP以外では無視）",
     )
     parser.add_argument(
-        "--json", action="store_true", help="整形せずJSONで出力する",
+        "--json",
+        action="store_true",
+        help="整形せずJSONで出力する",
     )
     args = parser.parse_args(argv)
 

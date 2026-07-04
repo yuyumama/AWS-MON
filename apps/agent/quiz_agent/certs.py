@@ -34,15 +34,31 @@ class Domain:
 # AIP-C01 ドメイン構成（公式試験ガイドの重み）
 AIP_DOMAINS: list[Domain] = [
     Domain("all", "全ドメイン（重み付けランダム）", "", None),
-    Domain("d1", "① 基盤モデル統合・データ管理・コンプライアンス",
-           "Foundation Model Integration, Data Management, and Compliance", 31),
+    Domain(
+        "d1",
+        "① 基盤モデル統合・データ管理・コンプライアンス",
+        "Foundation Model Integration, Data Management, and Compliance",
+        31,
+    ),
     Domain("d2", "② 実装と統合", "Implementation and Integration", 26),
-    Domain("d3", "③ AIの安全性・セキュリティ・ガバナンス",
-           "AI Safety, Security, and Governance", 20),
-    Domain("d4", "④ 運用効率と最適化",
-           "Operational Efficiency and Optimization for GenAI Applications", 12),
-    Domain("d5", "⑤ テスト・検証・トラブルシューティング",
-           "Testing, Validation, and Troubleshooting", 11),
+    Domain(
+        "d3",
+        "③ AIの安全性・セキュリティ・ガバナンス",
+        "AI Safety, Security, and Governance",
+        20,
+    ),
+    Domain(
+        "d4",
+        "④ 運用効率と最適化",
+        "Operational Efficiency and Optimization for GenAI Applications",
+        12,
+    ),
+    Domain(
+        "d5",
+        "⑤ テスト・検証・トラブルシューティング",
+        "Testing, Validation, and Troubleshooting",
+        11,
+    ),
 ]
 
 # AIP-C01 の出題コンテキスト（プロンプトに織り込む）
@@ -61,7 +77,9 @@ AIP_CONTEXT = """
 
 def get_cert_full_name(cert: str) -> str:
     if cert not in CERT_FULL_NAMES:
-        raise ValueError(f"不明な資格コード: {cert}（有効: {', '.join(CERT_FULL_NAMES)}）")
+        raise ValueError(
+            f"不明な資格コード: {cert}（有効: {', '.join(CERT_FULL_NAMES)}）"
+        )
     return CERT_FULL_NAMES[cert]
 
 

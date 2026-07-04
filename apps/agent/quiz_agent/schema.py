@@ -18,9 +18,7 @@ class Option(BaseModel):
 
 class OptionReason(BaseModel):
     label: str = Field(description="対象の選択肢ラベル")
-    reason: str = Field(
-        description="その選択肢が正解／不正解である理由（1〜2文）"
-    )
+    reason: str = Field(description="その選択肢が正解／不正解である理由（1〜2文）")
 
 
 class Question(BaseModel):

@@ -22,7 +22,9 @@ import boto3
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="グラウンディングチェック用ガードレールを作成する")
+    parser = argparse.ArgumentParser(
+        description="グラウンディングチェック用ガードレールを作成する"
+    )
     parser.add_argument("--name", default="aws-mon-quiz-grounding")
     parser.add_argument("--grounding-threshold", type=float, default=0.7)
     parser.add_argument("--relevance-threshold", type=float, default=0.5)
@@ -37,8 +39,13 @@ def main() -> int:
         if g.get("name") == args.name
     ]
     if existing:
-        print(f"同名のガードレールが既にあります: id={existing[0]['id']}", file=sys.stderr)
-        print("しきい値を変えたい場合はコンソールかUpdateGuardrailで更新してください。", file=sys.stderr)
+        print(
+            f"同名のガードレールが既にあります: id={existing[0]['id']}", file=sys.stderr
+        )
+        print(
+            "しきい値を変えたい場合はコンソールかUpdateGuardrailで更新してください。",
+            file=sys.stderr,
+        )
         return 1
 
     response = client.create_guardrail(
@@ -55,7 +62,9 @@ def main() -> int:
         blockedOutputsMessaging="生成された問題はドキュメントに十分に根拠づきませんでした。",
     )
 
-    print(f"作成しました: guardrailId={response['guardrailId']} version={response['version']}")
+    print(
+        f"作成しました: guardrailId={response['guardrailId']} version={response['version']}"
+    )
     print("apps/agent/.env に次を追記してください:")
     print(f"  AGENT_GUARDRAIL_ID={response['guardrailId']}")
     print("  AGENT_GUARDRAIL_VERSION=DRAFT")

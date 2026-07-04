@@ -56,12 +56,14 @@ def build_data_source_config(log_group: str, service_name: str) -> dict:
 def print_response(message: str, response: dict) -> None:
     """AgentCore APIのレスポンスを人間向けに表示する。"""
     print(message)
-    print(json.dumps(
-        {k: v for k, v in response.items() if k != "ResponseMetadata"},
-        ensure_ascii=False,
-        indent=2,
-        default=str,
-    ))
+    print(
+        json.dumps(
+            {k: v for k, v in response.items() if k != "ResponseMetadata"},
+            ensure_ascii=False,
+            indent=2,
+            default=str,
+        )
+    )
     print("結果は CloudWatch > GenAI Observability の Evaluations で確認できる。")
 
 
@@ -168,7 +170,9 @@ def ensure_execution_role(region: str, account_id: str) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="オンライン評価設定を作成または更新する")
+    parser = argparse.ArgumentParser(
+        description="オンライン評価設定を作成または更新する"
+    )
     parser.add_argument("--name", default="aws_mon_quiz_agent_online_eval")
     parser.add_argument(
         "--log-group",
@@ -221,7 +225,9 @@ def main() -> int:
         update_params = {
             "onlineEvaluationConfigId": config_id,
             "rule": {"samplingConfig": {"samplingPercentage": args.sampling}},
-            "dataSourceConfig": build_data_source_config(args.log_group, args.service_name),
+            "dataSourceConfig": build_data_source_config(
+                args.log_group, args.service_name
+            ),
             "evaluators": [{"evaluatorId": e} for e in args.evaluators],
             "executionStatus": "ENABLED",
         }
@@ -229,7 +235,10 @@ def main() -> int:
             update_params["evaluationExecutionRoleArn"] = args.role_arn
 
         response = control.update_online_evaluation_config(**update_params)
-        print_response(f"既存のオンライン評価設定を更新しました: {args.name} ({config_id})", response)
+        print_response(
+            f"既存のオンライン評価設定を更新しました: {args.name} ({config_id})",
+            response,
+        )
         return 0
 
     account_id = boto3.client("sts").get_caller_identity()["Account"]
