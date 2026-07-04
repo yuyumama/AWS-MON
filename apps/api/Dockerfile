@@ -11,6 +11,9 @@ COPY package*.json ./
 RUN npm ci --omit=dev
 COPY dist ./dist
 
+# 非rootで実行（コンテナエスケープ対策。LWA/Lambdaはroot権限を必要としない）
+USER node
+
 # LWA が待ち受けるポート
 ENV PORT=8080
 ENV AWS_LWA_PORT=8080
