@@ -49,7 +49,7 @@ infra/
 | node | npm ci → shared build → typecheck → `biome ci .` → web/api build | 常時 |
 | agent | `ruff check` / `ruff format --check` | `apps/agent/**` 変更時 |
 | terraform | `fmt -check` / `init -backend=false` / `validate` | `infra/**` 変更時 |
-| tf-plan | `terraform plan -lock=false`（結果をPRにコメント） | `infra/envs/prod/**` 変更時 |
+| tf-plan | `terraform plan -lock=false`（結果はジョブログで確認） | `infra/envs/prod/**` 変更時（同一リポジトリのPRのみ） |
 | security | gitleaks（シークレット検知）+ trivy（IaCミスコンフィグ検知） | 常時 |
 
 フォーマッタは3系統: TS = **Biome**、Python = **ruff**、Terraform = `terraform fmt`。
@@ -71,7 +71,7 @@ infra/
 
 | ワークフロー | トリガー（mainへのpush + パス） | 内容 |
 |---|---|---|
-| deploy-infra | `infra/**` | plan → **手動承認（Environment: prod）** → 保存済みplanをapply |
+| deploy-infra | `infra/**` | plan（可視化）→ **手動承認（Environment: prod）** → 承認後に再plan+apply |
 | deploy-web | `apps/web/**`, `packages/shared/**` | build → S3 sync → CloudFront invalidation |
 | deploy-api | `apps/api/**`, `packages/shared/**` | イメージbuild → ECR push → `lambda update-function-code` |
 | deploy-agent | `apps/agent/**` | イメージbuild → ECR push → AgentCore Runtime 更新 |
@@ -88,9 +88,11 @@ infra/
 - backend は **S3**、ロックは **S3ネイティブロック**（`use_lockfile = true`。DynamoDBは使わない）。
   このため `infra/envs/prod` の `required_version` は `>= 1.11.0`。
 - state の key は `<env>/terraform.tfstate`（現行は `prod/terraform.tfstate` のみ）。
-- state バケット（`aws-mon-tfstate-<ACCOUNT_ID>`、バージョニング・暗号化・パブリックブロック有効）は
-  鶏卵問題のため **Terraform 管理外**とし、オーナーが手動で作成・管理する。
-  Terraform に import しない。削除・設定変更は手動でのみ行う。
+- バケット名はリポジトリにコミットせず、GitHub Variables の `TFSTATE_BUCKET` から
+  `terraform init -backend-config` で注入する（公開リポジトリにアカウント固有値を置かないため）。
+- state バケット（バージョニング・暗号化・パブリックブロック有効）は鶏卵問題のため
+  **Terraform 管理外**とし、オーナーが手動で作成・管理する。Terraform に import しない。
+  削除・設定変更は手動でのみ行う。
 
 ## GitHub ↔ AWS 認証（OIDC）
 
@@ -106,4 +108,5 @@ IAM に GitHub OIDC プロバイダを1つ作成し、用途別に2つのロー�
   AWSへの書き込みができない**ことがIAM側でも強制される。
 - この権限境界のため、**Terraform が作成する IAM ロール/ポリシー名は `aws-mon-` プレフィックスで
   統一**する。
-- ロールARNは GitHub Variables（`AWS_PLAN_ROLE_ARN` / `AWS_DEPLOY_ROLE_ARN`）で参照する。
+- ロールARNは GitHub Variables（`AWS_PLAN_ROLE_ARN` / `AWS_DEPLOY_ROLE_ARN`）で参照する
+  （stateバケット名の `TFSTATE_BUCKET` も同様）。

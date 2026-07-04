@@ -1,0 +1,77 @@
+name: Deploy Infra
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "infra/**"
+      - ".github/workflows/deploy-infra.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+# applyの競合を防ぐため直列化(実行中のデプロイはキャンセルしない)
+concurrency:
+  group: deploy-infra
+  cancel-in-progress: false
+
+env:
+  TF_IN_AUTOMATION: "true"
+
+jobs:
+  # 変更内容の可視化(読み取り専用ロール)。承認判断はこのジョブのログで行う
+  plan:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/envs/prod
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Configure AWS credentials (plan role)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_PLAN_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Terraform init
+        run: terraform init -input=false -backend-config="bucket=${{ vars.TFSTATE_BUCKET }}"
+
+      - name: Terraform plan
+        run: terraform plan -input=false -lock=false
+
+  # Environment prod のRequired reviewersによる手動承認を経て実行される。
+  # publicリポジトリではplanファイルのArtifact保存は避け(誰でも取得可能なため)、
+  # 承認後にこのジョブが改めてplan+applyする
+  apply:
+    needs: plan
+    runs-on: ubuntu-latest
+    environment: prod
+    defaults:
+      run:
+        working-directory: infra/envs/prod
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Configure AWS credentials (deploy role)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Terraform init
+        run: terraform init -input=false -backend-config="bucket=${{ vars.TFSTATE_BUCKET }}"
+
+      - name: Terraform apply
+        run: terraform apply -input=false -auto-approve
