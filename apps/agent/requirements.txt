@@ -1,6 +1,6 @@
 # CacheConfig(プロンプトキャッシュ)を使うため 1.45 以上
 strands-agents>=1.45
-pydantic>=2.0
+pydantic>=2.13.4
 python-dotenv>=1.0.0
 # AWSドキュメントMCP(フェーズ2-4)。strandsのMCPClient(stdio)から起動する
 mcp>=1.0
