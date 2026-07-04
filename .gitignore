@@ -35,3 +35,9 @@ Thumbs.db
 
 # local dev notes / scratch memos (not part of the repo's public purpose)
 docs_local/
+
+# dotfiles for local dev tools (not part of the repo's public purpose)
+.agents/
+.claude/
+.codex/
+.vscode/
