@@ -10,15 +10,15 @@ data "aws_cloudfront_cache_policy" "caching_optimized" {
 
 # CognitoとGuardrailはアカウント固有値のため、オーナーが作成したSSMから読む。
 data "aws_ssm_parameter" "cognito_user_pool_id" {
-  name = "/aws-mon/prod/cognito-user-pool-id"
+  name = "/app/aws-mon/prod/cognito-user-pool-id"
 }
 
 data "aws_ssm_parameter" "cognito_client_id" {
-  name = "/aws-mon/prod/cognito-client-id"
+  name = "/app/aws-mon/prod/cognito-client-id"
 }
 
 data "aws_ssm_parameter" "agent_guardrail_id" {
-  name = "/aws-mon/prod/agent-guardrail-id"
+  name = "/app/aws-mon/prod/agent-guardrail-id"
 }
 
 locals {
@@ -579,13 +579,13 @@ resource "aws_bedrockagentcore_agent_runtime" "agent" {
 
 # deploy-webが参照する静的配信先を書き出す。
 resource "aws_ssm_parameter" "web_bucket" {
-  name  = "/aws-mon/prod/web-bucket"
+  name  = "/app/aws-mon/prod/web-bucket"
   type  = "String"
   value = aws_s3_bucket.web.bucket
 }
 
 resource "aws_ssm_parameter" "cloudfront_distribution_id" {
-  name  = "/aws-mon/prod/cloudfront-distribution-id"
+  name  = "/app/aws-mon/prod/cloudfront-distribution-id"
   type  = "String"
   value = aws_cloudfront_distribution.web.id
 }
@@ -594,7 +594,7 @@ resource "aws_ssm_parameter" "cloudfront_distribution_id" {
 resource "aws_ssm_parameter" "api_base_url" {
   count = local.app_enabled ? 1 : 0
 
-  name  = "/aws-mon/prod/api-base-url"
+  name  = "/app/aws-mon/prod/api-base-url"
   type  = "String"
   value = aws_lambda_function_url.api[0].function_url
 }
@@ -603,7 +603,7 @@ resource "aws_ssm_parameter" "api_base_url" {
 resource "aws_ssm_parameter" "agent_runtime_id" {
   count = local.runtime_enabled ? 1 : 0
 
-  name  = "/aws-mon/prod/agent-runtime-id"
+  name  = "/app/aws-mon/prod/agent-runtime-id"
   type  = "String"
   value = aws_bedrockagentcore_agent_runtime.agent[0].agent_runtime_id
 }

@@ -64,7 +64,7 @@ Lambda / AgentCore Runtime は作成時点でECRにイメージが存在する�
 
 ### 5. アカウント固有値はSSMパラメータ経由（公開リポジトリのため非コミット）
 
-Cognito User Pool ID / Client ID / Guardrail ID はオーナーが `/aws-mon/prod/*` に
+Cognito User Pool ID / Client ID / Guardrail ID はオーナーが `/app/aws-mon/prod/*` に
 手動作成し、Terraformは `data.aws_ssm_parameter` で読む。逆に、deployワークフローが
 必要とする値（Function URL・S3バケット名・CloudFront ID・Runtime ID）はTerraformが
 SSMへ書き出す。パラメータ一覧は `docs/cicd.md` を参照。

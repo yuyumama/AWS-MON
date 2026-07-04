@@ -63,12 +63,12 @@ jobs:
         run: |
           set -euo pipefail
           RUNTIME_ID="$(aws ssm get-parameter \
-            --name /aws-mon/prod/agent-runtime-id \
+            --name /app/aws-mon/prod/agent-runtime-id \
             --query 'Parameter.Value' \
             --output text 2>/dev/null || true)"
 
           if [[ -z "${RUNTIME_ID}" || "${RUNTIME_ID}" == "None" ]]; then
-            echo "bootstrap: /aws-mon/prod/agent-runtime-id does not exist; push only"
+            echo "bootstrap: /app/aws-mon/prod/agent-runtime-id does not exist; push only"
             echo "exists=false" >> "${GITHUB_OUTPUT}"
             exit 0
           fi

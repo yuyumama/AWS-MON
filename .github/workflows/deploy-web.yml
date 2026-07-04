@@ -55,8 +55,8 @@ jobs:
               --output text 2>/dev/null || true
           }
 
-          API_BASE_URL="$(get_parameter /aws-mon/prod/api-base-url)"
-          WEB_BUCKET="$(get_parameter /aws-mon/prod/web-bucket)"
+          API_BASE_URL="$(get_parameter /app/aws-mon/prod/api-base-url)"
+          WEB_BUCKET="$(get_parameter /app/aws-mon/prod/web-bucket)"
 
           if [[ -z "${API_BASE_URL}" || "${API_BASE_URL}" == "None" || -z "${WEB_BUCKET}" || "${WEB_BUCKET}" == "None" ]]; then
             echo "インフラ未準備: api-base-url または web-bucket が未作成のためdeploy-webをスキップします"
@@ -64,20 +64,20 @@ jobs:
             exit 0
           fi
 
-          COGNITO_USER_POOL_ID="$(get_parameter /aws-mon/prod/cognito-user-pool-id)"
-          COGNITO_CLIENT_ID="$(get_parameter /aws-mon/prod/cognito-client-id)"
-          CLOUDFRONT_DISTRIBUTION_ID="$(get_parameter /aws-mon/prod/cloudfront-distribution-id)"
+          COGNITO_USER_POOL_ID="$(get_parameter /app/aws-mon/prod/cognito-user-pool-id)"
+          COGNITO_CLIENT_ID="$(get_parameter /app/aws-mon/prod/cognito-client-id)"
+          CLOUDFRONT_DISTRIBUTION_ID="$(get_parameter /app/aws-mon/prod/cloudfront-distribution-id)"
 
           if [[ -z "${COGNITO_USER_POOL_ID}" || "${COGNITO_USER_POOL_ID}" == "None" ]]; then
-            echo "missing SSM parameter: /aws-mon/prod/cognito-user-pool-id" >&2
+            echo "missing SSM parameter: /app/aws-mon/prod/cognito-user-pool-id" >&2
             exit 1
           fi
           if [[ -z "${COGNITO_CLIENT_ID}" || "${COGNITO_CLIENT_ID}" == "None" ]]; then
-            echo "missing SSM parameter: /aws-mon/prod/cognito-client-id" >&2
+            echo "missing SSM parameter: /app/aws-mon/prod/cognito-client-id" >&2
             exit 1
           fi
           if [[ -z "${CLOUDFRONT_DISTRIBUTION_ID}" || "${CLOUDFRONT_DISTRIBUTION_ID}" == "None" ]]; then
-            echo "missing SSM parameter: /aws-mon/prod/cloudfront-distribution-id" >&2
+            echo "missing SSM parameter: /app/aws-mon/prod/cloudfront-distribution-id" >&2
             exit 1
           fi
 

@@ -89,7 +89,7 @@ infra/
   （`docker build -f apps/api/Dockerfile .`）。agent は `apps/agent` コンテキストで
   **linux/arm64**（AgentCore Runtime要件。`ubuntu-24.04-arm` runnerでネイティブビルド）。
 
-### SSMパラメータ契約（`/aws-mon/prod/*`, type=String）
+### SSMパラメータ契約（`/app/aws-mon/prod/*`, type=String）
 
 アカウント固有値をリポジトリにコミットしないための受け渡し場所。
 
