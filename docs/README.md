@@ -8,6 +8,7 @@
 - [`conventions.md`](conventions.md) — ディレクトリ規約とコーディング方針
 - [`architecture.md`](architecture.md) — システム構成と代表的なリクエストフロー
 - [`data-model.md`](data-model.md) — DynamoDB データモデル（確定版）
+- [`cicd.md`](cicd.md) — CI/CDパイプライン構成（GitHub Actions / OIDC / tfstate管理）
 - [`adr/`](adr/) — Architecture Decision Records（意思決定記録）
   - [0001](adr/0001-structured-output.md) 構造化出力（Pydantic）を採用
   - [0002](adr/0002-lambda-web-adapter.md) API層に Lambda Web Adapter を採用
