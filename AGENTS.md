@@ -103,7 +103,6 @@ python -m quiz_agent.server                            # API連携用HTTPサー�
 
 ## コード方針
 
-- 元プロト `aws-quiz-v2.tsx` は**機能・UXの参考のみ**。コード・デザインは流用しない。
 - フロントは「AIっぽい定型デザイン」を避ける（既存の「青のノートと丸つけ」モチーフを維持）。
 - API（TS）はLWA前提 — Lambda固有コードを書かず、普通のWebサーバとして書く。
 - agent（Python）は構造化出力（Pydantic）— テキストからJSONをパースしない。

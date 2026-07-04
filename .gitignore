@@ -41,3 +41,6 @@ docs_local/
 .claude/
 .codex/
 .vscode/
+
+# local reference prototype (not part of the repo's public purpose)
+aws-quiz-v2.tsx
