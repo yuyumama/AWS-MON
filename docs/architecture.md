@@ -1,6 +1,6 @@
 # architecture — システム構成とフロー（完全版）
 
-最終更新: 2026-07-02
+最終更新: 2026-07-04
 
 `README.md` が概要、`docs/data-model.md` がDynamoDB設計の詳細。本書は **コンポーネント間の関係** と **代表的なリクエストフロー** を図で示す完全版。個々の決定の背景は `docs/adr/` を参照。
 
@@ -63,7 +63,7 @@ flowchart TB
 |---|---|---|---|
 | `apps/web` | Vite + React + TS | S3 + CloudFront | 主要画面(資格選択/出題/解説/セッション再開/復習リスト)を実装済み。Cognitoログインは自前フォーム+SRP(`amazon-cognito-identity-js`、`VITE_AUTH_MODE=cognito`)。ローカルは vite dev server(:5173) が `/api` を api(:8080) にプロキシ |
 | `apps/api` | Hono + Lambda Web Adapter (TS) | Lambda | セッション/回答/次問/一覧/dev用endpoint、agent HTTP連携、認証・生成権限(`src/auth.ts`)を実装済み |
-| `apps/agent` | Strands Agents + Bedrock (Python) | AgentCore Runtime | CLI + local HTTP server (`/health`, `/generate`) を実装済み。AWSドキュメントMCPで調査してから生成(失敗時は調査なしへフォールバック)。既定モデルは `us.anthropic.claude-haiku-4-5-20251001-v1:0` |
+| `apps/agent` | Strands Agents + Bedrock (Python) | AgentCore Runtime | CLI + local HTTP server (`/health`, `/generate`) を実装済み。AWSドキュメントMCPで調査してから生成(失敗時は調査なしへフォールバック)。既定モデルは `us.anthropic.claude-haiku-4-5-20251001-v1:0`。オブザーバビリティ（OTel/ADOT計装・Guardrailsグラウンディングゲート・AgentCore Evaluationsオンライン評価）も実装・ライブ確認済み（[ADR 0007](adr/0007-observability-stack.md)） |
 | `packages/shared` | TS型 + テーブル定義 | web/apiがimport | 実装済み |
 | DynamoDB | 4テーブル構成 | AWS / DynamoDB Local | テーブル定義確定、Terraform適用可能 |
 | 認証/認可 | 既存 Cognito User Pool + AWS-MON App Client | 別AWSアカウント / AWS | User Pool は共通。登録済みユーザーは `BANK` 出題可、Bedrock課金に到達する `GENERATE` / `MIXED` / 再生成は生成権限で制限。ローカルは `x-dev-user-id` devシムで代替（[ADR 0006](adr/0006-auth-cognito-cloud-only.md)） |
@@ -187,7 +187,7 @@ sequenceDiagram
 
 | 項目 | 現状 | 対応するADR/設計 |
 |---|---|---|
-| JWT検証ミドルウェア | 実装済み（`apps/api/src/auth.ts`、`AUTH_MODE=cognito`）。実 User Pool の設定値での動作確認は未実施 | [ADR 0006](adr/0006-auth-cognito-cloud-only.md) |
+| JWT検証ミドルウェア | 実装済み（`apps/api/src/auth.ts`、`AUTH_MODE=cognito`）。実 User Pool 側の App Client・グループも作成済みで、実ユーザーでのログインE2E確認だけが未了 | [ADR 0006](adr/0006-auth-cognito-cloud-only.md) |
 | 生成権限チェック | 実装済み。`BANK` は登録済みユーザー可、`GENERATE` / `MIXED` は生成グループ必須（権限なしは403）。stale 再生成は job 種別ごと未実装で、実装時に権限確認を入れる | [ADR 0006](adr/0006-auth-cognito-cloud-only.md) |
 | agent ⇄ API の生成連携 | local HTTP境界で実装済み。クラウドではAgentCore Runtime呼び出しへ差し替え予定 | `docs/data-model.md` 実装順序 |
 | spaced repetition（復習期限） | 未実装。`GSI2_DueList` の属性予約のみ（復習マーク/一覧のAP-06/07は実装済み: `/reviews`） | `docs/data-model.md` |
@@ -195,3 +195,4 @@ sequenceDiagram
 | stale化 / abandoned化 job | 未実装（GSI設計のみ存在） | `docs/data-model.md` AP-08, AP-12 |
 | `ops/`（readonlyポリシー・スケジューラ） | 未着手 | [ADR 0003](adr/0003-monorepo-and-terraform-envs.md) |
 | `.claude/skills/`（監視・issue発行） | 未着手 | [ADR 0003](adr/0003-monorepo-and-terraform-envs.md) |
+| オブザーバビリティ（フェーズ3） | 実装・ライブ確認済み（2026-07-03）。残りはコンソールでの X-Ray Trace Map と GenAI Observability ダッシュボードの見え方比較のみ | [ADR 0007](adr/0007-observability-stack.md)、`docs/research/genai-observability-vs-xray.md` |

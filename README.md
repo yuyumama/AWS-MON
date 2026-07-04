@@ -33,7 +33,8 @@ AWS-MON/
 ├─ packages/
 │  └─ shared/     web ⇄ api のTS型・DynamoDBテーブル定義共有（@aws-mon/shared）
 ├─ infra/         Terraform（envs = local / prod）
-└─ local/         ローカル開発環境（DynamoDB Local + LocalStack）
+├─ local/         ローカル開発環境（DynamoDB Local + LocalStack）
+└─ docs/          設計ドキュメント（architecture / data-model / ADR。目次は docs/README.md）
 ```
 
 ## ローカル開発
@@ -48,14 +49,23 @@ npm run build -w @aws-mon/shared
 # 1. ローカルインフラ（DynamoDB Local + LocalStack）を起動
 cd local && docker compose up -d
 
-# 2. API を起動（LWAは本番でのみ被せる。ローカルは普通のWebサーバとして起動）
+# 2. テーブル作成 + 固定問題の投入
+cd infra/envs/local && terraform init && terraform apply
+cd local/seed && npm install && npm run seed
+
+# 3. API を起動（LWAは本番でのみ被せる。ローカルは普通のWebサーバとして起動）
 cd apps/api && npm run dev   # http://localhost:8080/health
 
-# 3. 問題生成エージェント（Bedrockは"本物"を叩く。要AWS認証＋モデルアクセス）
-cd apps/agent && python -m venv .venv && .venv/Scripts/Activate.ps1
+# 4. Web を起動（vite dev server が /api を :8080 にプロキシ）
+cd apps/web && npm run dev   # http://localhost:5173
+
+# 5. 問題生成エージェント（GENERATE/MIXEDモード用。Bedrockは"本物"を叩く。要AWS認証＋モデルアクセス）
+cd apps/agent && python -m venv .venv
+source .venv/bin/activate    # Windows PowerShell: .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 cp .env.example .env   # 編集
-python -m quiz_agent.cli --cert aip
+python -m quiz_agent.cli --cert aip       # CLIで1問生成
+python -m quiz_agent.server               # API連携用HTTPサーバ（AGENT_BASE_URLで接続）
 ```
 
 > **ローカルとクラウドの差はほぼ認証のみ。** ビジネスロジックは LocalStack / DynamoDB Local で完結。

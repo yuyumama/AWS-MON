@@ -8,6 +8,8 @@ AWS-MON/
 │  ├─ web/          フロント（Vite+React+TS）
 │  ├─ api/          ビジネスロジックAPI（Hono+LWA, TS）
 │  └─ agent/        問題生成エージェント（Strands+Bedrock, Python）
+├─ packages/
+│  └─ shared/       web⇄api⇄seed 共有のTS型・テーブル定義（@aws-mon/shared）
 ├─ infra/           Terraform（modules/ と envs/{local,prod}）
 ├─ local/           ローカル開発環境（docker-compose、seed/）
 ├─ docs/            確定・清書ドキュメント（git追跡）
@@ -17,7 +19,7 @@ AWS-MON/
 ```
 
 - **役割で分ける**: 機能なら `apps/`、権限/インフラなら `infra/`。AIが「どこを触るか」を名前で判断できることを最優先。
-- **まだ無い / 必要時に作る**: `packages/shared-types`（web⇄apiのTS型共有）、`ops/`（readonlyポリシー・スケジューラ等の運用資産）、`.claude/skills/`。
+- **まだ無い / 必要時に作る**: `ops/`（readonlyポリシー・スケジューラ等の運用資産）、`.claude/skills/`（監視サマリー・issue発行スキル）。
 - `infra/envs` は **local / prod の2つのみ**（個人開発。多環境にしない）。ディレクトリ分割で管理。
 - ドキュメントは2層: **確定・清書は `docs/`（追跡）／作業メモ・下書きは `docs_local/`（追跡外）**。確定したら清書して `docs/` へ移す。
 
@@ -27,10 +29,10 @@ AWS-MON/
 - **TS（web / api）**
   - `type: "module"`（ESM）。`tsconfig` は `module: NodeNext` / `strict: true`。
   - APIは **LWA前提**。`handler()` 等のLambda固有実装を書かない。普通のWebサーバとして書く。
-  - web⇄api で同じデータ形を使うようになったら `packages/shared-types` に型を切り出す（遅延作成）。
+  - web⇄api で共有するデータ形（DTO・enum）とDynamoDBテーブル定義は `packages/shared`（`@aws-mon/shared`）に置く。`apps/api` は shared のビルド出力（`dist/`）に依存するため、shared を変更したら先に `npm run build -w @aws-mon/shared`。
 - **Python（agent）**
   - **構造化出力（Pydantic）**を使い、モデル出力のJSONパース・正規化はしない。
-  - 環境変数は `python-dotenv`（`.env`）で読む。既定モデルは `us.anthropic.claude-sonnet-4-6`。
+  - 環境変数は `python-dotenv`（`.env`）で読む。既定モデルは `us.anthropic.claude-haiku-4-5-20251001-v1:0`（`BEDROCK_MODEL_ID` で差し替え可能。実装の正は `apps/agent/quiz_agent/agent.py` の `DEFAULT_MODEL_ID`）。
 
 ## 命名・スタイル
 

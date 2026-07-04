@@ -50,5 +50,5 @@ AWS-MON の認可は二段階で考える。まず**サービス利用そのも�
 - **フロントは自前ログインフォーム + SRP を実装済み**（`apps/web/src/lib/auth.ts`、`VITE_AUTH_MODE=cognito`、`amazon-cognito-identity-js`）。Hosted UI リダイレクトはUX上の理由で不採用。SRP-6a によりパスワードはネットワークに送信されず、App Client 側は **シークレットなしのpublic client** で `ALLOW_USER_SRP_AUTH` を許可する必要がある(Hosted UI ドメインは不要)。起動時に `GET /me` で生成権限を取得し、権限が無いユーザーには GENERATE/MIXED モードを表示しない。
 - **対応チャレンジは `newPasswordRequired` のみ**。`mfaRequired`/`totpRequired`/`selectMFAType`/`mfaSetup`/`customChallenge` は未実装で、来た場合は明示的にエラーを返す(Promiseを無限保留させない)。したがって **User Pool側でこのApp ClientはMFA無効が前提**(実User Poolは `MfaConfig: OFF` を確認済み)。MFAを有効化する場合はこのファイルに対応チャレンジを追加すること。
 - `newPasswordRequired` 完了時は、チャレンジが返す `userAttributes`(`*_verified` を除く)を保持して `completeNewPasswordChallenge` に渡す。User Pool に追加必須属性が増えても壊れないようにするため。
-- **実 User Pool での動作確認は未実施**。AWS-MON 用 App Client（SPA・code+PKCE・callback URL）と生成用 group の作成は User Pool 所有アカウント側の作業。設定値は API/Web の環境変数（`COGNITO_*` / `VITE_COGNITO_*`）で受け取る。
+- **実 User Pool 側の準備は完了**。AWS-MON 用 App Client（`AWS-MON-spa`、シークレットなし public client、`ALLOW_USER_SRP_AUTH` 有効）と利用許可/生成グループ（`aws-mon-login` / `aws-mon-generate`）は User Pool 所有アカウント側に作成済み。設定値は API/Web の環境変数（`COGNITO_*` / `VITE_COGNITO_*`）で受け取る。**残作業は実ユーザーでのログインE2E確認**。
 - prod Terraform は Cognito User Pool を作らず、既存 User Pool のID/リージョン/App Client ID/グループ名を変数として受け取る。
