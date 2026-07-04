@@ -1,0 +1,12 @@
+# api/worker イメージのビルドコンテキストはリポジトリルート(npm workspaces対応)。
+# 依存はイメージ内で npm ci するため、ホスト側の生成物や重いディレクトリを除外する。
+.git
+**/node_modules
+**/.venv
+**/__pycache__
+**/.env
+local
+docs
+docs_local
+.github
+aws-quiz-v2.tsx

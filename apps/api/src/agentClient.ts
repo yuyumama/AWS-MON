@@ -1,9 +1,17 @@
+import { randomUUID } from "node:crypto";
 import type { QuestionItem } from "@aws-mon/shared";
+import {
+	BedrockAgentCoreClient,
+	InvokeAgentRuntimeCommand,
+} from "@aws-sdk/client-bedrock-agentcore";
 import { ApiError } from "./errors.js";
 import { saveGeneratedQuestion } from "./questionRepository.js";
 
 const defaultAgentBaseUrl = "http://127.0.0.1:8090";
 const defaultTimeoutMs = 120_000;
+const agentCoreRuntimeSessionPrefix = "aws-mon-session-";
+// InvokeAgentRuntimeのruntimeSessionIdは33文字以上が必須
+const minAgentCoreRuntimeSessionIdLength = 33;
 
 type AgentGenerateResponse = {
 	status: "ok";
@@ -16,11 +24,39 @@ type AgentGenerateResponse = {
 	sourceRefs?: unknown;
 };
 
+type AgentErrorResponse = {
+	status: "error";
+	code?: string;
+	message?: string;
+};
+
+type AgentMode = "http" | "agentcore";
+
+// クライアントは接続・認証情報キャッシュを持つためプロセスで1つだけ作る。
+let agentCoreClient: BedrockAgentCoreClient | undefined;
+
+function agentCore(): BedrockAgentCoreClient {
+	agentCoreClient ??= new BedrockAgentCoreClient({});
+	return agentCoreClient;
+}
+
 function agentBaseUrl(): string {
 	return (process.env.AGENT_BASE_URL ?? defaultAgentBaseUrl).replace(
 		/\/+$/,
 		"",
 	);
+}
+
+function agentMode(): AgentMode {
+	return process.env.AGENT_MODE === "agentcore" ? "agentcore" : "http";
+}
+
+function agentRuntimeArn(): string {
+	const value = process.env.AGENT_RUNTIME_ARN;
+	if (!value) {
+		throw new ApiError("AGENT_MODE=agentcore requires AGENT_RUNTIME_ARN", 502);
+	}
+	return value;
 }
 
 function isAgentGenerateResponse(
@@ -32,6 +68,33 @@ function isAgentGenerateResponse(
 		(value as { status?: unknown }).status === "ok" &&
 		"quiz" in value
 	);
+}
+
+function isAgentErrorResponse(value: unknown): value is AgentErrorResponse {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		(value as { status?: unknown }).status === "error"
+	);
+}
+
+function agentGeneratePayload(input: GenerateAndSaveQuestionInput): {
+	cert: string;
+	domain: string;
+	domainSelection: string;
+	sessionId?: string;
+} {
+	return {
+		cert: input.cert,
+		domain: input.domain,
+		domainSelection: input.domainSelection,
+		sessionId: input.sessionId,
+	};
+}
+
+function runtimeSessionId(sessionId: string | undefined): string {
+	const base = `${agentCoreRuntimeSessionPrefix}${sessionId ?? randomUUID()}`;
+	return base.padEnd(minAgentCoreRuntimeSessionIdLength, "0");
 }
 
 export type GenerateAndSaveQuestionInput = {
@@ -46,6 +109,15 @@ export type GenerateAndSaveQuestionInput = {
 export async function generateAndSaveQuestion(
 	input: GenerateAndSaveQuestionInput,
 ): Promise<QuestionItem> {
+	if (agentMode() === "agentcore") {
+		return await generateAndSaveQuestionWithAgentCore(input);
+	}
+	return await generateAndSaveQuestionWithHttp(input);
+}
+
+async function generateAndSaveQuestionWithHttp(
+	input: GenerateAndSaveQuestionInput,
+): Promise<QuestionItem> {
 	const controller = new AbortController();
 	const timeout = setTimeout(() => controller.abort(), defaultTimeoutMs);
 
@@ -54,12 +126,7 @@ export async function generateAndSaveQuestion(
 		const response = await fetch(`${agentBaseUrl()}/generate`, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
-			body: JSON.stringify({
-				cert: input.cert,
-				domain: input.domain,
-				domainSelection: input.domainSelection,
-				sessionId: input.sessionId,
-			}),
+			body: JSON.stringify(agentGeneratePayload(input)),
 			signal: controller.signal,
 		});
 		body = await response.json().catch(() => undefined);
@@ -86,6 +153,58 @@ export async function generateAndSaveQuestion(
 		throw new ApiError("agent response is invalid", 502);
 	}
 
+	return await saveAgentGenerateResponse(input, body);
+}
+
+async function generateAndSaveQuestionWithAgentCore(
+	input: GenerateAndSaveQuestionInput,
+): Promise<QuestionItem> {
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), defaultTimeoutMs);
+
+	let body: unknown;
+	try {
+		const output = await agentCore().send(
+			new InvokeAgentRuntimeCommand({
+				agentRuntimeArn: agentRuntimeArn(),
+				runtimeSessionId: runtimeSessionId(input.sessionId),
+				contentType: "application/json",
+				accept: "application/json",
+				payload: new TextEncoder().encode(
+					JSON.stringify(agentGeneratePayload(input)),
+				),
+			}),
+			{ abortSignal: controller.signal },
+		);
+		const text = (await output.response?.transformToString()) ?? "";
+		body = JSON.parse(text) as unknown;
+	} catch (error) {
+		if (error instanceof ApiError) throw error;
+		const message =
+			error instanceof Error ? error.message : "agentcore request failed";
+		throw new ApiError(`agentcore request failed: ${message}`, 502);
+	} finally {
+		clearTimeout(timeout);
+	}
+
+	if (isAgentGenerateResponse(body)) {
+		return await saveAgentGenerateResponse(input, body);
+	}
+
+	if (isAgentErrorResponse(body)) {
+		if (body.code === "grounding_blocked") {
+			throw new ApiError(body.message ?? "agent grounding blocked", 422);
+		}
+		throw new ApiError(body.message ?? "agent generation failed", 502);
+	}
+
+	throw new ApiError("agent response is invalid", 502);
+}
+
+async function saveAgentGenerateResponse(
+	input: GenerateAndSaveQuestionInput,
+	body: AgentGenerateResponse,
+): Promise<QuestionItem> {
 	const result = await saveGeneratedQuestion({
 		cert: input.cert,
 		domain: input.domain,

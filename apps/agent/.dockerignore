@@ -1,0 +1,6 @@
+# agent イメージのビルドコンテキストは apps/agent。ローカル環境の生成物を除外する。
+.venv
+__pycache__
+**/__pycache__
+.env
+.ruff_cache

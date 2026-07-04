@@ -1,0 +1,211 @@
+name: Deploy Agent
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "apps/agent/**"
+      - ".github/workflows/deploy-agent.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+# AgentCore Runtime更新の競合を防ぐため直列化(実行中のデプロイはキャンセルしない)
+concurrency:
+  group: deploy-agent
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: aws-mon-prod-agent
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04-arm
+    environment: prod
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Configure AWS credentials (deploy role)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # レジストリURLはアカウント固有値なのでAWS APIから取得する
+      - name: Login to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # arm64 runner上でlinux/arm64イメージをネイティブビルドする
+      - name: Build and push image
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          SHORT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          IMAGE="${REGISTRY}/${ECR_REPOSITORY}:${SHORT_SHA}"
+          LATEST_IMAGE="${REGISTRY}/${ECR_REPOSITORY}:latest"
+
+          docker build --platform linux/arm64 -f apps/agent/Dockerfile -t "${IMAGE}" -t "${LATEST_IMAGE}" apps/agent
+          docker push "${IMAGE}"
+          docker push "${LATEST_IMAGE}"
+
+          echo "IMAGE=${IMAGE}" >> "${GITHUB_ENV}"
+
+      # Runtime未作成のbootstrap段階ではECR pushだけで成功終了する
+      - name: Read AgentCore runtime id
+        id: runtime
+        run: |
+          set -euo pipefail
+          RUNTIME_ID="$(aws ssm get-parameter \
+            --name /aws-mon/prod/agent-runtime-id \
+            --query 'Parameter.Value' \
+            --output text 2>/dev/null || true)"
+
+          if [[ -z "${RUNTIME_ID}" || "${RUNTIME_ID}" == "None" ]]; then
+            echo "bootstrap: /aws-mon/prod/agent-runtime-id does not exist; push only"
+            echo "exists=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          echo "exists=true" >> "${GITHUB_OUTPUT}"
+          echo "runtime_id=${RUNTIME_ID}" >> "${GITHUB_OUTPUT}"
+
+      # UpdateAgentRuntimeの必須引数を満たすため、現行設定を取得してcontainerUriだけ差し替える
+      - name: Update AgentCore runtime
+        if: steps.runtime.outputs.exists == 'true'
+        env:
+          RUNTIME_ID: ${{ steps.runtime.outputs.runtime_id }}
+        run: |
+          set -euo pipefail
+
+          aws bedrock-agentcore-control get-agent-runtime \
+            --agent-runtime-id "${RUNTIME_ID}" > current-runtime.json
+
+          python3 - <<'PY'
+          import json
+          import os
+
+          with open("current-runtime.json", encoding="utf-8") as f:
+              current = json.load(f)
+
+          request = {
+              "agentRuntimeId": os.environ["RUNTIME_ID"],
+              "agentRuntimeArtifact": {
+                  "containerConfiguration": {
+                      "containerUri": os.environ["IMAGE"],
+                  },
+              },
+              "roleArn": current["roleArn"],
+              "networkConfiguration": current["networkConfiguration"],
+          }
+
+          for key in (
+              "description",
+              "authorizerConfiguration",
+              "requestHeaderConfiguration",
+              "protocolConfiguration",
+              "lifecycleConfiguration",
+              "metadataConfiguration",
+              "environmentVariables",
+              "filesystemConfigurations",
+          ):
+              value = current.get(key)
+              if value is not None:
+                  request[key] = value
+
+          with open("update-runtime.json", "w", encoding="utf-8") as f:
+              json.dump(request, f)
+          PY
+
+          aws bedrock-agentcore-control update-agent-runtime \
+            --cli-input-json file://update-runtime.json > updated-runtime.json
+
+          UPDATED_VERSION="$(python3 - <<'PY'
+          import json
+          with open("updated-runtime.json", encoding="utf-8") as f:
+              print(json.load(f)["agentRuntimeVersion"])
+          PY
+          )"
+
+          echo "UPDATED_VERSION=${UPDATED_VERSION}" >> "${GITHUB_ENV}"
+
+      # AgentCore Runtimeにはwaiterが無いため、READY/失敗状態を明示的にポーリングする
+      - name: Wait for AgentCore runtime
+        if: steps.runtime.outputs.exists == 'true'
+        env:
+          RUNTIME_ID: ${{ steps.runtime.outputs.runtime_id }}
+        run: |
+          set -euo pipefail
+          for attempt in {1..60}; do
+            STATUS="$(aws bedrock-agentcore-control get-agent-runtime \
+              --agent-runtime-id "${RUNTIME_ID}" \
+              --agent-runtime-version "${UPDATED_VERSION}" \
+              --query 'status' \
+              --output text)"
+
+            if [[ "${STATUS}" == "READY" ]]; then
+              exit 0
+            fi
+            if [[ "${STATUS}" == "UPDATE_FAILED" || "${STATUS}" == "CREATE_FAILED" || "${STATUS}" == "DELETING" ]]; then
+              echo "AgentCore Runtime update failed: ${STATUS}" >&2
+              exit 1
+            fi
+
+            echo "AgentCore Runtime status: ${STATUS}; waiting (${attempt}/60)"
+            sleep 10
+          done
+
+          echo "AgentCore Runtime did not become READY in time" >&2
+          exit 1
+
+      # update-agent-runtimeで作られた新versionをDEFAULTエンドポイントに向ける
+      - name: Update DEFAULT endpoint
+        if: steps.runtime.outputs.exists == 'true'
+        env:
+          RUNTIME_ID: ${{ steps.runtime.outputs.runtime_id }}
+        run: |
+          set -euo pipefail
+          aws bedrock-agentcore-control update-agent-runtime-endpoint \
+            --agent-runtime-id "${RUNTIME_ID}" \
+            --endpoint-name DEFAULT \
+            --agent-runtime-version "${UPDATED_VERSION}" > updated-endpoint.json
+
+      # エンドポイントもREADYになるまで待ち、実際の配信versionを確認する
+      - name: Wait for DEFAULT endpoint
+        if: steps.runtime.outputs.exists == 'true'
+        env:
+          RUNTIME_ID: ${{ steps.runtime.outputs.runtime_id }}
+        run: |
+          set -euo pipefail
+          for attempt in {1..60}; do
+            STATUS="$(aws bedrock-agentcore-control get-agent-runtime-endpoint \
+              --agent-runtime-id "${RUNTIME_ID}" \
+              --endpoint-name DEFAULT \
+              --query 'status' \
+              --output text)"
+            LIVE_VERSION="$(aws bedrock-agentcore-control get-agent-runtime-endpoint \
+              --agent-runtime-id "${RUNTIME_ID}" \
+              --endpoint-name DEFAULT \
+              --query 'liveVersion' \
+              --output text)"
+
+            if [[ "${STATUS}" == "READY" && "${LIVE_VERSION}" == "${UPDATED_VERSION}" ]]; then
+              exit 0
+            fi
+            if [[ "${STATUS}" == "UPDATE_FAILED" || "${STATUS}" == "CREATE_FAILED" || "${STATUS}" == "DELETING" ]]; then
+              echo "AgentCore DEFAULT endpoint update failed: ${STATUS}" >&2
+              exit 1
+            fi
+
+            echo "AgentCore DEFAULT endpoint status: ${STATUS}, liveVersion: ${LIVE_VERSION}; waiting (${attempt}/60)"
+            sleep 10
+          done
+
+          echo "AgentCore DEFAULT endpoint did not switch to ${UPDATED_VERSION} in time" >&2
+          exit 1

@@ -1,0 +1,117 @@
+name: Deploy Web
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "apps/web/**"
+      - "packages/shared/**"
+      - ".github/workflows/deploy-web.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+# S3同期とCloudFront invalidationの競合を防ぐため直列化(実行中のデプロイはキャンセルしない)
+concurrency:
+  group: deploy-web
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: prod
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Configure AWS credentials (deploy role)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # Terraform/手動作成のSSMパラメータから、公開アプリに埋め込む値だけを取得する
+      - name: Read deploy configuration
+        id: config
+        run: |
+          set -euo pipefail
+
+          get_parameter() {
+            aws ssm get-parameter \
+              --name "$1" \
+              --query 'Parameter.Value' \
+              --output text 2>/dev/null || true
+          }
+
+          API_BASE_URL="$(get_parameter /aws-mon/prod/api-base-url)"
+          WEB_BUCKET="$(get_parameter /aws-mon/prod/web-bucket)"
+
+          if [[ -z "${API_BASE_URL}" || "${API_BASE_URL}" == "None" || -z "${WEB_BUCKET}" || "${WEB_BUCKET}" == "None" ]]; then
+            echo "インフラ未準備: api-base-url または web-bucket が未作成のためdeploy-webをスキップします"
+            echo "ready=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          COGNITO_USER_POOL_ID="$(get_parameter /aws-mon/prod/cognito-user-pool-id)"
+          COGNITO_CLIENT_ID="$(get_parameter /aws-mon/prod/cognito-client-id)"
+          CLOUDFRONT_DISTRIBUTION_ID="$(get_parameter /aws-mon/prod/cloudfront-distribution-id)"
+
+          if [[ -z "${COGNITO_USER_POOL_ID}" || "${COGNITO_USER_POOL_ID}" == "None" ]]; then
+            echo "missing SSM parameter: /aws-mon/prod/cognito-user-pool-id" >&2
+            exit 1
+          fi
+          if [[ -z "${COGNITO_CLIENT_ID}" || "${COGNITO_CLIENT_ID}" == "None" ]]; then
+            echo "missing SSM parameter: /aws-mon/prod/cognito-client-id" >&2
+            exit 1
+          fi
+          if [[ -z "${CLOUDFRONT_DISTRIBUTION_ID}" || "${CLOUDFRONT_DISTRIBUTION_ID}" == "None" ]]; then
+            echo "missing SSM parameter: /aws-mon/prod/cloudfront-distribution-id" >&2
+            exit 1
+          fi
+
+          {
+            echo "ready=true"
+            echo "api_base_url=${API_BASE_URL}"
+            echo "web_bucket=${WEB_BUCKET}"
+            echo "cognito_user_pool_id=${COGNITO_USER_POOL_ID}"
+            echo "cognito_client_id=${COGNITO_CLIENT_ID}"
+            echo "cloudfront_distribution_id=${CLOUDFRONT_DISTRIBUTION_ID}"
+          } >> "${GITHUB_OUTPUT}"
+
+      # Viteのビルド時環境変数としてCognito/API接続情報を注入する
+      - name: Build web
+        if: steps.config.outputs.ready == 'true'
+        env:
+          VITE_AUTH_MODE: cognito
+          VITE_API_BASE_URL: ${{ steps.config.outputs.api_base_url }}
+          VITE_COGNITO_USER_POOL_ID: ${{ steps.config.outputs.cognito_user_pool_id }}
+          VITE_COGNITO_CLIENT_ID: ${{ steps.config.outputs.cognito_client_id }}
+        run: |
+          npm ci
+          npm run build -w @aws-mon/shared
+          npm run build -w @aws-mon/web
+
+      # S3にはビルド成果物のみを同期し、削除済みファイルは--deleteで消す
+      - name: Sync to S3
+        if: steps.config.outputs.ready == 'true'
+        run: aws s3 sync apps/web/dist/ "s3://${{ steps.config.outputs.web_bucket }}/" --delete
+
+      # SPAの全パスで新しいindex/assetsを見せるため、全体をinvalidationする
+      - name: Invalidate CloudFront
+        if: steps.config.outputs.ready == 'true'
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id "${{ steps.config.outputs.cloudfront_distribution_id }}" \
+            --paths "/*"

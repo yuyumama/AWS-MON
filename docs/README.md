@@ -17,6 +17,7 @@
   - [0005](adr/0005-combined-generation.md) 問題と解説を同時生成する
   - [0006](adr/0006-auth-cognito-cloud-only.md) 認証は既存Cognito User Pool＋生成権限制御＋ローカルは devシム
   - [0007](adr/0007-observability-stack.md) オブザーバビリティ構成（ADOT直送＋Guardrailsゲート＋オンライン評価）
+  - [0008](adr/0008-prod-deployment-shape.md) prodデプロイ構成（CloudFront/API分離・定期worker・AgentCore Runtime）
 - [`research/`](research/) — 調査メモ
   - [genai-observability-vs-xray](research/genai-observability-vs-xray.md) X-Ray / CloudWatch生成AIオブザーバビリティ / Evaluations の整理
 

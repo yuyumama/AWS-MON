@@ -1,0 +1,110 @@
+name: Deploy API
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "apps/api/**"
+      - "packages/shared/**"
+      - ".github/workflows/deploy-api.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+# Lambdaイメージの更新競合を防ぐため直列化(実行中のデプロイはキャンセルしない)
+concurrency:
+  group: deploy-api
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: aws-mon-prod-api
+  API_FUNCTION_NAME: aws-mon-prod-api
+  WORKER_FUNCTION_NAME: aws-mon-prod-worker
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: prod
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      # 共有型を先にビルドし、apiのTypeScriptビルドがdistを参照できる状態にする
+      - name: Build api
+        run: |
+          npm ci
+          npm run build -w @aws-mon/shared
+          npm run build -w @aws-mon/api
+
+      - name: Configure AWS credentials (deploy role)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # レジストリURLはアカウント固有値なのでAWS APIから取得する
+      - name: Login to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # 同一ECRリポジトリにapi/workerをタグで分けて格納する
+      - name: Build and push images
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          SHORT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          API_IMAGE="${REGISTRY}/${ECR_REPOSITORY}:api-${SHORT_SHA}"
+          API_LATEST_IMAGE="${REGISTRY}/${ECR_REPOSITORY}:api-latest"
+          WORKER_IMAGE="${REGISTRY}/${ECR_REPOSITORY}:worker-${SHORT_SHA}"
+          WORKER_LATEST_IMAGE="${REGISTRY}/${ECR_REPOSITORY}:worker-latest"
+
+          # npm workspacesのためビルドコンテキストはリポジトリルート(Dockerfile冒頭コメント参照)
+          docker build -f apps/api/Dockerfile -t "${API_IMAGE}" -t "${API_LATEST_IMAGE}" .
+          docker build -f apps/api/Dockerfile.worker -t "${WORKER_IMAGE}" -t "${WORKER_LATEST_IMAGE}" .
+
+          docker push "${API_IMAGE}"
+          docker push "${API_LATEST_IMAGE}"
+          docker push "${WORKER_IMAGE}"
+          docker push "${WORKER_LATEST_IMAGE}"
+
+          {
+            echo "API_IMAGE=${API_IMAGE}"
+            echo "WORKER_IMAGE=${WORKER_IMAGE}"
+          } >> "${GITHUB_ENV}"
+
+      # 初回bootstrapではLambdaがまだ無いので、ECR pushだけで成功終了する
+      - name: Update api Lambda if exists
+        run: |
+          set -euo pipefail
+          if aws lambda get-function --function-name "${API_FUNCTION_NAME}" >/dev/null 2>&1; then
+            aws lambda update-function-code \
+              --function-name "${API_FUNCTION_NAME}" \
+              --image-uri "${API_IMAGE}"
+            aws lambda wait function-updated --function-name "${API_FUNCTION_NAME}"
+          else
+            echo "bootstrap: ${API_FUNCTION_NAME} does not exist; push only"
+          fi
+
+      # workerもapiと同じECRリポジトリを使い、worker-*タグのイメージへ更新する
+      - name: Update worker Lambda if exists
+        run: |
+          set -euo pipefail
+          if aws lambda get-function --function-name "${WORKER_FUNCTION_NAME}" >/dev/null 2>&1; then
+            aws lambda update-function-code \
+              --function-name "${WORKER_FUNCTION_NAME}" \
+              --image-uri "${WORKER_IMAGE}"
+            aws lambda wait function-updated --function-name "${WORKER_FUNCTION_NAME}"
+          else
+            echo "bootstrap: ${WORKER_FUNCTION_NAME} does not exist; push only"
+          fi
