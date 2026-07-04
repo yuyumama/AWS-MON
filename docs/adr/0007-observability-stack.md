@@ -38,8 +38,10 @@ agent は当面 AgentCore Runtime 外（ローカル/自前ホスト）で動く
 - 旧 `evaluate_question`（生成ごとの自己批評。ADR 0005時点のつなぎ）を**削除**し、
   トレースに対する非同期評価に置き換え（`apps/agent/scripts/setup_evaluations.py`）。
 - agentはRuntime外のため、データソースは **CloudWatchロググループ + service.name** 方式。
-- 評価者は組み込みの `Builtin.Correctness`（クイズ問題の正確さを明示的に想定した判定プロンプト）と
-  `Builtin.Faithfulness`（ツール出力=ドキュメント原文との整合）から開始。
+- 評価者は組み込みの `Builtin.Correctness`（クイズ問題の正確さを明示的に想定した判定プロンプト）のみ。
+  当初は `Builtin.Faithfulness`（ツール出力=ドキュメント原文との整合）も併用したが、
+  Guardrailsグラウンディングゲート（上記2）が全件・同期で同等の整合チェックを担うため、
+  コスト最適化（2026-07-04）でオンライン評価からは外した。
 - 保存する問題の `quality.evaluator` は、計装つき起動時のみ `agentcore_evaluate`
   （=オンライン評価の対象トレース）とし、スコア自体はCloudWatch側に蓄積される
   （DynamoDBへは書き戻さない。ダッシュボードで傾向を見る用途のため）。
@@ -56,8 +58,10 @@ agent は当面 AgentCore Runtime 外（ローカル/自前ホスト）で動く
 - グラウンディングチェックは1回あたり文字数課金（source原文が大きいと単価増）。上限
   （source 10万字/query 1,000字/content 5,000字）で切り詰めるため、超過分は判定対象外。
 - ブロック時の再生成はBedrock呼び出しが倍になる。リトライ既定は1回に抑制。
-- オンライン評価はジャッジモデルの推論コストがかかる。個人利用の低トラフィック前提で
-  サンプリング100%から開始し、コストを見て下げる。
+- オンライン評価はジャッジモデルの推論コストがかかる（組み込み評価者は入力$2.4/百万トークンで、
+  Haiku 4.5の生成単価より高い）。サンプリング100%・評価者2つで開始したが、コスト最適化
+  （2026-07-04）で既定をサンプリング20%・`Builtin.Correctness` のみに変更した。
+  品質チューニング時は `setup_evaluations.py --sampling` で一時的に上げる。
 - Transaction Search はスパンのインデックスに課金（全量インデックス設定）。
 - ローカルでは観測層は再現しない方針（ADR 0004）のまま。計装なし起動がデフォルト。
 - CloudWatch生成AIオブザーバビリティ / AgentCore Evaluations は新しいサービスのため、

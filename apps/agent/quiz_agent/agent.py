@@ -13,7 +13,7 @@ from typing import Any, TypeVar
 from mcp import StdioServerParameters, stdio_client
 from pydantic import BaseModel
 from strands import Agent
-from strands.models import BedrockModel
+from strands.models import BedrockModel, CacheConfig
 from strands.tools.mcp import MCPClient
 
 from .guardrail import (
@@ -47,6 +47,8 @@ def _model() -> BedrockModel:
     return BedrockModel(
         model_id=model_id(),
         region_name=os.environ.get("AWS_REGION", "us-east-1"),
+        # エージェントループでMCPツール結果(AWSドキュメント原文)を再送するためキャッシュする。
+        cache_config=CacheConfig(strategy="auto"),
     )
 
 

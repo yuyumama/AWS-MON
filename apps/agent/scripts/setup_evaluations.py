@@ -8,13 +8,16 @@ LLM-as-a-Judge の組み込み評価者が非同期・継続的に採点する�
 - scripts/setup_observability.sh 実施済み(Transaction Search + ロググループ)
 - 実行者のIAMに bedrock-agentcore:*Evaluat* / iam:CreateRole 等の権限
 
-既定の評価者:
+既定の評価者とサンプリング:
 - Builtin.Correctness … 問題としての正確さ(プロンプトがクイズ問題を明示的に想定)
-- Builtin.Faithfulness … 会話履歴(=MCPで取得したドキュメント原文)との整合
+- sampling 20% … ジャッジトークン課金を抑えつつ傾向監視する。品質チューニング時は上げる。
+
+同名のオンライン評価設定が既に存在する場合は、作成で失敗させず、
+サンプリング率と評価者を更新する。
 
 使い方:
-    python scripts/setup_evaluations.py [--sampling 100]
-        [--evaluators Builtin.Correctness Builtin.Faithfulness]
+    python scripts/setup_evaluations.py [--sampling 20]
+        [--evaluators Builtin.Correctness]
         [--role-arn arn:aws:iam::...:role/AgentCoreEvaluationRole]
 """
 
@@ -29,6 +32,37 @@ import time
 import boto3
 
 ROLE_NAME = "AgentCoreEvaluationRole-aws-mon"
+
+
+def find_online_evaluation_config(control, name: str) -> dict | None:
+    """同名のオンライン評価設定を探す(存在しなければNone)。"""
+    for page in control.get_paginator("list_online_evaluation_configs").paginate():
+        for config in page.get("onlineEvaluationConfigs", []):
+            if config["onlineEvaluationConfigName"] == name:
+                return config
+    return None
+
+
+def build_data_source_config(log_group: str, service_name: str) -> dict:
+    """評価対象のCloudWatch Logsデータソース設定を作る。"""
+    return {
+        "cloudWatchLogs": {
+            "logGroupNames": [log_group],
+            "serviceNames": [service_name],
+        }
+    }
+
+
+def print_response(message: str, response: dict) -> None:
+    """AgentCore APIのレスポンスを人間向けに表示する。"""
+    print(message)
+    print(json.dumps(
+        {k: v for k, v in response.items() if k != "ResponseMetadata"},
+        ensure_ascii=False,
+        indent=2,
+        default=str,
+    ))
+    print("結果は CloudWatch > GenAI Observability の Evaluations で確認できる。")
 
 
 def ensure_execution_role(region: str, account_id: str) -> str:
@@ -134,7 +168,7 @@ def ensure_execution_role(region: str, account_id: str) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="オンライン評価設定を作成する")
+    parser = argparse.ArgumentParser(description="オンライン評価設定を作成または更新する")
     parser.add_argument("--name", default="aws_mon_quiz_agent_online_eval")
     parser.add_argument(
         "--log-group",
@@ -149,19 +183,22 @@ def main() -> int:
     parser.add_argument(
         "--evaluators",
         nargs="+",
-        default=["Builtin.Correctness", "Builtin.Faithfulness"],
+        # Faithfulness相当のドキュメント整合チェックは生成時の
+        # Guardrailsグラウンディングゲート(quiz_agent/guardrail.py)が
+        # 全件・同期で担保しているため、オンライン評価はCorrectnessの傾向監視に絞る。
+        default=["Builtin.Correctness"],
+        help="使用する評価者ID(既定: Builtin.Correctness)",
     )
     parser.add_argument(
         "--sampling",
         type=float,
-        default=100.0,
-        help="評価するセッションの割合(%%)。個人利用の低トラフィック前提で既定100",
+        default=20.0,
+        help="評価するセッションの割合(%%)。コスト対効果のため既定20.0、品質チューニング時は上げる",
     )
     parser.add_argument("--role-arn", help="既存の実行ロールARN(省略時は作成)")
     parser.add_argument("--region", default=os.environ.get("AWS_REGION", "us-east-1"))
     args = parser.parse_args()
 
-    account_id = boto3.client("sts").get_caller_identity()["Account"]
     control = boto3.client("bedrock-agentcore-control", region_name=args.region)
 
     # 評価者IDの検証(タイポや提供状況の変化を早期に検知する)
@@ -178,31 +215,37 @@ def main() -> int:
     except Exception as e:  # noqa: BLE001 - 検証は補助なので失敗しても続行
         print(f"評価者一覧の取得に失敗(続行): {e}", file=sys.stderr)
 
+    existing = find_online_evaluation_config(control, args.name)
+    if existing:
+        config_id = existing["onlineEvaluationConfigId"]
+        update_params = {
+            "onlineEvaluationConfigId": config_id,
+            "rule": {"samplingConfig": {"samplingPercentage": args.sampling}},
+            "dataSourceConfig": build_data_source_config(args.log_group, args.service_name),
+            "evaluators": [{"evaluatorId": e} for e in args.evaluators],
+            "executionStatus": "ENABLED",
+        }
+        if args.role_arn:
+            update_params["evaluationExecutionRoleArn"] = args.role_arn
+
+        response = control.update_online_evaluation_config(**update_params)
+        print_response(f"既存のオンライン評価設定を更新しました: {args.name} ({config_id})", response)
+        return 0
+
+    account_id = boto3.client("sts").get_caller_identity()["Account"]
     role_arn = args.role_arn or ensure_execution_role(args.region, account_id)
 
     response = control.create_online_evaluation_config(
         onlineEvaluationConfigName=args.name,
         description="AWS-MON: クイズ生成トレースの継続品質評価(旧evaluate_questionの置き換え)",
         rule={"samplingConfig": {"samplingPercentage": args.sampling}},
-        dataSourceConfig={
-            "cloudWatchLogs": {
-                "logGroupNames": [args.log_group],
-                "serviceNames": [args.service_name],
-            }
-        },
+        dataSourceConfig=build_data_source_config(args.log_group, args.service_name),
         evaluators=[{"evaluatorId": e} for e in args.evaluators],
         evaluationExecutionRoleArn=role_arn,
         enableOnCreate=True,
     )
 
-    print("オンライン評価設定を作成しました:")
-    print(json.dumps(
-        {k: v for k, v in response.items() if k != "ResponseMetadata"},
-        ensure_ascii=False,
-        indent=2,
-        default=str,
-    ))
-    print("結果は CloudWatch > GenAI Observability の Evaluations で確認できる。")
+    print_response("オンライン評価設定を作成しました:", response)
     return 0
 
 

@@ -85,7 +85,10 @@ python3 -m quiz_agent.server
 - `AGENT_DOCS_MCP=0` で無効化（従来どおり調査なしで生成）
 - MCPサーバーの起動や調査に失敗した場合は、生成を止めず**調査なし生成へ自動フォールバック**する
 - 起動コマンドは `AGENT_DOCS_MCP_COMMAND` で差し替え可（例: `uvx awslabs.aws-documentation-mcp-server@latest`）
-- ツール呼び出しが増えるぶん、1問あたりのBedrockトークン消費と生成時間は増える
+- ツール呼び出しが増えるぶん、1問あたりのBedrockトークン消費と生成時間は増える。
+  緩和策として、エージェントループで再送されるドキュメント原文はBedrockプロンプトキャッシュ
+  （`CacheConfig(strategy="auto")`、読み取り約0.1倍）でコストを抑え、調査量もプロンプトで
+  1サービス・`read_documentation` 最大2回に制限している
 
 ## オブザーバビリティ（フェーズ3-1、詳細は ADR 0007）
 
@@ -124,10 +127,12 @@ python scripts/create_guardrail.py
 ## AgentCore Evaluations（フェーズ3-2）
 
 旧 `evaluate_question`（自己批評）の置き換え。OTel計装で送ったトレースを
-LLM-as-a-Judge（`Builtin.Correctness` / `Builtin.Faithfulness`）が非同期に採点する。
+LLM-as-a-Judge（既定 `Builtin.Correctness`、サンプリング20%）が非同期に採点する。
+ドキュメント整合（Faithfulness相当）は生成時のGuardrailsゲートが全件担保するため、
+オンライン評価はCorrectnessの傾向監視に絞っている（コスト最適化）。
 
 ```bash
-# 一度きり: 実行ロール + オンライン評価設定を作成
+# 初回: 実行ロール + オンライン評価設定を作成。同名設定があればサンプリング率・評価者を更新
 python scripts/setup_evaluations.py
 ```
 

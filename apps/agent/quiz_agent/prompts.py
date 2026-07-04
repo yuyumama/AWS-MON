@@ -72,7 +72,8 @@ def build_docs_research_prompt(quiz_prompt: str) -> str:
 まず問題を作成する前に、search_documentation と read_documentation ツールで
 出題テーマに関連するAWS公式ドキュメントを調査してください。
 
-- 出題対象のサービス/機能を1〜2個決め、その最新仕様・制約・ユースケースを確認する
+- 調査対象は1サービス(機能)に絞り、その最新仕様・制約・ユースケースを確認する
+- search_documentation は1回、read_documentation は最大2回までにする
 - 陳腐化した知識（古い上限値・旧機能名・非推奨機能）を出題しないための裏取りをする
 - 調査結果を「出題に使う事実」として箇条書きでまとめ、参照したドキュメントURLを控える"""
 
