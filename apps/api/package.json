@@ -13,7 +13,7 @@
 		"@aws-mon/shared": "file:../../packages/shared",
 		"@aws-sdk/client-dynamodb": "^3.700.0",
 		"@aws-sdk/lib-dynamodb": "^3.700.0",
-		"@hono/node-server": "^1.13.7",
+		"@hono/node-server": "^2.0.8",
 		"aws-jwt-verify": "^5.2.1",
 		"hono": "^4.6.14"
 	},
