@@ -1,6 +1,7 @@
 import { resolveTableNames } from "@aws-mon/shared";
 import { ListTablesCommand } from "@aws-sdk/client-dynamodb";
 import { serve } from "@hono/node-server";
+import type { MiddlewareHandler } from "hono";
 import { Hono } from "hono";
 import {
 	type AuthEnv,
@@ -40,20 +41,25 @@ const port = Number(process.env.PORT ?? 8080);
 const app = new Hono<AuthEnv>();
 const tableNames = resolveTableNames();
 
-// /health* 以外は認証必須。devモードは x-dev-user-id シム、cognitoモードはJWT検証。
+// /health 以外は認証必須。devモードは x-dev-user-id シム、cognitoモードはJWT検証。
 app.use("/sessions/*", authMiddleware());
 app.use("/sessions", authMiddleware());
 app.use("/reviews/*", authMiddleware());
 app.use("/reviews", authMiddleware());
 app.use("/me", authMiddleware());
 
-// /dev/* はローカル開発専用。cognitoモード(本番)では露出させない。
-app.use("/dev/*", async (c, next) => {
+// ローカル開発専用ルートのガード。cognitoモード(本番)では露出させない。
+// 診断エンドポイント(/health/tables, /health/dynamo)はテーブル名やAWSエラー文言
+// (ロールARN等)を返すため、本番では /dev/* と同様に閉じる。
+const devOnly: MiddlewareHandler = async (c, next) => {
 	if (!devRoutesEnabled()) {
 		return c.json({ status: "error", message: "not found" }, 404);
 	}
 	await next();
-});
+};
+app.use("/dev/*", devOnly);
+app.use("/health/tables", devOnly);
+app.use("/health/dynamo", devOnly);
 
 app.get("/health", (c) =>
 	c.json({ status: "ok", service: "api", time: new Date().toISOString() }),

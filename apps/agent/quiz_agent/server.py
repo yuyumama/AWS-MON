@@ -160,6 +160,63 @@ def _str_value(value: Any, fallback: str | None = None) -> str | None:
     return value if isinstance(value, str) and value else fallback
 
 
+def build_generate_response(
+    body: dict[str, Any],
+    *,
+    started: float,
+    agent_version: str = AGENT_VERSION,
+) -> dict[str, Any]:
+    cert = _str_value(body.get("cert"), "aip")
+    domain = _str_value(body.get("domain"))
+    domain_selection = _str_value(body.get("domainSelection"), domain)
+    session_id = _str_value(body.get("sessionId"))
+    with _otel_session(session_id):
+        item, gate = _generate_quiz(cert=cert or "aip", domain=domain)
+    generated_at = _now_iso()
+    latency_ms = int((time.perf_counter() - started) * 1000)
+    source = item.explanation.source
+
+    return {
+        "status": "ok",
+        "cert": cert,
+        "domain": domain,
+        "domainSelection": domain_selection,
+        "quiz": item.model_dump(),
+        "generation": {
+            "modelId": _model_id(),
+            "promptVersion": PROMPT_VERSION,
+            "agentVersion": agent_version,
+            "generatedAt": generated_at,
+            "latencyMs": latency_ms,
+        },
+        "quality": _quality(gate, generated_at),
+        "sourceRefs": [{"url": source, "retrievedAt": generated_at}],
+    }
+
+
+def grounding_blocked_response(
+    exc: GroundingBlockedError, *, agent_version: str = AGENT_VERSION
+) -> dict[str, Any]:
+    return {
+        "status": "error",
+        "code": "grounding_blocked",
+        "message": str(exc),
+        "modelId": _model_id(),
+        "agentVersion": agent_version,
+    }
+
+
+def error_response(
+    exc: Exception, *, agent_version: str = AGENT_VERSION
+) -> dict[str, Any]:
+    return {
+        "status": "error",
+        "message": str(exc),
+        "modelId": _model_id(),
+        "agentVersion": agent_version,
+    }
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "aws-mon-agent/0.1"
 
@@ -199,57 +256,16 @@ class Handler(BaseHTTPRequestHandler):
         started = time.perf_counter()
         try:
             body = _parse_body(self)
-            cert = _str_value(body.get("cert"), "aip")
-            domain = _str_value(body.get("domain"))
-            domain_selection = _str_value(body.get("domainSelection"), domain)
-            session_id = _str_value(body.get("sessionId"))
-            with _otel_session(session_id):
-                item, gate = _generate_quiz(cert=cert or "aip", domain=domain)
-            generated_at = _now_iso()
-            latency_ms = int((time.perf_counter() - started) * 1000)
-            source = item.explanation.source
-
             self._send_json(
-                HTTPStatus.OK,
-                {
-                    "status": "ok",
-                    "cert": cert,
-                    "domain": domain,
-                    "domainSelection": domain_selection,
-                    "quiz": item.model_dump(),
-                    "generation": {
-                        "modelId": _model_id(),
-                        "promptVersion": PROMPT_VERSION,
-                        "agentVersion": AGENT_VERSION,
-                        "generatedAt": generated_at,
-                        "latencyMs": latency_ms,
-                    },
-                    "quality": _quality(gate, generated_at),
-                    "sourceRefs": [{"url": source, "retrievedAt": generated_at}],
-                },
+                HTTPStatus.OK, build_generate_response(body, started=started)
             )
         except GroundingBlockedError as exc:
             # ドキュメントに根拠づかない問題は保存させない(フェーズ3-3のインラインゲート)
             self._send_json(
-                HTTPStatus.UNPROCESSABLE_ENTITY,
-                {
-                    "status": "error",
-                    "code": "grounding_blocked",
-                    "message": str(exc),
-                    "modelId": _model_id(),
-                    "agentVersion": AGENT_VERSION,
-                },
+                HTTPStatus.UNPROCESSABLE_ENTITY, grounding_blocked_response(exc)
             )
         except Exception as exc:  # noqa: BLE001 - HTTP boundary returns JSON error
-            self._send_json(
-                HTTPStatus.INTERNAL_SERVER_ERROR,
-                {
-                    "status": "error",
-                    "message": str(exc),
-                    "modelId": _model_id(),
-                    "agentVersion": AGENT_VERSION,
-                },
-            )
+            self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, error_response(exc))
 
 
 def main() -> int:

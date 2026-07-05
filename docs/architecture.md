@@ -1,6 +1,6 @@
 # architecture — システム構成とフロー（完全版）
 
-最終更新: 2026-07-04
+最終更新: 2026-07-05
 
 `README.md` が概要、`docs/data-model.md` がDynamoDB設計の詳細。本書は **コンポーネント間の関係** と **代表的なリクエストフロー** を図で示す完全版。個々の決定の背景は `docs/adr/` を参照。
 
@@ -37,14 +37,18 @@ flowchart TB
             TJobs["AwsMonGenerationJobs<br/>生成job状態"]
         end
 
-        CFS3["CloudFront + S3<br/>apps/web 配信（配備未着手）"]
+        CFS3["CloudFront + S3<br/>apps/web 配信"]
+        Scheduler["EventBridge Scheduler<br/>rate(1 minute)"]
+        Worker["worker Lambda<br/>apps/api src/worker.ts"]
     end
 
     Browser -- "ログイン (JWT)" --> AppClient
     AppClient --> UserPool
     AppClient --> Scopes
-    Browser -- "HTTPS + JWT" --> API
-    Browser -. "静的アセット取得（配備未着手。ローカルはvite dev serverが/apiをプロキシ）" .-> CFS3
+    Browser -- "HTTPS + JWT（本番はLambda Function URL + CORS）" --> API
+    Browser -. "静的アセット取得（本番はCloudFront。ローカルはvite dev serverが/apiをプロキシ）" .-> CFS3
+    Scheduler -- "定期起動" --> Worker
+    Worker -- "runRunnableJobs" --> TJobs
 
     API -- "JWT検証(JWKS) + 生成権限検証（AUTH_MODE=cognito）" --> UserPool
     API -- "CRUD / TransactWrite" --> DDB
@@ -52,7 +56,7 @@ flowchart TB
 
     Agent -- "generate_quiz()" --> Bedrock
     Agent -- "最新情報取得" --> MCP
-    API -- "HTTP /generate（local）" --> Agent
+    API -- "AGENT_MODE=http: /generate（local）/ agentcore: InvokeAgentRuntime（prod）" --> Agent
 
     TJobs -. "PREFETCH job（BANKはbank流用、GENERATE/MIXEDはAgentへ）" .-> Agent
 ```
@@ -138,7 +142,7 @@ sequenceDiagram
     API-->>U: session(current=生成問題)
 ```
 
-ローカルでは `python3 -m quiz_agent.server` が `POST /generate` を提供し、`apps/api` は `AGENT_BASE_URL` 経由で呼び出す。`mode=GENERATE` は常にagent生成、`mode=MIXED` はbankを優先し候補がない場合だけagent生成にフォールバックする。コスト抑制のため、`GENERATE/MIXED` のPREFETCH jobは作成直後にinline実行せず、`POST /dev/jobs/run` で明示的に処理する。
+ローカルでは `python3 -m quiz_agent.server` が `POST /generate` を提供し、`apps/api` は `AGENT_BASE_URL` 経由で呼び出す（`AGENT_MODE=http`、既定）。本番は `AGENT_MODE=agentcore` で同じリクエスト/レスポンスJSONを AgentCore Runtime の `InvokeAgentRuntime` に載せ替える（`quiz_agent/runtime.py` が `/invocations` で受ける。[ADR 0008](adr/0008-prod-deployment-shape.md)）。`mode=GENERATE` は常にagent生成、`mode=MIXED` はbankを優先し候補がない場合だけagent生成にフォールバックする。コスト抑制のため、`GENERATE/MIXED` のPREFETCH jobは作成直後にinline実行せず、`POST /dev/jobs/run` で明示的に処理する。
 
 ### 3. 開発用workerによるjob処理（`/dev/jobs/run`）
 
@@ -172,7 +176,7 @@ sequenceDiagram
     API-->>Dev: {processed, succeeded, retried, failed}
 ```
 
-`BANK` のPREFETCH jobは同一リクエスト内でinline実行される。`GENERATE/MIXED` は不要なBedrock呼び出しを避けるためQUEUEDのまま保存し、`/dev/jobs/run`で明示的に実行する。このendpointはローカル/簡易worker用で、将来SQSやAgentCore Runtime連携に置き換える余地を残す。
+`BANK` のPREFETCH jobは同一リクエスト内でinline実行される。`GENERATE/MIXED` は不要なBedrock呼び出しを避けるためQUEUEDのまま保存し、ローカルでは`/dev/jobs/run`で明示的に実行する。本番は EventBridge Scheduler（rate 1分）が worker Lambda（`apps/api/src/worker.ts`、同じ `runRunnableJobs`）を起動する（[ADR 0008](adr/0008-prod-deployment-shape.md)。`/dev/*` は本番では404）。
 
 クラウドでは、`GENERATE` と `MIXED` の job 処理は Bedrock/LLM 課金につながるため、job 作成時だけでなく worker 実行時にも生成権限または信頼済み内部実行コンテキストを確認する。`BANK` job は保存済み問題の取得だけなので、登録済みユーザーであれば実行できる。
 
@@ -189,9 +193,10 @@ sequenceDiagram
 |---|---|---|
 | JWT検証ミドルウェア | 実装済み（`apps/api/src/auth.ts`、`AUTH_MODE=cognito`）。実 User Pool 側の App Client・グループも作成済みで、実ユーザーでのログインE2E確認だけが未了 | [ADR 0006](adr/0006-auth-cognito-cloud-only.md) |
 | 生成権限チェック | 実装済み。`BANK` は登録済みユーザー可、`GENERATE` / `MIXED` は生成グループ必須（権限なしは403）。stale 再生成は job 種別ごと未実装で、実装時に権限確認を入れる | [ADR 0006](adr/0006-auth-cognito-cloud-only.md) |
-| agent ⇄ API の生成連携 | local HTTP境界で実装済み。クラウドではAgentCore Runtime呼び出しへ差し替え予定 | `docs/data-model.md` 実装順序 |
+| agent ⇄ API の生成連携 | 実装済み。`AGENT_MODE=http`（local HTTP）/ `agentcore`（AgentCore Runtime `InvokeAgentRuntime`）の切替。境界のJSON形は共通 | [ADR 0008](adr/0008-prod-deployment-shape.md) |
 | spaced repetition（復習期限） | 未実装。`GSI2_DueList` の属性予約のみ（復習マーク/一覧のAP-06/07は実装済み: `/reviews`） | `docs/data-model.md` |
-| `apps/web` のS3+CloudFront配備 | ローカルのみ（vite dev server） | フェーズ4 |
+| `apps/web` のS3+CloudFront配備 | Terraform（`infra/envs/prod`）とdeploy-webワークフローを実装済み。初回applyとE2E確認が未了 | [ADR 0008](adr/0008-prod-deployment-shape.md)、`docs/cicd.md` |
+| prod worker（GENERATE/MIXED job） | EventBridge Scheduler + worker Lambdaを実装済み。初回applyが未了 | [ADR 0008](adr/0008-prod-deployment-shape.md) |
 | stale化 / abandoned化 job | 未実装（GSI設計のみ存在） | `docs/data-model.md` AP-08, AP-12 |
 | `ops/`（readonlyポリシー・スケジューラ） | 未着手 | [ADR 0003](adr/0003-monorepo-and-terraform-envs.md) |
 | `.claude/skills/`（監視・issue発行） | 未着手 | [ADR 0003](adr/0003-monorepo-and-terraform-envs.md) |

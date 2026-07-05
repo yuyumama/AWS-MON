@@ -1,0 +1,29 @@
+# worker Lambda のコンテナイメージ(GENERATE/MIXED jobの定期実行)。
+# HTTPサーバではないためLWAは使わず、Lambdaベースイメージ + 通常のhandlerで動かす。
+#
+# npm workspaces のため、ビルドコンテキストは**リポジトリルート**:
+#   docker build -f apps/api/Dockerfile.worker .
+# 事前に `npm run build -w @aws-mon/shared -w @aws-mon/api` で dist/ を生成しておくこと。
+
+# `npm ci -w` はworkspace配下依存の解決が不完全なため、全workspaceの本番依存を入れる
+FROM node:20-slim AS deps
+WORKDIR /app
+COPY package.json package-lock.json ./
+COPY apps/api/package.json apps/api/
+COPY apps/web/package.json apps/web/
+COPY packages/shared/package.json packages/shared/
+RUN npm ci --omit=dev
+
+FROM public.ecr.aws/lambda/nodejs:20
+
+# workspacesレイアウトのままタスクルートに配置する
+# (hoistされない依存は apps/api/node_modules に入る。@aws-mon/shared は相対シンボリックリンク。
+#  apps/api/package.json の "type": "module" が dist のESM判定に必要)
+COPY --from=deps /app ${LAMBDA_TASK_ROOT}
+COPY packages/shared/dist ${LAMBDA_TASK_ROOT}/packages/shared/dist
+COPY apps/api/dist ${LAMBDA_TASK_ROOT}/apps/api/dist
+
+# 非rootで実行(Lambdaは/var/taskを読めれば非rootユーザーで問題なく動く)
+USER 1000
+
+CMD ["apps/api/dist/worker.handler"]

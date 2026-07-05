@@ -1,0 +1,14 @@
+# trivy config スキャンの除外(理由つき)。CI(ci.yml security)とローカルで共通。
+
+# CloudFront WAF: 個人利用の低トラフィック静的サイト+JWT必須APIのため、
+# WAF(月額固定費)は費用対効果が合わない。認可はAPI側でfail-closed。
+AVD-AWS-0011
+
+# ECRタグのMUTABLE: Terraformは固定タグ(api-latest等)を参照し、appワークフローが
+# 同タグを差し替える運用(docs/cicd.md のinfra/app境界)。immutableにするとこの運用が
+# 成立しない。scan_on_push有効・push経路はEnvironment prod承認済みロールのみ。
+AVD-AWS-0031
+
+# S3のCMK暗号化: 配信対象は公開webアセットのみで機密データを含まない。
+# SSE-S3(AES256)は有効化済み。CMKはコストと鍵管理の手間に見合わない。
+AVD-AWS-0132

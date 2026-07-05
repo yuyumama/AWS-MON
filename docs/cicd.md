@@ -1,6 +1,6 @@
 # cicd — CI/CDパイプライン構成
 
-最終更新: 2026-07-04
+最終更新: 2026-07-05
 
 GitHub Actions による CI/CD の確定構成。`docs/architecture.md` がシステム構成、本書は
 **コードがどう検証され、どうAWSに届くか**を示す。
@@ -58,7 +58,9 @@ infra/
 ### セキュリティチェックの分担
 
 - **CIゲート（必須・自動）**: gitleaks / trivy / Dependabot。決定的（同じ入力なら同じ結果）で
-  無料・高速なツールのみをゲートにする。
+  無料・高速なツールのみをゲートにする。trivyの除外はリポジトリルートの `.trivyignore` で
+  管理し、**除外には必ず理由コメントを付ける**（現状: CloudFront WAF / ECRタグMUTABLE /
+  S3のCMK暗号化。いずれも個人利用のコスト・運用判断）。
 - **LLMレビュー（ローカル・助言的）**: 認証・IAM・データアクセスに触る変更はマージ前に
   Claude Code の `/security-review` をローカルで実行する。文脈依存の指摘（権限設計の穴、
   認可漏れ）を拾う補助であり、非決定的なためゲートにはしない。
@@ -81,7 +83,39 @@ infra/
 - Terraform は**入れ物**を管理する: S3 / CloudFront / Lambda関数 / ECR / DynamoDB / SSM 等。
 - アプリの**中身**（webの静的ファイル、api/agent のコンテナイメージ）は app ワークフローが
   直接更新する。Lambda の `image_uri` には `lifecycle { ignore_changes = [image_uri] }` を
-  付け、Terraform が app デプロイの結果を巻き戻さないようにする。
+  付け、Terraform が app デプロイの結果を巻き戻さないようにする
+  （AgentCore Runtime の `container_uri` も同様）。
+- api/worker のコンテナは npm workspaces のため**リポジトリルートをビルドコンテキスト**にする
+  （`docker build -f apps/api/Dockerfile .`）。agent は `apps/agent` コンテキストで
+  **linux/arm64**（AgentCore Runtime要件。`ubuntu-24.04-arm` runnerでネイティブビルド）。
+
+### SSMパラメータ契約（`/app/aws-mon/prod/*`, type=String）
+
+アカウント固有値をリポジトリにコミットしないための受け渡し場所。
+
+| パス | 作成者 | 用途 |
+|---|---|---|
+| `cognito-user-pool-id` / `cognito-client-id` | **オーナー手動（前提条件）** | Terraformがapi Lambda環境変数へ注入。deploy-webがVITE_*へ注入 |
+| `agent-guardrail-id` | **オーナー手動（前提条件）** | AgentCore Runtime環境変数 `AGENT_GUARDRAIL_ID` |
+| `api-base-url` | Terraform | deploy-webの `VITE_API_BASE_URL` |
+| `web-bucket` / `cloudfront-distribution-id` | Terraform | deploy-webのsync先/invalidation |
+| `agent-runtime-id` | Terraform | deploy-agentのRuntime更新対象 |
+
+**注意**: prodスタックは `data.aws_ssm_parameter` で手動作成分を参照するため、
+オーナーがパラメータを作成するまで `terraform plan`（PRの tf-plan ジョブ含む）は失敗する。
+
+### 初回立ち上げ（二段階apply）
+
+Lambda / AgentCore Runtime は作成時にECRイメージが必要（鶏卵問題）。
+`api_image_tag` / `agent_image_tag` 変数（既定 `""` = 該当リソース未作成）で分ける。
+
+1. オーナーがSSMパラメータ3つ（上表の手動分）を作成。
+2. 実装PRマージ → deploy-infra: DynamoDB / ECR / S3+CloudFront / IAM / SSM出力を作成。
+3. deploy-api / deploy-agent を `workflow_dispatch` で実行（ECR pushのみ。関数/Runtime更新は
+   存在しないためスキップされる = bootstrapモード）。
+4. `terraform.tfvars` で `api_image_tag = "api-latest"` / `agent_image_tag = "latest"` にするPR →
+   deploy-infra: Lambda×2 / Function URL / Scheduler / AgentCore Runtime を作成。
+5. deploy-web を `workflow_dispatch`（以後はpath契機で自動）。
 
 ## tfstate 管理
 
