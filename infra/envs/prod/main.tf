@@ -602,12 +602,13 @@ resource "aws_ssm_parameter" "cloudfront_distribution_id" {
 }
 
 # Function URL作成後だけwebビルド用API URLを書き出す。
+# function_urlは末尾スラッシュ付きのため、パス連結で"//"にならないよう除去して格納する。
 resource "aws_ssm_parameter" "api_base_url" {
   count = local.app_enabled ? 1 : 0
 
   name  = "/app/aws-mon/prod/api-base-url"
   type  = "String"
-  value = aws_lambda_function_url.api[0].function_url
+  value = trimsuffix(aws_lambda_function_url.api[0].function_url, "/")
 }
 
 # deploy-agentがRuntime更新可否を判定するためのID。
