@@ -289,13 +289,15 @@ resource "aws_iam_role_policy" "worker_app" {
 resource "aws_lambda_function" "api" {
   count = local.app_enabled ? 1 : 0
 
-  function_name                  = "${local.name_prefix}-api"
-  role                           = aws_iam_role.api.arn
-  package_type                   = "Image"
-  image_uri                      = "${local.api_repository_url}:${var.api_image_tag}"
-  timeout                        = 300
-  memory_size                    = 512
-  reserved_concurrent_executions = 5
+  function_name = "${local.name_prefix}-api"
+  role          = aws_iam_role.api.arn
+  package_type  = "Image"
+  image_uri     = "${local.api_repository_url}:${var.api_image_tag}"
+  timeout       = 300
+  memory_size   = 512
+  # reserved_concurrent_executions は設定しない: このアカウントのLambda同時実行
+  # クォータが小さく、予約すると未予約分の最低値10を割ってapplyが失敗する。
+  # アカウント全体の上限自体が暴走時のコストキャップとして機能する。
 
   environment {
     variables = local.lambda_environment
@@ -325,13 +327,14 @@ resource "aws_lambda_function_url" "api" {
 resource "aws_lambda_function" "worker" {
   count = local.app_enabled ? 1 : 0
 
-  function_name                  = "${local.name_prefix}-worker"
-  role                           = aws_iam_role.worker.arn
-  package_type                   = "Image"
-  image_uri                      = "${local.api_repository_url}:worker-latest"
-  timeout                        = 900
-  memory_size                    = 512
-  reserved_concurrent_executions = 1
+  function_name = "${local.name_prefix}-worker"
+  role          = aws_iam_role.worker.arn
+  package_type  = "Image"
+  image_uri     = "${local.api_repository_url}:worker-latest"
+  timeout       = 900
+  memory_size   = 512
+  # reserved_concurrent_executions は設定しない(apiと同じクォータ理由)。
+  # worker重複起動はjob側のlockedUntil排他で安全
 
   environment {
     variables = merge(local.lambda_environment, {
