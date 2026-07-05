@@ -538,6 +538,13 @@ resource "aws_iam_role_policy" "agent_runtime" {
   policy = data.aws_iam_policy_document.agent_runtime.json
 }
 
+# フェーズ3のローカル検証(setup_observability.sh)で作成済みのロググループを
+# Terraform管理へ取り込む。初回apply成功後、このimportブロックは削除してよい。
+import {
+  to = aws_cloudwatch_log_group.agent_observability
+  id = "/aws/aws-mon/quiz-agent"
+}
+
 resource "aws_cloudwatch_log_group" "agent_observability" {
   name              = "/aws/aws-mon/quiz-agent"
   retention_in_days = 30
