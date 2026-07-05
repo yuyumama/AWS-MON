@@ -319,7 +319,8 @@ resource "aws_lambda_function_url" "api" {
   cors {
     allow_origins = ["https://${aws_cloudfront_distribution.web.domain_name}"]
     allow_headers = ["authorization", "content-type"]
-    allow_methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+    # OPTIONSは指定不可(各要素6文字以下の制約)。プリフライトはFunction URLが自動応答する
+    allow_methods = ["GET", "POST", "PUT", "PATCH", "DELETE"]
     max_age       = 86400
   }
 }
