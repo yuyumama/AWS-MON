@@ -11,8 +11,11 @@ import type {
 
 import { getAuthHeaders } from "./auth";
 
-const apiBase =
-	(import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "/api";
+// 末尾スラッシュは除去する(Function URLは"https://xxx.on.aws/"形式で、
+// そのまま連結すると"//me"になりAPI側で404になる)
+const apiBase = (
+	(import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "/api"
+).replace(/\/+$/, "");
 
 export class ApiClientError extends Error {
 	constructor(
