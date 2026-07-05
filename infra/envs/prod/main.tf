@@ -264,9 +264,14 @@ data "aws_iam_policy_document" "lambda_app" {
   }
 
   statement {
-    sid       = "InvokeAgentRuntime"
-    actions   = ["bedrock-agentcore:InvokeAgentRuntime"]
-    resources = [aws_bedrockagentcore_agent_runtime.agent[0].agent_runtime_arn]
+    sid     = "InvokeAgentRuntime"
+    actions = ["bedrock-agentcore:InvokeAgentRuntime"]
+    # 実際の呼び出し先はエンドポイントのサブリソース(.../runtime-endpoint/DEFAULT)のため、
+    # Runtime本体だけでなくエンドポイントARNも許可する必要がある(ライブで実測)
+    resources = [
+      aws_bedrockagentcore_agent_runtime.agent[0].agent_runtime_arn,
+      "${aws_bedrockagentcore_agent_runtime.agent[0].agent_runtime_arn}/runtime-endpoint/*",
+    ]
   }
 }
 
