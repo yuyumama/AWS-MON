@@ -164,19 +164,8 @@ jobs:
           echo "AgentCore Runtime did not become READY in time" >&2
           exit 1
 
-      # update-agent-runtimeで作られた新versionをDEFAULTエンドポイントに向ける
-      - name: Update DEFAULT endpoint
-        if: steps.runtime.outputs.exists == 'true'
-        env:
-          RUNTIME_ID: ${{ steps.runtime.outputs.runtime_id }}
-        run: |
-          set -euo pipefail
-          aws bedrock-agentcore-control update-agent-runtime-endpoint \
-            --agent-runtime-id "${RUNTIME_ID}" \
-            --endpoint-name DEFAULT \
-            --agent-runtime-version "${UPDATED_VERSION}" > updated-endpoint.json
-
-      # エンドポイントもREADYになるまで待ち、実際の配信versionを確認する
+      # DEFAULTエンドポイントはupdate-agent-runtimeに自動追従する(明示更新はConflictExceptionで拒否される)
+      # ため、READYと配信versionの一致だけをポーリングで確認する
       - name: Wait for DEFAULT endpoint
         if: steps.runtime.outputs.exists == 'true'
         env:
