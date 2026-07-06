@@ -13,5 +13,5 @@ variable "agent_image_tag" {
 variable "bedrock_model_id" {
   description = "Bedrock model ID used by the AgentCore Runtime."
   type        = string
-  default     = "us.anthropic.claude-sonnet-4-20250514-v1:0"
+  default     = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 }
