@@ -1,6 +1,6 @@
 # ADR 0008: prodデプロイ構成（CloudFront/API分離・定期worker・AgentCore Runtime）
 
-- 状態: 採用（2026-07-05 実装。初回applyは未実施）
+- 状態: 採用（2026-07-05 実装、2026-07-06 初回デプロイ完了・稼働中）
 - 関連: [ADR 0002](0002-lambda-web-adapter.md)（LWA）、[ADR 0004](0004-local-first-dev.md)（ローカル優先）、[ADR 0006](0006-auth-cognito-cloud-only.md)（認証）、`docs/cicd.md`（デプロイ経路）
 
 ## 背景

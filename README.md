@@ -17,7 +17,7 @@ AWS認定試験の模擬問題を生成するWebアプリ。生成AIで問題・
 
 | コンポーネント | 技術 | 配信 / 実行 |
 |---|---|---|
-| `apps/web` | Vite + React + TS | S3 + CloudFront（配備未着手） |
+| `apps/web` | Vite + React + TS | S3 + CloudFront |
 | `apps/api` | Hono + Lambda Web Adapter (TS) | Lambda |
 | `apps/agent` | Strands Agents + Bedrock (Python) | AgentCore Runtime |
 | データ | DynamoDB | — |
@@ -27,7 +27,7 @@ AWS認定試験の模擬問題を生成するWebアプリ。生成AIで問題・
 ```
 AWS-MON/
 ├─ apps/
-│  ├─ web/        フロント Vite+React+TS → S3/CloudFront（配備は未着手）
+│  ├─ web/        フロント Vite+React+TS → S3/CloudFront配信
 │  ├─ api/        ビジネスロジックAPI（Hono + Lambda Web Adapter, TS）
 │  └─ agent/      問題生成エージェント（Strands + Bedrock, Python）
 ├─ packages/

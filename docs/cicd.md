@@ -1,6 +1,6 @@
 # cicd — CI/CDパイプライン構成
 
-最終更新: 2026-07-05
+最終更新: 2026-07-06
 
 GitHub Actions による CI/CD の確定構成。`docs/architecture.md` がシステム構成、本書は
 **コードがどう検証され、どうAWSに届くか**を示す。
@@ -76,7 +76,7 @@ infra/
 | deploy-infra | `infra/**` | plan（可視化）→ **手動承認（Environment: prod）** → 承認後に再plan+apply |
 | deploy-web | `apps/web/**`, `packages/shared/**` | build → S3 sync → CloudFront invalidation |
 | deploy-api | `apps/api/**`, `packages/shared/**` | イメージbuild → ECR push → `lambda update-function-code` |
-| deploy-agent | `apps/agent/**` | イメージbuild → ECR push → AgentCore Runtime 更新 |
+| deploy-agent | `apps/agent/**` | イメージbuild → ECR push → AgentCore Runtime 更新（`update-agent-runtime` のみ。DEFAULTエンドポイントは自動追従し、明示的な `update-agent-runtime-endpoint` は ConflictException で拒否されるため呼ばない。ワークフローは追従完了をポーリングで待つ） |
 
 ### Terraform とアプリデプロイの境界（規約）
 
@@ -105,6 +105,9 @@ infra/
 オーナーがパラメータを作成するまで `terraform plan`（PRの tf-plan ジョブ含む）は失敗する。
 
 ### 初回立ち上げ（二段階apply）
+
+**この手順は2026-07-05〜06に実施済み**（現在は通常運用 = パスフィルタ契機の自動デプロイ）。
+再構築時の手順として残す。
 
 Lambda / AgentCore Runtime は作成時にECRイメージが必要（鶏卵問題）。
 `api_image_tag` / `agent_image_tag` 変数（既定 `""` = 該当リソース未作成）で分ける。
