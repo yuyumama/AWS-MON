@@ -14,7 +14,7 @@ AWS認定試験の模擬問題を生成するWebアプリ。問題・解説は�
 - `apps/api` … ビジネスロジックAPI（Hono + Lambda Web Adapter, TS。認証・認可含め実装済み）
 - `apps/agent` … 問題生成エージェント（Strands + Bedrock, Python。MCP調査・Guardrailsゲート・OTel計装込み）
 - `packages/shared` … web/api/seed で共有するTS型とDynamoDBテーブル定義（`@aws-mon/shared`）
-- `infra` … Terraform（envs = local / prod。prodスタック実装済み: DynamoDB/ECR/S3+CloudFront/Lambda/AgentCore Runtime）
+- `infra` … Terraform（envs = local / prod。prodはデプロイ済み: DynamoDB/ECR/S3+CloudFront/Lambda/AgentCore Runtime）
 - `local` … ローカル開発環境（DynamoDB Local + LocalStack。`local/seed` に投入スクリプト）
 - `docs` … 確定・清書ドキュメント（architecture / data-model / conventions / ADR / research。git追跡）
 - `docs_local` … 作業メモ・下書き（git追跡外）
