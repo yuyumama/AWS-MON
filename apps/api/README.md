@@ -2,6 +2,13 @@
 
 セッション状態・生成済み問題・復習データなどを扱うAPI層。
 
+エントリポイントは2つ:
+
+- `src/index.ts` — HTTPサーバ本体（ローカル / 本番はapi Lambda + Function URL）
+- `src/worker.ts` — 生成jobを処理するworker Lambdaハンドラ（本番は EventBridge Scheduler が
+  rate 1分で起動。`Dockerfile.worker` でビルド。ローカルでは `POST /dev/jobs/run` が同じ
+  `runRunnableJobs` を実行する）
+
 ## Lambda Web Adapter(LWA) の考え方
 
 LWA は「**PORTで待ち受ける普通のWebサーバ**」をそのままLambda化する仕組み。
@@ -34,17 +41,21 @@ npm run dev
 ## ビルド & コンテナ化（本番）
 
 ```bash
-npm run build                      # dist/ を生成
-docker build -t aws-mon-api .      # LWA同梱イメージ
+npm run build   # dist/ を生成
+
+# npm workspaces のため、docker build はリポジトリルートをビルドコンテキストにする
+cd ../..
+docker build -f apps/api/Dockerfile -t aws-mon-api .            # api（LWA同梱イメージ）
+docker build -f apps/api/Dockerfile.worker -t aws-mon-worker .  # worker Lambda
 ```
 
-## エンドポイント（雛形）
+## エンドポイント
 
 | メソッド | パス | 説明 |
 |---|---|---|
 | GET | `/health` | 生存確認 |
-| GET | `/health/dynamo` | DynamoDB接続確認（ローカルインフラ起動時） |
-| GET | `/health/tables` | APIが参照するDynamoDBテーブル名 |
+| GET | `/health/dynamo` | DynamoDB接続確認（ローカルインフラ起動時）。**dev限定**（cognitoモードでは404） |
+| GET | `/health/tables` | APIが参照するDynamoDBテーブル名。**dev限定**（cognitoモードでは404） |
 | POST | `/dev/questions` | `QuizItem` をACTIVE問題として保存する開発用endpoint（返却DTOは `answering`） |
 | GET | `/me` | 認証済みユーザーの `userId` と生成権限 `canGenerateQuestions`（フロントのUI表示制御用） |
 | POST | `/sessions` | セッション開始。`mode=GENERATE\|MIXED` は生成権限が無いと403 |
@@ -56,6 +67,20 @@ docker build -t aws-mon-api .      # LWA同梱イメージ
 | GET | `/reviews/:questionId` | ユーザー×問題の復習マーク状態を取得（AP-07） |
 | PUT | `/reviews/:questionId` | 復習マークの設定/解除。body `{"marked": true|false}`。回答済み問題のみ対象（未回答は404）。不正解時の自動追加の解除もここで行う |
 | POST | `/dev/jobs/run` | `AwsMonGenerationJobs` の実行可能job(QUEUED/RETRY_WAIT)を処理する開発用worker tick。bodyの `limit` で最大処理件数を指定可 |
+
+## agent連携（`src/agentClient.ts`）
+
+`GENERATE` / `MIXED` の問題生成は `apps/agent` に委譲する。`AGENT_MODE` で呼び出し方を切り替える
+（境界のリクエスト/レスポンスJSONは共通。[ADR 0008](../../docs/adr/0008-prod-deployment-shape.md)）。
+
+- **`AGENT_MODE=http`（既定・ローカル）**: `AGENT_BASE_URL`（既定 `http://127.0.0.1:8090`）の
+  `POST /generate` を呼ぶ。
+- **`AGENT_MODE=agentcore`（本番）**: `AGENT_RUNTIME_ARN` の AgentCore Runtime を
+  `InvokeAgentRuntime` で呼ぶ。
+
+どちらも `sessionId` をagentへ渡し、agent側でOTelトレースをセッション単位に束ねる
+（[docs/observability.md](../../docs/observability.md)）。生成結果は `contentHash` で重複チェックのうえ
+`AwsMonQuestions` にACTIVE保存する。
 
 ## 認証・認可（`src/auth.ts`）
 

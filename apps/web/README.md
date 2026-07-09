@@ -1,6 +1,7 @@
 # apps/web — フロントエンド
 
-Vite + React + TypeScript のSPA。ビルド成果物は S3 + CloudFront で配信する想定(フェーズ4)。
+Vite + React + TypeScript のSPA。ビルド成果物は S3 + CloudFront で配信する
+(prodデプロイ済み。mainマージ時に `deploy-web` ワークフローが build → S3 sync → CloudFront invalidation を行う。[docs/cicd.md](../../docs/cicd.md))。
 
 ## 実装済み(フェーズ2 フロント部分)
 
@@ -16,7 +17,9 @@ Vite + React + TypeScript のSPA。ビルド成果物は S3 + CloudFront で配�
 ## 未実装
 
 - 復習の発展系(spaced repetition の `GSI2_DueList`、復習問題からの演習開始、苦手ドメイン分析)は未着手。
-- cognito モードの実 User Pool を使った動作確認(App Client 等の設定値待ち)。
+
+cognito モードの実 User Pool を使った動作確認は完了済み(2026-07-06、prod CloudFront経由の
+ログインE2E → `GET /me` 200 を確認)。
 
 ## 動かし方
 
