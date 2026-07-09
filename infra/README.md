@@ -16,8 +16,11 @@ infra/
 
 - DynamoDB×4（`modules/dynamodb` 再利用） / ECR×2 / S3+CloudFront(OAC) /
   api Lambda(LWA)+Function URL / worker Lambda+EventBridge Scheduler /
-  AgentCore Runtime / SSMパラメータ。構成の意思決定は `docs/adr/0008`、
+  AgentCore Runtime / CloudWatchロググループ（`/aws/aws-mon/quiz-agent`、retention 30日） /
+  SSMパラメータ。構成の意思決定は `docs/adr/0008`、
   デプロイ経路とSSMパラメータ契約・初回立ち上げ手順は `docs/cicd.md` を参照。
+- AgentCore Runtime にはオブザーバビリティ用の環境変数（`AGENT_OBSERVABILITY_ENABLED` /
+  `OTEL_*`）とGuardrail IDを注入する（監視構成の全体像は `docs/observability.md`）。
 - apply は **deploy-infra ワークフロー経由のみ**（plan → prod承認 → apply）。
   backendのバケット名はCIが `-backend-config` で注入する。
 - `api_image_tag` / `agent_image_tag`（`terraform.tfvars`）が空の間は

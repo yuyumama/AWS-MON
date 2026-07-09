@@ -1,9 +1,11 @@
-# quiz_agent — AWS認定クイズ生成エージェント（ローカル）
+# quiz_agent — AWS認定クイズ生成エージェント
 
 Strands Agents + Amazon Bedrock で、AWS認定試験の模擬問題・解説を生成する。
 プロトタイプ `aws-quiz-v2.tsx` のプロンプト資産を Python に移植したもの。
 
-将来は AgentCore Runtime にデプロイする前提だが、ここではまず**ローカルで動かす**ことを目標とする。
+本番は **AgentCore Runtime で稼働中**（2026-07-06デプロイ。[ADR 0008](../../docs/adr/0008-prod-deployment-shape.md)、
+デプロイ経路は `deploy-agent` ワークフロー → [docs/cicd.md](../../docs/cicd.md)）。
+このREADMEは主に**ローカルでの開発・実行手順**を説明する。
 
 ## セットアップ
 
@@ -64,8 +66,10 @@ python3 -m quiz_agent.server
 | `quiz_agent/agent.py` | Strands + Bedrock の `structured_output` 呼び出し（`generate_quiz` → `GenerationResult`） |
 | `quiz_agent/guardrail.py` | Guardrails文脈的グラウンディングチェック（インライン品質ゲート） |
 | `quiz_agent/server.py` | APIから呼ぶローカルHTTPサーバ（`/health`, `/generate`） |
+| `quiz_agent/runtime.py` | AgentCore Runtime用HTTPエントリポイント（`POST /invocations`, `GET /ping`。本番はこちらで起動） |
 | `quiz_agent/grading.py` | 正誤判定ユーティリティ |
 | `quiz_agent/cli.py` | ローカル実行用CLI |
+| `Dockerfile` / `docker-entrypoint.sh` | AgentCore Runtime用コンテナ（linux/arm64）。`AGENT_OBSERVABILITY_ENABLED=true` ならOTel計装つきで起動 |
 | `scripts/setup_observability.sh` | Transaction Search有効化＋ロググループ作成（一度きり） |
 | `scripts/run_server_otel.sh` | OTel(ADOT)計装つきでサーバ起動 |
 | `scripts/create_guardrail.py` | グラウンディングチェック用ガードレール作成（一度きり） |
@@ -90,9 +94,9 @@ python3 -m quiz_agent.server
   （`CacheConfig(strategy="auto")`、読み取り約0.1倍）でコストを抑え、調査量もプロンプトで
   1サービス・`read_documentation` 最大2回に制限している
 
-## オブザーバビリティ（フェーズ3-1、詳細は ADR 0007）
+## オブザーバビリティ（フェーズ3-1、実装リファレンスは [docs/observability.md](../../docs/observability.md)、意思決定は ADR 0007）
 
-計装は**オプトイン**。通常起動では何も送らない。実AWSで観測する場合:
+ローカルの計装は**オプトイン**。通常起動では何も送らない。実AWSで観測する場合:
 
 ```bash
 # 一度きり: Transaction Search有効化 + ロググループ作成（要AWS権限）
@@ -105,6 +109,8 @@ python3 -m quiz_agent.server
 - CloudWatchコンソール > **GenAI Observability** でトレース（トークン・プロンプト・MCPツール呼び出し）を確認
 - APIから渡される `sessionId` は OTel baggage `session.id` に載り、セッション単位で束なる
 - service.name / ロググループは `.env` の `AGENT_OTEL_*` で変更（既定: `aws-mon-quiz-agent` / `/aws/aws-mon/quiz-agent`）
+- **本番（AgentCore Runtime）は常時計装**: Terraform が `AGENT_OBSERVABILITY_ENABLED=true` と
+  `OTEL_*` 一式をRuntime環境変数に注入し、`docker-entrypoint.sh` が計装つきで起動する
 
 ## Guardrails文脈的グラウンディングチェック（フェーズ3-3）
 
@@ -142,5 +148,5 @@ python scripts/setup_evaluations.py
 
 - [x] 最新AWS情報の取得（AWSドキュメントMCPで実装。Web検索ツールは必要になったら追加）
 - [x] `evaluate_question` を AgentCore Evaluations（オンライン評価）に置き換え
-- [ ] 生成済み問題を DynamoDB に保存 →「生成済みから出題」モード
-- [ ] AgentCore Runtime へのデプロイ
+- [x] 生成済み問題を DynamoDB に保存 →「生成済みから出題」モード（API側で実装: 生成結果を `AwsMonQuestions` に保存し、`BANK`/`MIXED` モードがバンクから出題する）
+- [x] AgentCore Runtime へのデプロイ（2026-07-06完了。`quiz_agent/runtime.py` + `deploy-agent` ワークフロー）

@@ -22,6 +22,7 @@ AWS認定試験の模擬問題を生成するWebアプリ。生成AIで問題・
 | `apps/agent` | Strands Agents + Bedrock (Python) | AgentCore Runtime |
 | データ | DynamoDB | — |
 | 認証/認可 | 既存 Cognito User Pool（別AWSアカウント / ログインのみ / 登録機能なし） | `BANK` は登録済みユーザー可、`GENERATE`/`MIXED` は生成権限必須 |
+| 監視 | OTel(ADOT) + X-Ray Transaction Search + CloudWatch GenAI Observability + Guardrails品質ゲート + AgentCore Evaluations | 詳細は [docs/observability.md](docs/observability.md) |
 | IaC | Terraform（envs = local / prod） | — |
 
 ```
