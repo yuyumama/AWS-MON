@@ -67,7 +67,7 @@ flowchart TB
 |---|---|---|---|
 | `apps/web` | Vite + React + TS | S3 + CloudFront | 主要画面(資格選択/出題/解説/セッション再開/復習リスト)を実装済み。Cognitoログインは自前フォーム+SRP(`amazon-cognito-identity-js`、`VITE_AUTH_MODE=cognito`)。ローカルは vite dev server(:5173) が `/api` を api(:8080) にプロキシ |
 | `apps/api` | Hono + Lambda Web Adapter (TS) | Lambda | セッション/回答/次問/一覧/dev用endpoint、agent HTTP連携、認証・生成権限(`src/auth.ts`)を実装済み |
-| `apps/agent` | Strands Agents + Bedrock (Python) | AgentCore Runtime | CLI + local HTTP server (`/health`, `/generate`) を実装済み。AWSドキュメントMCPで調査してから生成(失敗時は調査なしへフォールバック)。既定モデルは `us.anthropic.claude-haiku-4-5-20251001-v1:0`。オブザーバビリティ（OTel/ADOT計装・Guardrailsグラウンディングゲート・AgentCore Evaluationsオンライン評価）も実装・ライブ確認済み（[ADR 0007](adr/0007-observability-stack.md)） |
+| `apps/agent` | Strands Agents + Bedrock (Python) | AgentCore Runtime | CLI + local HTTP server (`/health`, `/generate`) を実装済み。AWSドキュメントMCPで調査してから生成(失敗時は調査なしへフォールバック)。既定モデルは `us.anthropic.claude-haiku-4-5-20251001-v1:0`（`AGENT_MODEL_PROVIDER=openrouter` でOpenRouter無料モデルへ切り替え可。既定はBedrock）。オブザーバビリティ（OTel/ADOT計装・Guardrailsグラウンディングゲート・AgentCore Evaluationsオンライン評価）も実装・ライブ確認済み（[ADR 0007](adr/0007-observability-stack.md)） |
 | `packages/shared` | TS型 + テーブル定義 | web/apiがimport | 実装済み |
 | DynamoDB | 4テーブル構成 | AWS / DynamoDB Local | テーブル定義確定。prod（`aws-mon-prod-*`）・localともTerraform適用済み |
 | 認証/認可 | 既存 Cognito User Pool + AWS-MON App Client | 別AWSアカウント / AWS | User Pool は共通。登録済みユーザーは `BANK` 出題可、Bedrock課金に到達する `GENERATE` / `MIXED` / 再生成は生成権限で制限。ローカルは `x-dev-user-id` devシムで代替（[ADR 0006](adr/0006-auth-cognito-cloud-only.md)） |

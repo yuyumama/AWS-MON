@@ -1,7 +1,8 @@
 # quiz_agent — AWS認定クイズ生成エージェント
 
-Strands Agents + Amazon Bedrock で、AWS認定試験の模擬問題・解説を生成する。
+Strands Agents で、AWS認定試験の模擬問題・解説を生成する。
 プロトタイプ `aws-quiz-v2.tsx` のプロンプト資産を Python に移植したもの。
+生成モデルは `AGENT_MODEL_PROVIDER` で **Amazon Bedrock（既定）/ OpenRouter** を切り替えられる。
 
 本番は **AgentCore Runtime で稼働中**（2026-07-06デプロイ。[ADR 0008](../../docs/adr/0008-prod-deployment-shape.md)、
 デプロイ経路は `deploy-agent` ワークフロー → [docs/cicd.md](../../docs/cicd.md)）。
@@ -35,6 +36,25 @@ Bedrock を呼ぶには、以下のいずれかが必要:
 > 既定は `us.anthropic.claude-haiku-4-5-20251001-v1:0`。動かない場合は `.env` の `BEDROCK_MODEL_ID` を
 > 自分のアカウントで有効なIDに変更する。
 
+## モデルプロバイダ切り替え（OpenRouter）
+
+`.env` に以下を設定すると、生成モデルを OpenRouter の無料モデルに切り替えられる
+（無料枠: 20リクエスト/分・50リクエスト/日。詳細は `.env.example` 参照）:
+
+```bash
+AGENT_MODEL_PROVIDER=openrouter
+OPENROUTER_API_KEY=sk-or-v1-xxxx
+# AGENT_MODEL_ID=nvidia/nemotron-3-ultra-550b-a55b:free   # 既定値
+```
+
+- 既定の Nemotron 3 Ultra (free) は `response_format`（OpenAIネイティブ構造化出力）非対応のため、
+  `openrouter_model.py` が **ツール呼び出しベースの `structured_output`** で代替する
+  （Pydanticスキーマ準拠は変わらず保証される）
+- Guardrails グラウンディングチェック（`ApplyGuardrail`）は生成モデルと独立したAWS APIのため、
+  OpenRouter 利用時も **AWS認証は引き続き必要**
+- Bedrockプロンプトキャッシュ（`CacheConfig`）は OpenRouter 経路では使わない
+- 無料枠が枯渇したら `AGENT_MODEL_PROVIDER` を外して（= `bedrock`）従来動作に戻す
+
 ## 実行
 
 ```bash
@@ -63,7 +83,9 @@ python3 -m quiz_agent.server
 | `quiz_agent/certs.py` | 資格・AIPドメイン定義、重み付き抽選 |
 | `quiz_agent/schema.py` | 構造化出力のPydanticスキーマ（QuizItem=Question+Explanation） |
 | `quiz_agent/prompts.py` | 問題＋解説（同時）のプロンプト生成（内容面のみ） |
-| `quiz_agent/agent.py` | Strands + Bedrock の `structured_output` 呼び出し（`generate_quiz` → `GenerationResult`） |
+| `quiz_agent/agent.py` | Strands の `structured_output` 呼び出し（`generate_quiz` → `GenerationResult`） |
+| `quiz_agent/model_config.py` | モデルプロバイダ（bedrock / openrouter）とモデルIDの解決 |
+| `quiz_agent/openrouter_model.py` | OpenRouter用モデル（ツール呼び出しベースの `structured_output`） |
 | `quiz_agent/guardrail.py` | Guardrails文脈的グラウンディングチェック（インライン品質ゲート） |
 | `quiz_agent/server.py` | APIから呼ぶローカルHTTPサーバ（`/health`, `/generate`） |
 | `quiz_agent/runtime.py` | AgentCore Runtime用HTTPエントリポイント（`POST /invocations`, `GET /ping`。本番はこちらで起動） |

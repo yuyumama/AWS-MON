@@ -23,15 +23,11 @@ except ModuleNotFoundError:
 
 
 from .guardrail import GateResult, GroundingBlockedError
+from .model_config import model_id as _model_id
 from .schema import Explanation, Option, OptionReason, Question, QuizItem
 
 AGENT_VERSION = "local-http-v1"
 PROMPT_VERSION = "quiz-v1"
-DEFAULT_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
-
-
-def _model_id() -> str:
-    return os.environ.get("BEDROCK_MODEL_ID", DEFAULT_MODEL_ID)
 
 
 def _stub_quiz(cert: str, domain: str | None) -> QuizItem:
