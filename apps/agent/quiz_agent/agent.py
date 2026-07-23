@@ -1,4 +1,8 @@
-"""Strands + Bedrock による問題・解説の生成と評価（構造化出力）。"""
+"""Strands による問題・解説の生成と評価（構造化出力）。
+
+モデルは AGENT_MODEL_PROVIDER で Bedrock（既定）と OpenRouter を切り替える。
+OpenRouter は無料枠のリクエストクレジット制のため、枯渇時は Bedrock に戻して運用する。
+"""
 
 from __future__ import annotations
 
@@ -14,6 +18,7 @@ from mcp import StdioServerParameters, stdio_client
 from pydantic import BaseModel
 from strands import Agent
 from strands.models import BedrockModel, CacheConfig
+from strands.models.model import Model
 from strands.tools.mcp import MCPClient
 
 from .guardrail import (
@@ -24,6 +29,7 @@ from .guardrail import (
     gate_enforced,
     gate_retries,
 )
+from .model_config import model_id, model_provider, openrouter_base_url
 from .prompts import (
     QUIZ_FROM_RESEARCH_PROMPT,
     QUIZ_SYSTEM_PROMPT,
@@ -34,23 +40,38 @@ from .schema import QuizItem
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
-
-
-def model_id() -> str:
-    return os.environ.get("BEDROCK_MODEL_ID", DEFAULT_MODEL_ID)
-
-
 T = TypeVar("T", bound=BaseModel)
 
 
-def _model() -> BedrockModel:
+def _bedrock_model() -> BedrockModel:
     return BedrockModel(
         model_id=model_id(),
         region_name=os.environ.get("AWS_REGION", "us-east-1"),
         # エージェントループでMCPツール結果(AWSドキュメント原文)を再送するためキャッシュする。
         cache_config=CacheConfig(strategy="auto"),
     )
+
+
+def _openrouter_model() -> Model:
+    # openai extra 未導入の環境でも bedrock 経路が壊れないよう遅延importする
+    from .openrouter_model import ToolCallStructuredOutputModel
+
+    api_key = os.environ.get("OPENROUTER_API_KEY", "")
+    if not api_key:
+        raise RuntimeError(
+            "AGENT_MODEL_PROVIDER=openrouter には OPENROUTER_API_KEY の設定が必要です"
+        )
+    # OpenRouterにはプロンプトキャッシュ設定(CacheConfig)を渡さない(Bedrock固有)。
+    return ToolCallStructuredOutputModel(
+        client_args={"api_key": api_key, "base_url": openrouter_base_url()},
+        model_id=model_id(),
+    )
+
+
+def _model() -> Model:
+    if model_provider() == "openrouter":
+        return _openrouter_model()
+    return _bedrock_model()
 
 
 def _generate(
