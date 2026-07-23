@@ -11,7 +11,7 @@
 	},
 	"dependencies": {
 		"@aws-mon/shared": "file:../../packages/shared",
-		"amazon-cognito-identity-js": "^6.3.18",
+		"amazon-cognito-identity-js": "^6.3.20",
 		"react": "^19.1.0",
 		"react-dom": "^19.1.0"
 	},
@@ -19,7 +19,7 @@
 		"@types/react": "^19.1.0",
 		"@types/react-dom": "^19.1.0",
 		"@vitejs/plugin-react": "^4.5.0",
-		"typescript": "^6.0.3",
-		"vite": "^8.1.3"
+		"typescript": "^7.0.2",
+		"vite": "^8.1.5"
 	}
 }

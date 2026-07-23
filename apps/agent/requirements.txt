@@ -1,6 +1,6 @@
-# CacheConfig(プロンプトキャッシュ)を使うため 1.45 以上。
+# CacheConfig(プロンプトキャッシュ)を使うため 1.48.0 以上。
 # [openai] は OpenRouter(OpenAI互換API)経路で使う(イシュー#39)
-strands-agents[openai]>=1.45
+strands-agents[openai]>=1.48.0
 pydantic>=2.0
 python-dotenv>=1.0.0
 # AWSドキュメントMCP(フェーズ2-4)。strandsのMCPClient(stdio)から起動する
@@ -10,4 +10,4 @@ awslabs.aws-documentation-mcp-server>=1.1.26
 # scripts/run_server_otel.sh から opentelemetry-instrument 経由で起動したときだけ有効。
 aws-opentelemetry-distro>=0.10.0
 # Guardrails ApplyGuardrail 呼び出し(フェーズ3-3)
-boto3>=1.43.40
+boto3>=1.43.51
