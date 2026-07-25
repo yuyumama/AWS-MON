@@ -1,6 +1,6 @@
 # CacheConfig(プロンプトキャッシュ)を使うため 1.48.0 以上。
 # [openai] は OpenRouter(OpenAI互換API)経路で使う(イシュー#39)
-strands-agents[openai]>=1.48.0
+strands-agents[openai]>=1.50.1
 pydantic>=2.0
 python-dotenv>=1.0.0
 # AWSドキュメントMCP(フェーズ2-4)。strandsのMCPClient(stdio)から起動する
