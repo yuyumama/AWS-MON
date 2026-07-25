@@ -11,12 +11,12 @@
 	},
 	"dependencies": {
 		"@aws-mon/shared": "file:../../packages/shared",
-		"@aws-sdk/client-bedrock-agentcore": "^3.1090.0",
-		"@aws-sdk/client-dynamodb": "^3.1090.0",
-		"@aws-sdk/lib-dynamodb": "^3.1090.0",
+		"@aws-sdk/client-bedrock-agentcore": "^3.1095.0",
+		"@aws-sdk/client-dynamodb": "^3.1095.0",
+		"@aws-sdk/lib-dynamodb": "^3.1095.0",
 		"@hono/node-server": "^1.13.7",
 		"aws-jwt-verify": "^5.2.1",
-		"hono": "^4.12.30"
+		"hono": "^4.12.32"
 	},
 	"devDependencies": {
 		"@types/node": "^26.1.1",
