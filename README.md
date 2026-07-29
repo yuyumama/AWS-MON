@@ -19,7 +19,7 @@ AWS認定試験の模擬問題を生成するWebアプリ。生成AIで問題・
 |---|---|---|
 | `apps/web` | Vite + React + TS | S3 + CloudFront |
 | `apps/api` | Hono + Lambda Web Adapter (TS) | Lambda |
-| `apps/agent` | Strands Agents + Bedrock (Python) | AgentCore Runtime |
+| `apps/agent` | Strands Agents + OpenRouter（既定）/ Bedrock (Python) | AgentCore Runtime |
 | データ | DynamoDB | — |
 | 認証/認可 | 既存 Cognito User Pool（別AWSアカウント / ログインのみ / 登録機能なし） | `BANK` は登録済みユーザー可、`GENERATE`/`MIXED` は生成権限必須 |
 | 監視 | OTel(ADOT) + X-Ray Transaction Search + CloudWatch GenAI Observability + Guardrails品質ゲート + AgentCore Evaluations | 詳細は [docs/observability.md](docs/observability.md) |
@@ -30,7 +30,7 @@ AWS-MON/
 ├─ apps/
 │  ├─ web/        フロント Vite+React+TS → S3/CloudFront配信
 │  ├─ api/        ビジネスロジックAPI（Hono + Lambda Web Adapter, TS）
-│  └─ agent/      問題生成エージェント（Strands + Bedrock, Python）
+│  └─ agent/      問題生成エージェント（Strands + OpenRouter / Bedrock, Python）
 ├─ packages/
 │  └─ shared/     web ⇄ api のTS型・DynamoDBテーブル定義共有（@aws-mon/shared）
 ├─ infra/         Terraform（envs = local / prod）
@@ -60,7 +60,7 @@ cd apps/api && npm run dev   # http://localhost:8080/health
 # 4. Web を起動（vite dev server が /api を :8080 にプロキシ）
 cd apps/web && npm run dev   # http://localhost:5173
 
-# 5. 問題生成エージェント（GENERATE/MIXEDモード用。Bedrockは"本物"を叩く。要AWS認証＋モデルアクセス）
+# 5. 問題生成エージェント（GENERATE/MIXEDモード用。OpenRouterが既定）
 cd apps/agent && python -m venv .venv
 source .venv/bin/activate    # Windows PowerShell: .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
@@ -70,10 +70,13 @@ python -m quiz_agent.server               # API連携用HTTPサーバ（AGENT_BA
 ```
 
 > **ローカルとクラウドの差はほぼ認証のみ。** ビジネスロジックは LocalStack / DynamoDB Local で完結。
-> AI部分（Strands）はローカルでもコードは同一で、Bedrockだけは実物を叩く（LocalStackはBedrock生成を再現しない）。
+> AI部分（Strands）はローカルでもコードは同一。既定はOpenRouterで、
+> `AGENT_MODEL_PROVIDER=bedrock` を明示した場合は実AWSのBedrockを呼ぶ（LocalStackはBedrock生成を再現しない）。
 > LWA により `apps/api` は Lambda固有実装を意識せず普通のWebサーバとして書ける。
 
 ## セキュリティ
 
-- Bedrock等の認証情報を **クライアント側やコミットに露出させない**（クラウド=IAMロール、ローカル=`.env`。`.env`はコミットしない）。
+- OpenRouter/Bedrock等の認証情報を **クライアント側やコミットに露出させない**
+  （OpenRouterのprodキーはSSM SecureString `/app/aws-mon/prod/openrouter-api-key` からRuntimeが取得。
+  ローカルは`.env`。`.env`はコミットしない）。
 - Cognitoログイン必須・self-signup（登録機能）なし。User Pool は別AWSアカウントの既存基盤を共通利用する。問題バンクからの出題（`BANK`）は登録済みユーザーに許可し、新規生成や生成へフォールバックする `GENERATE` / `MIXED` は Bedrock/LLM 課金保護のため追加の生成権限を必須にする。

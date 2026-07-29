@@ -1,6 +1,6 @@
 # architecture — システム構成とフロー（完全版）
 
-最終更新: 2026-07-06
+最終更新: 2026-07-30
 
 `README.md` が概要、`docs/data-model.md` がDynamoDB設計の詳細。本書は **コンポーネント間の関係** と **代表的なリクエストフロー** を図で示す完全版。個々の決定の背景は `docs/adr/` を参照。
 
@@ -27,7 +27,7 @@ flowchart TB
             Agent["apps/agent<br/>Strands Agents（Python）"]
         end
 
-        Bedrock["Amazon Bedrock<br/>Claude Haiku 4.5"]
+        LLM["OpenRouter（既定）<br/>Nemotron 3 Ultra free<br/>/ Amazon Bedrock（切替可）"]
         MCP["AWS Documentation MCP<br/>最新ドキュメント参照"]
 
         subgraph DDB["DynamoDB（4テーブル）"]
@@ -54,7 +54,7 @@ flowchart TB
     API -- "CRUD / TransactWrite" --> DDB
     API -- "job作成・実行トリガー" --> TJobs
 
-    Agent -- "generate_quiz()" --> Bedrock
+    Agent -- "generate_quiz()" --> LLM
     Agent -- "最新情報取得" --> MCP
     API -- "AGENT_MODE=http: /generate（local）/ agentcore: InvokeAgentRuntime（prod）" --> Agent
 
@@ -67,13 +67,13 @@ flowchart TB
 |---|---|---|---|
 | `apps/web` | Vite + React + TS | S3 + CloudFront | 主要画面(資格選択/出題/解説/セッション再開/復習リスト)を実装済み。Cognitoログインは自前フォーム+SRP(`amazon-cognito-identity-js`、`VITE_AUTH_MODE=cognito`)。ローカルは vite dev server(:5173) が `/api` を api(:8080) にプロキシ |
 | `apps/api` | Hono + Lambda Web Adapter (TS) | Lambda | セッション/回答/次問/一覧/dev用endpoint、agent HTTP連携、認証・生成権限(`src/auth.ts`)を実装済み |
-| `apps/agent` | Strands Agents + Bedrock (Python) | AgentCore Runtime | CLI + local HTTP server (`/health`, `/generate`) を実装済み。AWSドキュメントMCPで調査してから生成(失敗時は調査なしへフォールバック)。既定モデルは `us.anthropic.claude-haiku-4-5-20251001-v1:0`（`AGENT_MODEL_PROVIDER=openrouter` でOpenRouter無料モデルへ切り替え可。既定はBedrock）。オブザーバビリティ（OTel/ADOT計装・Guardrailsグラウンディングゲート・AgentCore Evaluationsオンライン評価）も実装・ライブ確認済み（[ADR 0007](adr/0007-observability-stack.md)） |
+| `apps/agent` | Strands Agents + OpenRouter / Bedrock (Python) | AgentCore Runtime | CLI + local HTTP server (`/health`, `/generate`) を実装済み。AWSドキュメントMCPで調査してから生成(調査失敗時のみ調査なしへフォールバック)。既定はOpenRouter（`nvidia/nemotron-3-ultra-550b-a55b:free`）で、`AGENT_MODEL_PROVIDER=bedrock` によりBedrockへ切り替え可。オブザーバビリティ（OTel/ADOT計装・Guardrailsグラウンディングゲート・AgentCore Evaluationsオンライン評価）も実装・ライブ確認済み（[ADR 0007](adr/0007-observability-stack.md)） |
 | `packages/shared` | TS型 + テーブル定義 | web/apiがimport | 実装済み |
 | DynamoDB | 4テーブル構成 | AWS / DynamoDB Local | テーブル定義確定。prod（`aws-mon-prod-*`）・localともTerraform適用済み |
-| 認証/認可 | 既存 Cognito User Pool + AWS-MON App Client | 別AWSアカウント / AWS | User Pool は共通。登録済みユーザーは `BANK` 出題可、Bedrock課金に到達する `GENERATE` / `MIXED` / 再生成は生成権限で制限。ローカルは `x-dev-user-id` devシムで代替（[ADR 0006](adr/0006-auth-cognito-cloud-only.md)） |
+| 認証/認可 | 既存 Cognito User Pool + AWS-MON App Client | 別AWSアカウント / AWS | User Pool は共通。登録済みユーザーは `BANK` 出題可、LLM呼び出しに到達する `GENERATE` / `MIXED` / 再生成は生成権限で制限。ローカルは `x-dev-user-id` devシムで代替（[ADR 0006](adr/0006-auth-cognito-cloud-only.md)） |
 | IaC | Terraform | — | `infra/envs/{local,prod}` |
 
-**ローカルとクラウドの差はほぼ認証のみ**（[ADR 0004](adr/0004-local-first-dev.md)）。`apps/api` はLWA前提で書かれているため、ローカルでは普通のNode Webサーバとして起動し、DynamoDB LocalとLocalStack（`ssm,secretsmanager,s3`のみ、`cognito-idp`は含まない）に接続する。Cognito は別AWSアカウントの既存 User Pool を参照し、AWS-MON 側 Terraform では新規作成しない。Bedrock/AgentCore Runtimeだけはローカルで再現せず、ロジックはローカル、観測は実AWS、と役割分担する。
+**ローカルとクラウドの差はほぼ認証のみ**（[ADR 0004](adr/0004-local-first-dev.md)）。`apps/api` はLWA前提で書かれているため、ローカルでは普通のNode Webサーバとして起動し、DynamoDB LocalとLocalStack（`ssm,secretsmanager,s3`のみ、`cognito-idp`は含まない）に接続する。Cognito は別AWSアカウントの既存 User Pool を参照し、AWS-MON 側 Terraform では新規作成しない。OpenRouterは外部APIを直接呼び、Bedrock/AgentCore Runtimeはローカルで再現しない。ロジックはローカル、観測は実環境、と役割分担する。
 
 ## リクエストフロー
 
@@ -117,7 +117,7 @@ sequenceDiagram
 - 回答判定は常にAPI側で行い、`correct`はクライアントへ返さない（answering DTO）。回答後のレスポンスのみ`correct`/`explanation`を含む（answered DTO）。
 - 不正解の回答は、同じTransactWrite内の`QUESTION#` Updateで自動的に復習リストへ入る（`reviewMarked=true` + `GSI1_ReviewList`キー設定。正解時は既存マークに触らない。解除は`PUT /reviews/:questionId`で手動）。
 - `/sessions/:id/answers` と `/sessions/:id/next` はどちらも `version`（楽観ロック）と `userId` 一致をDynamoDBの`ConditionExpression`で強制する。
-- job作成とsession更新は非トランザクション。`nextSessionQuestion`側の楽観ロックが競合すると作成済みjobが孤立し得る。BANKモードは読み取り専用のため実害なしだが、GENERATE/MIXEDの孤立jobは`/dev/jobs/run`にいずれ拾われて実行されるため、誰も使わない問題のためにBedrock課金が発生し得る（`apps/api/src/jobRepository.ts`のコメント参照）。
+- job作成とsession更新は非トランザクション。`nextSessionQuestion`側の楽観ロックが競合すると作成済みjobが孤立し得る。BANKモードは読み取り専用のため実害なしだが、GENERATE/MIXEDの孤立jobは`/dev/jobs/run`にいずれ拾われて実行されるため、誰も使わない問題のためにLLM呼び出しが発生し得る（`apps/api/src/jobRepository.ts`のコメント参照）。
 
 ### 2. 問題生成（API -> agent HTTP）
 
@@ -126,15 +126,15 @@ sequenceDiagram
     participant U as ユーザー/API利用者
     participant API as apps/api
     participant Agent as apps/agent (Strands)
-    participant Bedrock as Amazon Bedrock
+    participant LLM as OpenRouter（既定）/ Bedrock
     participant Q as AwsMonQuestions
     participant S as AwsMonSessions
     participant J as AwsMonGenerationJobs
 
     U->>API: POST /sessions {mode: "GENERATE"}
     API->>Agent: POST /generate {cert, domain, domainSelection}
-    Agent->>Bedrock: generate_quiz(cert, domain) 構造化出力
-    Bedrock-->>Agent: QuizItem{question, explanation}
+    Agent->>LLM: generate_quiz(cert, domain) 構造化出力
+    LLM-->>Agent: QuizItem{question, explanation}
     Agent-->>API: QuizItem + generation metadata
     API->>Q: contentHash重複チェック → ACTIVE保存
     API->>S: currentへ設定
@@ -153,6 +153,8 @@ sequenceDiagram
     participant J as AwsMonGenerationJobs
     participant Q as AwsMonQuestions
     participant S as AwsMonSessions
+    participant Agent as apps/agent
+    participant LLM as OpenRouter（既定）/ Bedrock
 
     Dev->>API: POST /dev/jobs/run {limit}
     API->>J: GSI1_Runnableから QUEUED/RETRY_WAIT を取得
@@ -164,7 +166,8 @@ sequenceDiagram
             API->>S: prefetch.jobId一致を条件にsession反映
         else GENERATE または MIXED bank不足
             API->>Agent: POST /generate
-            Agent->>Bedrock: generate_quiz()
+            Agent->>LLM: generate_quiz()
+            LLM-->>Agent: QuizItem
             Agent-->>API: QuizItem
             API->>Q: ACTIVE保存
             API->>J: state→SUCCEEDED, questionId保存
@@ -176,9 +179,9 @@ sequenceDiagram
     API-->>Dev: {processed, succeeded, retried, failed}
 ```
 
-`BANK` のPREFETCH jobは同一リクエスト内でinline実行される。`GENERATE/MIXED` は不要なBedrock呼び出しを避けるためQUEUEDのまま保存し、ローカルでは`/dev/jobs/run`で明示的に実行する。本番は EventBridge Scheduler（rate 1分）が worker Lambda（`apps/api/src/worker.ts`、同じ `runRunnableJobs`）を起動する（[ADR 0008](adr/0008-prod-deployment-shape.md)。`/dev/*` は本番では404）。
+`BANK` のPREFETCH jobは同一リクエスト内でinline実行される。`GENERATE/MIXED` は不要なLLM呼び出しを避けるためQUEUEDのまま保存し、ローカルでは`/dev/jobs/run`で明示的に実行する。本番は EventBridge Scheduler（rate 1分）が worker Lambda（`apps/api/src/worker.ts`、同じ `runRunnableJobs`）を起動する（[ADR 0008](adr/0008-prod-deployment-shape.md)。`/dev/*` は本番では404）。
 
-クラウドでは、`GENERATE` と `MIXED` の job 処理は Bedrock/LLM 課金につながるため、job 作成時だけでなく worker 実行時にも生成権限または信頼済み内部実行コンテキストを確認する。`BANK` job は保存済み問題の取得だけなので、登録済みユーザーであれば実行できる。
+クラウドでは、`GENERATE` と `MIXED` の job 処理は LLM利用につながるため、job 作成時だけでなく worker 実行時にも生成権限または信頼済み内部実行コンテキストを確認する。`BANK` job は保存済み問題の取得だけなので、登録済みユーザーであれば実行できる。
 
 ## データフローの原則（実装との対応）
 

@@ -68,6 +68,8 @@ locals {
   }
 
   agent_environment = {
+    AGENT_MODEL_PROVIDER            = var.agent_model_provider
+    OPENROUTER_API_KEY_PARAM        = "/app/aws-mon/prod/openrouter-api-key"
     BEDROCK_MODEL_ID                = var.bedrock_model_id
     AGENT_GUARDRAIL_ID              = data.aws_ssm_parameter.agent_guardrail_id.value
     AGENT_OBSERVABILITY_ENABLED     = "true"
@@ -532,6 +534,12 @@ data "aws_iam_policy_document" "agent_runtime" {
       "arn:${local.partition}:bedrock:${local.region}:${local.account_id}:inference-profile/*",
       "arn:${local.partition}:bedrock:${local.region}:${local.account_id}:application-inference-profile/*",
     ]
+  }
+
+  statement {
+    sid       = "OpenRouterApiKeyParameter"
+    actions   = ["ssm:GetParameter"]
+    resources = ["arn:${local.partition}:ssm:${local.region}:${local.account_id}:parameter/app/aws-mon/prod/openrouter-api-key"]
   }
 
   statement {
