@@ -267,7 +267,9 @@ def test_structured_quiz_with_retries_raises_quota_exhausted_without_retry(
         def __init__(self) -> None:
             self.structured_count = 0
 
-        def structured_output(self, output_model: type[QuizItem], prompt: str) -> QuizItem:
+        def structured_output(
+            self, output_model: type[QuizItem], prompt: str
+        ) -> QuizItem:
             self.structured_count += 1
             raise _FakeRateLimitError()
 
@@ -289,7 +291,9 @@ def test_generate_helper_raises_quota_exhausted_without_retry(
         def __init__(self, **kwargs: Any) -> None:
             self.calls = 0
 
-        def structured_output(self, output_model: type[QuizItem], prompt: str) -> QuizItem:
+        def structured_output(
+            self, output_model: type[QuizItem], prompt: str
+        ) -> QuizItem:
             self.calls += 1
             raise _FakeRateLimitError()
 
