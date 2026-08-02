@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import logging
 import sys
 from types import SimpleNamespace
 from typing import Any
@@ -62,6 +64,7 @@ class FakeAgent:
     def __init__(self, **kwargs: Any) -> None:
         self.research_count = 0
         self.structured_count = 0
+        self.structured_prompts: list[str] = []
         self.messages: list[Any] = []
         self.instances.append(self)
 
@@ -81,6 +84,7 @@ class FakeAgent:
 
     def structured_output(self, output_model: type[QuizItem], prompt: str) -> QuizItem:
         self.structured_count += 1
+        self.structured_prompts.append(prompt)
         result = self.structured_results.pop(0)
         if isinstance(result, Exception):
             raise result
@@ -147,7 +151,7 @@ def test_structured_output_retry_keeps_research_history(
 def test_structured_output_failure_does_not_fall_back_without_research(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fail_structured_output(prompt: str) -> None:
+    def fail_structured_output(prompt: str, cert: str | None = None) -> None:
         raise RuntimeError("structured output failed")
 
     monkeypatch.setattr(agent_module, "_docs_mcp_enabled", lambda: True)
@@ -342,3 +346,193 @@ def test_research_retry_kwargs_shortens_throttle_retries(
     monkeypatch.setenv("AGENT_MODEL_RETRY_ATTEMPTS", "2")
     kwargs = agent_module._research_retry_kwargs()
     assert kwargs["retry_strategy"]._max_attempts == 2
+
+
+# --- Phase 1-a: _gate_guard_content ------------------------------------------
+
+
+def test_gate_guard_content_excludes_correct_label_line() -> None:
+    item = _quiz_item()
+
+    content = agent_module._gate_guard_content(item)
+
+    assert "正解: " not in content
+
+
+def test_gate_guard_content_includes_correct_option_and_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("AGENT_GATE_INCLUDE_OVERVIEW", raising=False)
+    item = _quiz_item()
+
+    content = agent_module._gate_guard_content(item)
+
+    assert "A: 正解" in content
+    assert "正解の理由" in content
+    assert "概要" not in content
+
+
+def test_gate_guard_content_includes_overview_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AGENT_GATE_INCLUDE_OVERVIEW", "1")
+    item = _quiz_item()
+
+    content = agent_module._gate_guard_content(item)
+
+    assert "概要" in content
+
+
+# --- Phase 1-b: _tool_result_texts -------------------------------------------
+
+
+def test_tool_result_texts_prefers_read_documentation() -> None:
+    messages = [
+        {
+            "content": [
+                {
+                    "toolUse": {
+                        "toolUseId": "t1",
+                        "name": "search_documentation",
+                        "input": {},
+                    }
+                },
+                {
+                    "toolUse": {
+                        "toolUseId": "t2",
+                        "name": "read_documentation",
+                        "input": {},
+                    }
+                },
+            ]
+        },
+        {
+            "content": [
+                {
+                    "toolResult": {
+                        "toolUseId": "t1",
+                        "content": [{"text": "検索結果JSON(ノイズ)"}],
+                    }
+                },
+                {
+                    "toolResult": {
+                        "toolUseId": "t2",
+                        "content": [{"text": "ドキュメント原文"}],
+                    }
+                },
+            ]
+        },
+    ]
+
+    texts = agent_module._tool_result_texts(messages)
+
+    assert texts == ["ドキュメント原文"]
+
+
+def test_tool_result_texts_falls_back_when_no_read_documentation() -> None:
+    messages = [
+        {
+            "content": [
+                {
+                    "toolUse": {
+                        "toolUseId": "t1",
+                        "name": "search_documentation",
+                        "input": {},
+                    }
+                },
+            ]
+        },
+        {
+            "content": [
+                {
+                    "toolResult": {
+                        "toolUseId": "t1",
+                        "content": [{"text": "検索結果JSON"}],
+                    }
+                },
+            ]
+        },
+    ]
+
+    texts = agent_module._tool_result_texts(messages)
+
+    assert texts == ["検索結果JSON"]
+
+
+def test_tool_result_texts_without_tool_use_falls_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 既存のFakeAgent履歴(toolUseなし)は従来どおり全ツール結果へフォールバックする
+    client = _mock_research(monkeypatch)
+    FakeAgent.structured_results = [_quiz_item()]
+
+    item, source_texts = agent_module._generate_quiz_with_docs("問題生成プロンプト")
+
+    assert item.question.question == "設問"
+    assert source_texts == ["調査済みAWSドキュメント原文"]
+    assert client.enter_count == 1
+
+
+# --- Phase 2: ゲートブロック後のフィードバック付き再生成 ------------------------
+
+
+def test_gate_retry_uses_feedback_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    _mock_research(monkeypatch)
+    FakeAgent.structured_results = [_quiz_item("初回"), _quiz_item("再生成")]
+    gates = iter(
+        [
+            GateResult(status="failed", detail="grounding=0.1"),
+            GateResult(status="passed"),
+        ]
+    )
+    monkeypatch.setattr(agent_module, "gate_enabled", lambda: True)
+    monkeypatch.setattr(agent_module, "gate_retries", lambda: 1)
+    monkeypatch.setattr(agent_module, "check_grounding", lambda **kwargs: next(gates))
+
+    agent_module._generate_quiz_with_docs_and_gate("問題生成プロンプト")
+
+    assert FakeAgent.instances[0].structured_prompts == [
+        agent_module.QUIZ_FROM_RESEARCH_PROMPT,
+        agent_module.QUIZ_REGENERATE_FEEDBACK_PROMPT,
+    ]
+
+
+# --- Phase 0-a: 構造化ログ ----------------------------------------------------
+
+
+def test_generate_quiz_with_docs_and_gate_logs_passed_result(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _mock_research(monkeypatch)
+    FakeAgent.structured_results = [_quiz_item()]
+    monkeypatch.setattr(agent_module, "gate_enabled", lambda: True)
+    monkeypatch.setattr(agent_module, "gate_retries", lambda: 1)
+    monkeypatch.setattr(
+        agent_module,
+        "check_grounding",
+        lambda **kwargs: GateResult(
+            status="passed", grounding_score=0.9, relevance_score=0.8
+        ),
+    )
+
+    with caplog.at_level(logging.INFO, logger="quiz_agent.agent"):
+        result = agent_module._generate_quiz_with_docs_and_gate(
+            "問題生成プロンプト", cert="aip"
+        )
+
+    assert result.gate.status == "passed"
+    gate_logs = [
+        json.loads(r.getMessage())
+        for r in caplog.records
+        if r.getMessage().startswith("{") and '"grounding_gate"' in r.getMessage()
+    ]
+    assert len(gate_logs) == 1
+    assert gate_logs[0] == {
+        "event": "grounding_gate",
+        "status": "passed",
+        "grounding": 0.9,
+        "relevance": 0.8,
+        "attempt": 1,
+        "attempts": 2,
+        "cert": "aip",
+    }

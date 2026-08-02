@@ -98,6 +98,7 @@ python3 -m quiz_agent.server
 | `quiz_agent/model_config.py` | モデルプロバイダ（bedrock / openrouter）とモデルIDの解決 |
 | `quiz_agent/openrouter_model.py` | OpenRouter用モデル（ツール呼び出しベースの `structured_output`） |
 | `quiz_agent/guardrail.py` | Guardrails文脈的グラウンディングチェック（インライン品質ゲート） |
+| `quiz_agent/gate_metrics.py` | ゲート評価結果のCloudWatch EMFメトリクス出力（`AWSMon/Agent`名前空間） |
 | `quiz_agent/server.py` | APIから呼ぶローカルHTTPサーバ（`/health`, `/generate`） |
 | `quiz_agent/runtime.py` | AgentCore Runtime用HTTPエントリポイント（`POST /invocations`, `GET /ping`。本番はこちらで起動） |
 | `quiz_agent/grading.py` | 正誤判定ユーティリティ |
@@ -106,6 +107,7 @@ python3 -m quiz_agent.server
 | `scripts/setup_observability.sh` | Transaction Search有効化＋ロググループ作成（一度きり） |
 | `scripts/run_server_otel.sh` | OTel(ADOT)計装つきでサーバ起動 |
 | `scripts/create_guardrail.py` | グラウンディングチェック用ガードレール作成（一度きり） |
+| `scripts/sample_gate_scores.py` | ゲートのグラウンディング/関連度スコア分布を採取するバッチ実行（しきい値再設定の材料集め） |
 | `scripts/setup_evaluations.py` | AgentCore Evaluations オンライン評価の設定作成（一度きり） |
 
 > 出力フォーマットは**構造化出力（Pydanticスキーマ）で保証**しているため、
@@ -163,10 +165,51 @@ python scripts/create_guardrail.py
 ```
 
 - ブロック時は調査済み会話履歴を使って構造化出力だけを再生成
-  （`AGENT_GUARDRAIL_RETRIES`、既定1回）。通らなければ生成失敗(422 `grounding_blocked`)
+  （`AGENT_GUARDRAIL_RETRIES`、既定1回）。再生成時はゲートで弾かれた旨と
+  「原文からの英語引用を増やし、根拠のない主張を削る」フィードバックを含むプロンプト
+  （`QUIZ_REGENERATE_FEEDBACK_PROMPT`）で作り直す。それでも通らなければ生成失敗
+  (422 `grounding_blocked`)
 - `AGENT_GUARDRAIL_ENFORCE=0` でレポートのみ（しきい値チューニング用）
 - MCP調査なし生成やガードレール自体の障害時は判定なし（fail-open、`inlineGate=not_run`）
 - 結果は `/generate` レスポンスの `quality.inlineGate` / `quality.score` としてAPI側に保存される
+
+### ゲート入力の整形（issue #63）
+
+- `grounding_source`（調査原文）は会話履歴の `read_documentation` ツール結果だけに絞る
+  （`search_documentation` の検索結果一覧JSONはドキュメント原文ではなくノイズになるため除外）。
+  `read_documentation` を1回も呼んでいない場合のみ、判定不能に退化しないよう全ツール結果へフォールバックする
+- `guard_content`（ゲート対象テキスト）から「正解: A, D」のようなラベル行を削除した
+  （ドキュメント原文に存在しえない文字列で常に減点要因になっていたため）。既定は
+  正解選択肢の本文 + `explanation.correct_reason`。`AGENT_GATE_INCLUDE_OVERVIEW=1`
+  で `explanation.overview` も含める（スコア分布のA/B比較用、既定は含めない）
+- `QUIZ_FROM_RESEARCH_PROMPT` / 再生成プロンプトの両方で、`correct_reason` に
+  調査で読んだAWS公式ドキュメント原文からの短い英語引用（1〜2文、引用符で括る）を
+  含めるよう指示する（日本語解説と英語原文のクロスリンガル減点を緩和するため）
+
+### ゲートスコアの記録・分布計測（issue #63）
+
+`check_grounding` の評価結果は合否・not_run問わず毎回、構造化ログ
+（`{"event": "grounding_gate", "status": ..., "grounding": ..., "relevance": ..., "attempt": ..., "attempts": ..., "cert": ...}`）
+と CloudWatch EMF形式のメトリクス（`quiz_agent/gate_metrics.py`、名前空間 `AWSMon/Agent`、
+ディメンション `Status`、メトリクス `GroundingScore` / `RelevanceScore`）の両方で記録する。
+AgentCore Runtime のコンテナログは CloudWatch Logs に入るため、EMFログは追加設定なしで
+自動的にカスタムメトリクス化される。
+
+- `AGENT_GATE_METRICS=0` でEMFメトリクス出力を無効化（構造化ログ自体は出続ける）
+
+しきい値の再設定を検討する際は、まず実測分布を集める:
+
+```bash
+# レポートモード(AGENT_GUARDRAIL_ENFORCE=0)固定でN回生成し、スコア分布を表示
+python scripts/sample_gate_scores.py --n 20 --cert aip
+python scripts/sample_gate_scores.py --n 30 --cert aip --domain d1 --sleep 5 --out scores.jsonl
+```
+
+status別件数、grounding/relevanceスコアの mean・median・p25・p75、
+しきい値候補（0.5〜0.7）ごとの通過率を表示する。3回連続失敗で中断する
+（OpenRouter無料枠等の日次枠を無駄撃ちしないため）。
+`create_guardrail.py` のしきい値既定値変更・ガードレールのバージョン発行は、
+この分布計測を踏まえた後続作業として別途行う（今回は未実施）。
 
 ## AgentCore Evaluations（フェーズ3-2）
 

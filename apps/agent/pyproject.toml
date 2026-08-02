@@ -1,6 +1,7 @@
 [tool.pytest.ini_options]
-# tests/ から quiz_agent パッケージ(リポジトリ非インストール)をimportするため
-pythonpath = ["."]
+# tests/ から quiz_agent パッケージ(リポジトリ非インストール)、および
+# scripts/ の各スクリプト(sample_gate_scores.py の summarize 等)をimportするため
+pythonpath = [".", "scripts"]
 testpaths = ["tests"]
 
 [tool.ruff]

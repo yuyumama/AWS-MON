@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shlex
@@ -22,6 +23,7 @@ from strands.models import BedrockModel, CacheConfig
 from strands.models.model import Model
 from strands.tools.mcp import MCPClient
 
+from .gate_metrics import emit_gate_metrics
 from .guardrail import (
     GateResult,
     GroundingBlockedError,
@@ -33,6 +35,7 @@ from .guardrail import (
 from .model_config import model_id, model_provider, openrouter_base_url
 from .prompts import (
     QUIZ_FROM_RESEARCH_PROMPT,
+    QUIZ_REGENERATE_FEEDBACK_PROMPT,
     QUIZ_SYSTEM_PROMPT,
     build_docs_research_prompt,
     build_quiz_prompt,
@@ -218,9 +221,29 @@ def _docs_mcp_client() -> MCPClient:
 def _tool_result_texts(messages: list[Any]) -> list[str]:
     """会話履歴からMCPツール結果のテキスト(ドキュメント原文)を抜き出す。
 
-    グラウンディングチェックの grounding_source として使う。
+    グラウンディングチェックの grounding_source として使う。search_documentation の
+    結果(検索結果一覧のJSON)はドキュメント原文ではなくノイズになるため、
+    toolUse(toolUseId -> ツール名)を手がかりに read_documentation の結果だけに絞る。
+    read_documentation の結果が1件も無い場合(検索しかしなかった等)は、
+    grounding_source が空になってゲートが not_run に退化しないよう、
+    従来どおり全ツール結果へフォールバックする。
     """
-    texts: list[str] = []
+    tool_names: dict[str, str] = {}
+    for message in messages:
+        content = message.get("content") if isinstance(message, dict) else None
+        for block in content or []:
+            if not isinstance(block, dict):
+                continue
+            tool_use = block.get("toolUse")
+            if not isinstance(tool_use, dict):
+                continue
+            tool_use_id = tool_use.get("toolUseId")
+            name = tool_use.get("name")
+            if isinstance(tool_use_id, str) and isinstance(name, str):
+                tool_names[tool_use_id] = name
+
+    all_texts: list[str] = []
+    read_doc_texts: list[str] = []
     for message in messages:
         content = message.get("content") if isinstance(message, dict) else None
         for block in content or []:
@@ -229,11 +252,17 @@ def _tool_result_texts(messages: list[Any]) -> list[str]:
             tool_result = block.get("toolResult")
             if not isinstance(tool_result, dict):
                 continue
-            for part in tool_result.get("content") or []:
-                text = part.get("text") if isinstance(part, dict) else None
-                if isinstance(text, str) and text:
-                    texts.append(text)
-    return texts
+            texts = [
+                part.get("text")
+                for part in tool_result.get("content") or []
+                if isinstance(part, dict) and isinstance(part.get("text"), str)
+            ]
+            texts = [t for t in texts if t]
+            all_texts.extend(texts)
+            if tool_names.get(tool_result.get("toolUseId")) == "read_documentation":
+                read_doc_texts.extend(texts)
+
+    return read_doc_texts if read_doc_texts else all_texts
 
 
 def _research_retry_kwargs() -> dict[str, Any]:
@@ -288,12 +317,18 @@ def _researched_agent(quiz_prompt: str) -> Iterator[tuple[Agent, list[str]]]:
         raise
 
 
-def _structured_quiz_with_retries(agent: Agent, retries: int = 2) -> QuizItem:
-    """調査済みの同一Agentで構造化出力だけを再試行する。"""
+def _structured_quiz_with_retries(
+    agent: Agent, prompt: str = QUIZ_FROM_RESEARCH_PROMPT, retries: int = 2
+) -> QuizItem:
+    """調査済みの同一Agentで構造化出力だけを再試行する。
+
+    prompt: 通常は初回生成用(QUIZ_FROM_RESEARCH_PROMPT)。ゲートブロック後の
+    再生成では QUIZ_REGENERATE_FEEDBACK_PROMPT を渡す(フェーズ2)。
+    """
     last_err: Exception | None = None
     for attempt in range(retries + 1):
         try:
-            return agent.structured_output(QuizItem, QUIZ_FROM_RESEARCH_PROMPT)
+            return agent.structured_output(QuizItem, prompt)
         except Exception as e:  # noqa: BLE001 - モデル/検証失敗をまとめて扱う
             if _is_rate_limit(e):
                 raise QuotaExhaustedError(
@@ -324,23 +359,69 @@ def _gate_query(item: QuizItem) -> str:
     return item.question.question
 
 
-def _gate_guard_content(item: QuizItem) -> str:
-    """ゲート対象のテキスト = 正解の選択肢 + 解説(根拠の主張部分)。"""
-    option_text = {o.label: o.text for o in item.question.options}
-    lines = [f"正解: {', '.join(item.question.correct)}"]
-    lines.extend(
-        f"{label}: {option_text.get(label, '')}" for label in item.question.correct
+def _gate_include_overview() -> bool:
+    return os.environ.get("AGENT_GATE_INCLUDE_OVERVIEW", "0").lower() not in (
+        "0",
+        "false",
+        "off",
     )
-    lines.append(item.explanation.overview)
+
+
+def _gate_guard_content(item: QuizItem) -> str:
+    """ゲート対象のテキスト = 正解の選択肢本文 + 正解の根拠(correct_reason)。
+
+    「正解: A, D」のようなラベル行はドキュメント原文に存在しえず常に減点要因になるため
+    含めない。overview は既定では含めず、AGENT_GATE_INCLUDE_OVERVIEW=1 のときだけ
+    含める(スコア分布でのA/B比較用)。
+    """
+    option_text = {o.label: o.text for o in item.question.options}
+    lines = [
+        f"{label}: {option_text.get(label, '')}" for label in item.question.correct
+    ]
+    if _gate_include_overview():
+        lines.append(item.explanation.overview)
     lines.append(item.explanation.correct_reason)
     return "\n".join(lines)
 
 
-def _generate_quiz_with_docs_and_gate(quiz_prompt: str) -> GenerationResult:
+def _log_gate_result(
+    gate: GateResult, attempt: int, attempts: int, cert: str | None
+) -> None:
+    """ゲート評価結果を構造化ログ+EMFメトリクスで記録する(合否・not_run問わず毎回)。
+
+    prod実測の初回通過率を継続的に把握するための計測(フェーズ0-a)。
+    """
+    logger.info(
+        json.dumps(
+            {
+                "event": "grounding_gate",
+                "status": gate.status,
+                "grounding": gate.grounding_score,
+                "relevance": gate.relevance_score,
+                "attempt": attempt,
+                "attempts": attempts,
+                "cert": cert,
+            },
+            ensure_ascii=False,
+        )
+    )
+    emit_gate_metrics(
+        status=gate.status,
+        grounding=gate.grounding_score,
+        relevance=gate.relevance_score,
+        cert=cert,
+    )
+
+
+def _generate_quiz_with_docs_and_gate(
+    quiz_prompt: str, cert: str | None = None
+) -> GenerationResult:
     """MCP調査つき生成 + Guardrailsグラウンディングチェック(有効時)。
 
     ブロックされたら再生成し、それでも通らなければ enforce 設定に応じて
     エラー(弾く)か、failed のまま返す(レポートのみ)。
+
+    cert: ログ・メトリクス記録用(任意)。generate_quiz から渡される。
     """
     gate_is_enabled = gate_enabled()
     attempts = (gate_retries() + 1) if gate_is_enabled else 1
@@ -363,6 +444,7 @@ def _generate_quiz_with_docs_and_gate(quiz_prompt: str) -> GenerationResult:
                 query=_gate_query(item),
                 guard_content=_gate_guard_content(item),
             )
+            _log_gate_result(gate, attempt=attempt + 1, attempts=attempts, cert=cert)
             if gate.status != "failed":
                 return GenerationResult(item=item, gate=gate)
 
@@ -374,8 +456,10 @@ def _generate_quiz_with_docs_and_gate(quiz_prompt: str) -> GenerationResult:
                 gate.detail,
             )
             if attempt < attempts - 1:
-                # 調査済み会話履歴と原文を再利用し、構造化出力だけやり直す。
-                item = _structured_quiz_with_retries(agent)
+                # 調査済み会話履歴と原文を再利用し、フィードバック付きで構造化出力だけやり直す。
+                item = _structured_quiz_with_retries(
+                    agent, prompt=QUIZ_REGENERATE_FEEDBACK_PROMPT
+                )
 
     assert last is not None
     if gate_enforced():
@@ -397,7 +481,7 @@ def generate_quiz(cert: str, domain: str | None = None) -> GenerationResult:
 
     if _docs_mcp_enabled():
         try:
-            return _generate_quiz_with_docs_and_gate(quiz_prompt)
+            return _generate_quiz_with_docs_and_gate(quiz_prompt, cert=cert)
         except GroundingBlockedError:
             raise
         except QuotaExhaustedError:
