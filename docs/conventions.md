@@ -7,7 +7,7 @@ AWS-MON/
 ├─ apps/            動くもの（機能追加は基本ここ）
 │  ├─ web/          フロント（Vite+React+TS）
 │  ├─ api/          ビジネスロジックAPI（Hono+LWA, TS）
-│  └─ agent/        問題生成エージェント（Strands+Bedrock, Python）
+│  └─ agent/        問題生成エージェント（Strands+OpenRouter/Bedrock, Python）
 ├─ packages/
 │  └─ shared/       web⇄api⇄seed 共有のTS型・テーブル定義（@aws-mon/shared）
 ├─ infra/           Terraform（modules/ と envs/{local,prod}）
@@ -32,7 +32,7 @@ AWS-MON/
   - web⇄api で共有するデータ形（DTO・enum）とDynamoDBテーブル定義は `packages/shared`（`@aws-mon/shared`）に置く。`apps/api` は shared のビルド出力（`dist/`）に依存するため、shared を変更したら先に `npm run build -w @aws-mon/shared`。
 - **Python（agent）**
   - **構造化出力（Pydantic）**を使い、モデル出力のJSONパース・正規化はしない。
-  - 環境変数は `python-dotenv`（`.env`）で読む。既定モデルは `us.anthropic.claude-haiku-4-5-20251001-v1:0`（`BEDROCK_MODEL_ID` で差し替え可能。実装の正は `apps/agent/quiz_agent/agent.py` の `DEFAULT_MODEL_ID`）。
+  - 環境変数は `python-dotenv`（`.env`）で読む。既定はOpenRouterの `nvidia/nemotron-3-ultra-550b-a55b:free`。`AGENT_MODEL_PROVIDER=bedrock` でBedrockへ切り替え可能。
 
 ## 命名・スタイル
 
@@ -49,5 +49,5 @@ AWS-MON/
 
 - **ローカル**: `.env`（各appの `.env.example` をコピー）。
 - **クラウド**: **SSM Parameter Store(SecureString) を既定**。ローテーションが要るもの（外部APIトークン等）だけ Secrets Manager。
-- BedrockはクラウドではIAMロールで呼ぶのでAPIキー不要。
+- OpenRouterのprodキーはSSM SecureStringからRuntimeが取得する。BedrockはIAMロールで呼ぶのでAPIキー不要。
 - **tfstate に平文の秘密を書かない**。SSM/Secretsは別作成しARN参照＋`sensitive`。stateは暗号化バックエンドへ。

@@ -1,7 +1,6 @@
 """Strands による問題・解説の生成と評価（構造化出力）。
 
-モデルは AGENT_MODEL_PROVIDER で Bedrock（既定）と OpenRouter を切り替える。
-OpenRouter は無料枠のリクエストクレジット制のため、枯渇時は Bedrock に戻して運用する。
+モデルは AGENT_MODEL_PROVIDER で OpenRouter（既定）と Bedrock を切り替える。
 """
 
 from __future__ import annotations
@@ -11,6 +10,8 @@ import os
 import shlex
 import sys
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, TypeVar
 
@@ -56,16 +57,45 @@ def _openrouter_model() -> Model:
     # openai extra 未導入の環境でも bedrock 経路が壊れないよう遅延importする
     from .openrouter_model import ToolCallStructuredOutputModel
 
-    api_key = os.environ.get("OPENROUTER_API_KEY", "")
-    if not api_key:
-        raise RuntimeError(
-            "AGENT_MODEL_PROVIDER=openrouter には OPENROUTER_API_KEY の設定が必要です"
-        )
+    api_key = _openrouter_api_key()
     # OpenRouterにはプロンプトキャッシュ設定(CacheConfig)を渡さない(Bedrock固有)。
     return ToolCallStructuredOutputModel(
         client_args={"api_key": api_key, "base_url": openrouter_base_url()},
         model_id=model_id(),
     )
+
+
+def _openrouter_api_key() -> str:
+    """環境変数を優先し、未設定ならSSM SecureStringからAPIキーを取得する。"""
+    api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    if api_key:
+        return api_key
+
+    parameter_name = os.environ.get("OPENROUTER_API_KEY_PARAM", "").strip()
+    if not parameter_name:
+        raise RuntimeError(
+            "OpenRouter APIキーが未設定です。OPENROUTER_API_KEY または "
+            "OPENROUTER_API_KEY_PARAM を設定してください"
+        )
+
+    try:
+        import boto3
+
+        response = boto3.client(
+            "ssm", region_name=os.environ.get("AWS_REGION", "us-east-1")
+        ).get_parameter(Name=parameter_name, WithDecryption=True)
+        api_key = response["Parameter"]["Value"].strip()
+    except Exception as e:  # noqa: BLE001 - 取得失敗時は生成を止める
+        raise RuntimeError(
+            f"SSM Parameter StoreからOpenRouter APIキーを取得できませんでした: "
+            f"{parameter_name}"
+        ) from e
+
+    if not api_key:
+        raise RuntimeError(
+            f"SSM Parameter StoreのOpenRouter APIキーが空です: {parameter_name}"
+        )
+    return api_key
 
 
 def _model() -> Model:
@@ -100,6 +130,10 @@ def _generate(
 # 生成前に search_documentation / read_documentation で最新の公式ドキュメントを
 # 調査させてから出題する。MCPサーバーの起動・調査に失敗した場合は、生成自体を
 # 止めないよう従来のドキュメントなし生成にフォールバックする。
+
+
+class DocsResearchError(RuntimeError):
+    """MCPサーバーの起動またはドキュメント調査に失敗した。"""
 
 
 def _docs_mcp_enabled() -> bool:
@@ -148,19 +182,52 @@ def _tool_result_texts(messages: list[Any]) -> list[str]:
     return texts
 
 
+@contextmanager
+def _researched_agent(quiz_prompt: str) -> Iterator[tuple[Agent, list[str]]]:
+    """MCPクライアントを維持したまま、調査済みAgentと原文を提供する。"""
+    # APIキー解決を含むモデル生成の失敗は調査失敗(フォールバック対象)にせず即エラーにする
+    model = _model()
+    phase = "research"
+    try:
+        client = _docs_mcp_client()
+        with client:
+            agent = Agent(
+                model=model,
+                system_prompt=QUIZ_SYSTEM_PROMPT,
+                tools=client.list_tools_sync(),
+            )
+            agent(build_docs_research_prompt(quiz_prompt))
+            source_texts = _tool_result_texts(agent.messages)
+            phase = "generation"
+            yield agent, source_texts
+    except DocsResearchError:
+        raise
+    except Exception as e:
+        if phase == "research":
+            raise DocsResearchError(
+                f"AWSドキュメントMCPでの調査に失敗しました: {e}"
+            ) from e
+        raise
+
+
+def _structured_quiz_with_retries(agent: Agent, retries: int = 2) -> QuizItem:
+    """調査済みの同一Agentで構造化出力だけを再試行する。"""
+    last_err: Exception | None = None
+    for attempt in range(retries + 1):
+        try:
+            return agent.structured_output(QuizItem, QUIZ_FROM_RESEARCH_PROMPT)
+        except Exception as e:  # noqa: BLE001 - モデル/検証失敗をまとめて扱う
+            last_err = e
+            if attempt < retries:
+                time.sleep(0.8 * (attempt + 1))
+    raise RuntimeError(f"QuizItem の構造化出力に失敗しました: {last_err}") from last_err
+
+
 def _generate_quiz_with_docs(quiz_prompt: str) -> tuple[QuizItem, list[str]]:
     """MCP調査つき生成。生成結果と、調査で得たドキュメント原文を返す。"""
-    client = _docs_mcp_client()
-    with client:
-        agent = Agent(
-            model=_model(),
-            system_prompt=QUIZ_SYSTEM_PROMPT,
-            tools=client.list_tools_sync(),
-        )
-        # 1ターン目: ドキュメント調査(ツール使用)。2ターン目: 会話履歴を踏まえた構造化出力。
-        agent(build_docs_research_prompt(quiz_prompt))
-        item = agent.structured_output(QuizItem, QUIZ_FROM_RESEARCH_PROMPT)
-        return item, _tool_result_texts(agent.messages)
+    with _researched_agent(quiz_prompt) as (agent, source_texts):
+        item = _structured_quiz_with_retries(agent)
+        return item, source_texts
 
 
 @dataclass
@@ -193,35 +260,40 @@ def _generate_quiz_with_docs_and_gate(quiz_prompt: str) -> GenerationResult:
     ブロックされたら再生成し、それでも通らなければ enforce 設定に応じて
     エラー(弾く)か、failed のまま返す(レポートのみ)。
     """
-    attempts = (gate_retries() + 1) if gate_enabled() else 1
+    gate_is_enabled = gate_enabled()
+    attempts = (gate_retries() + 1) if gate_is_enabled else 1
     last: GenerationResult | None = None
 
-    for attempt in range(attempts):
-        item, source_texts = _generate_quiz_with_docs(quiz_prompt)
-        if not gate_enabled():
-            return GenerationResult(item=item)
-        if not source_texts:
-            # 調査ターンでツールが使われなかった場合は根拠が無いので判定不能
-            return GenerationResult(
-                item=item,
-                gate=GateResult(status="not_run", detail="no research documents"),
+    with _researched_agent(quiz_prompt) as (agent, source_texts):
+        item = _structured_quiz_with_retries(agent)
+        for attempt in range(attempts):
+            if not gate_is_enabled:
+                return GenerationResult(item=item)
+            if not source_texts:
+                # 調査ターンでツールが使われなかった場合は根拠が無いので判定不能
+                return GenerationResult(
+                    item=item,
+                    gate=GateResult(status="not_run", detail="no research documents"),
+                )
+
+            gate = check_grounding(
+                grounding_source="\n\n".join(source_texts),
+                query=_gate_query(item),
+                guard_content=_gate_guard_content(item),
             )
+            if gate.status != "failed":
+                return GenerationResult(item=item, gate=gate)
 
-        gate = check_grounding(
-            grounding_source="\n\n".join(source_texts),
-            query=_gate_query(item),
-            guard_content=_gate_guard_content(item),
-        )
-        if gate.status != "failed":
-            return GenerationResult(item=item, gate=gate)
-
-        last = GenerationResult(item=item, gate=gate)
-        logger.warning(
-            "グラウンディングチェックでブロックされました (%d/%d回目, %s)",
-            attempt + 1,
-            attempts,
-            gate.detail,
-        )
+            last = GenerationResult(item=item, gate=gate)
+            logger.warning(
+                "グラウンディングチェックでブロックされました (%d/%d回目, %s)",
+                attempt + 1,
+                attempts,
+                gate.detail,
+            )
+            if attempt < attempts - 1:
+                # 調査済み会話履歴と原文を再利用し、構造化出力だけやり直す。
+                item = _structured_quiz_with_retries(agent)
 
     assert last is not None
     if gate_enforced():
@@ -246,9 +318,9 @@ def generate_quiz(cert: str, domain: str | None = None) -> GenerationResult:
             return _generate_quiz_with_docs_and_gate(quiz_prompt)
         except GroundingBlockedError:
             raise
-        except Exception:  # noqa: BLE001 - MCP起動/調査失敗は生成なしにフォールバック
+        except DocsResearchError:
             logger.warning(
-                "AWSドキュメントMCPでの生成に失敗したため、ドキュメントなし生成へフォールバックします",
+                "AWSドキュメントMCPでの調査に失敗したため、ドキュメントなし生成へフォールバックします",
                 exc_info=True,
             )
 

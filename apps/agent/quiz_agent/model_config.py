@@ -1,7 +1,7 @@
 """モデルプロバイダ設定（環境変数）の解決。
 
 strands 等の重い依存を持たないため、stubモードの server.py からも安全にimportできる。
-プロバイダは AGENT_MODEL_PROVIDER で切り替える（bedrock が既定・フォールバック）。
+プロバイダは AGENT_MODEL_PROVIDER で切り替える（openrouter が既定）。
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 
 def model_provider() -> str:
-    return os.environ.get("AGENT_MODEL_PROVIDER", "bedrock").strip().lower()
+    return os.environ.get("AGENT_MODEL_PROVIDER", "openrouter").strip().lower()
 
 
 def model_id() -> str:

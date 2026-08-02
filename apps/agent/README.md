@@ -2,7 +2,8 @@
 
 Strands Agents で、AWS認定試験の模擬問題・解説を生成する。
 プロトタイプ `aws-quiz-v2.tsx` のプロンプト資産を Python に移植したもの。
-生成モデルは `AGENT_MODEL_PROVIDER` で **Amazon Bedrock（既定）/ OpenRouter** を切り替えられる。
+生成モデルは **OpenRouter（既定）**。`AGENT_MODEL_PROVIDER=bedrock` を明示すると
+Amazon Bedrockへ切り替えられる。
 
 本番は **AgentCore Runtime で稼働中**（2026-07-06デプロイ。[ADR 0008](../../docs/adr/0008-prod-deployment-shape.md)、
 デプロイ経路は `deploy-agent` ワークフロー → [docs/cicd.md](../../docs/cicd.md)）。
@@ -24,7 +25,11 @@ cp .env.example .env   # 中身を自分の環境に合わせて編集
 
 ## 認証（ローカル）
 
-Bedrock を呼ぶには、以下のいずれかが必要:
+既定のOpenRouterを呼ぶには、`.env` に `OPENROUTER_API_KEY` を設定する。
+本番Runtimeは `OPENROUTER_API_KEY_PARAM=/app/aws-mon/prod/openrouter-api-key` を使い、
+オーナーが手動作成したSSM Parameter StoreのSecureStringから実行時に取得する。
+
+`AGENT_MODEL_PROVIDER=bedrock` でBedrockを使う場合は、以下のいずれかが必要:
 
 - **AWS認証情報**: `aws configure` 済み、または `.env` の `AWS_PROFILE`
 - **Bedrock APIキー**: `.env` の `AWS_BEARER_TOKEN_BEDROCK`
@@ -32,14 +37,14 @@ Bedrock を呼ぶには、以下のいずれかが必要:
 加えて、使うリージョンで対象モデルへの **Bedrockモデルアクセス** を有効化しておくこと
 （AWSコンソール → Bedrock → Model access）。
 
-> モデルIDはリージョンやクロスリージョン推論プロファイルにより異なる。
-> 既定は `us.anthropic.claude-haiku-4-5-20251001-v1:0`。動かない場合は `.env` の `BEDROCK_MODEL_ID` を
+> BedrockのモデルIDはリージョンやクロスリージョン推論プロファイルにより異なる。
+> Bedrock選択時の既定は `us.anthropic.claude-haiku-4-5-20251001-v1:0`。動かない場合は `.env` の `BEDROCK_MODEL_ID` を
 > 自分のアカウントで有効なIDに変更する。
 
-## モデルプロバイダ切り替え（OpenRouter）
+## モデルプロバイダ切り替え
 
-`.env` に以下を設定すると、生成モデルを OpenRouter の無料モデルに切り替えられる
-（無料枠: 20リクエスト/分・50リクエスト/日。詳細は `.env.example` 参照）:
+OpenRouterの無料モデルが既定
+（無料枠: 20リクエスト/分・50リクエスト/日。詳細は `.env.example` 参照）。
 
 ```bash
 AGENT_MODEL_PROVIDER=openrouter
@@ -53,7 +58,7 @@ OPENROUTER_API_KEY=sk-or-v1-xxxx
 - Guardrails グラウンディングチェック（`ApplyGuardrail`）は生成モデルと独立したAWS APIのため、
   OpenRouter 利用時も **AWS認証は引き続き必要**
 - Bedrockプロンプトキャッシュ（`CacheConfig`）は OpenRouter 経路では使わない
-- 無料枠が枯渇したら `AGENT_MODEL_PROVIDER` を外して（= `bedrock`）従来動作に戻す
+- Bedrockへ切り替える場合は `AGENT_MODEL_PROVIDER=bedrock` を明示する
 
 ## 実行
 
@@ -111,10 +116,10 @@ python3 -m quiz_agent.server
 - `AGENT_DOCS_MCP=0` で無効化（従来どおり調査なしで生成）
 - MCPサーバーの起動や調査に失敗した場合は、生成を止めず**調査なし生成へ自動フォールバック**する
 - 起動コマンドは `AGENT_DOCS_MCP_COMMAND` で差し替え可（例: `uvx awslabs.aws-documentation-mcp-server@latest`）
-- ツール呼び出しが増えるぶん、1問あたりのBedrockトークン消費と生成時間は増える。
-  緩和策として、エージェントループで再送されるドキュメント原文はBedrockプロンプトキャッシュ
-  （`CacheConfig(strategy="auto")`、読み取り約0.1倍）でコストを抑え、調査量もプロンプトで
-  1サービス・`read_documentation` 最大2回に制限している
+- ツール呼び出しが増えるぶん、1問あたりのLLMトークン消費と生成時間は増える。
+  調査量はプロンプトで1サービス・`read_documentation` 最大2回に制限している。
+  Bedrock選択時は、エージェントループで再送されるドキュメント原文をプロンプトキャッシュ
+  （`CacheConfig(strategy="auto")`、読み取り約0.1倍）でコストを抑える
 
 ## オブザーバビリティ（フェーズ3-1、実装リファレンスは [docs/observability.md](../../docs/observability.md)、意思決定は ADR 0007）
 
@@ -147,7 +152,8 @@ python scripts/create_guardrail.py
 # AGENT_GUARDRAIL_ID=xxxxxxxx
 ```
 
-- ブロック時は再生成（`AGENT_GUARDRAIL_RETRIES`、既定1回）。通らなければ生成失敗(422 `grounding_blocked`)
+- ブロック時は調査済み会話履歴を使って構造化出力だけを再生成
+  （`AGENT_GUARDRAIL_RETRIES`、既定1回）。通らなければ生成失敗(422 `grounding_blocked`)
 - `AGENT_GUARDRAIL_ENFORCE=0` でレポートのみ（しきい値チューニング用）
 - MCP調査なし生成やガードレール自体の障害時は判定なし（fail-open、`inlineGate=not_run`）
 - 結果は `/generate` レスポンスの `quality.inlineGate` / `quality.score` としてAPI側に保存される

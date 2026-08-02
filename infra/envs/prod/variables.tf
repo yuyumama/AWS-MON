@@ -15,3 +15,14 @@ variable "bedrock_model_id" {
   type        = string
   default     = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 }
+
+variable "agent_model_provider" {
+  description = "Model provider used by the AgentCore Runtime."
+  type        = string
+  default     = "openrouter"
+
+  validation {
+    condition     = contains(["bedrock", "openrouter"], var.agent_model_provider)
+    error_message = "agent_model_provider must be either bedrock or openrouter."
+  }
+}
