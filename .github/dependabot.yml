@@ -14,6 +14,10 @@ updates:
     directory: /apps/agent
     schedule:
       interval: weekly
+    ignore:
+      # strands-agents が mcp<2.0.0 を要求するため major 更新は入れられない(#58で衝突)
+      - dependency-name: "mcp"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /
