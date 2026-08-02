@@ -20,12 +20,14 @@ except ModuleNotFoundError:
 
 
 from .guardrail import GroundingBlockedError
+from .log_filters import suppress_duplicate_strands_warnings
 from .server import (
     _as_json_bytes,
     _parse_body,
     build_generate_response,
     error_response,
     grounding_blocked_response,
+    quota_exhausted_response,
 )
 
 AGENT_VERSION = "agentcore-runtime-v1"
@@ -70,6 +72,15 @@ class RuntimeHandler(BaseHTTPRequestHandler):
                 grounding_blocked_response(exc, agent_version=AGENT_VERSION),
             )
         except Exception as exc:  # noqa: BLE001 - AgentCore SDK maps non-200 to exceptions
+            # .agent は重い依存(strands/mcp)を持つため、エラー時のみ遅延importする
+            from .agent import QuotaExhaustedError
+
+            if isinstance(exc, QuotaExhaustedError):
+                self._send_json(
+                    HTTPStatus.OK,
+                    quota_exhausted_response(exc, agent_version=AGENT_VERSION),
+                )
+                return
             self._send_json(
                 HTTPStatus.OK, error_response(exc, agent_version=AGENT_VERSION)
             )
@@ -77,6 +88,7 @@ class RuntimeHandler(BaseHTTPRequestHandler):
 
 def main() -> int:
     load_dotenv()
+    suppress_duplicate_strands_warnings()
     host = os.environ.get("AGENT_RUNTIME_HOST", "0.0.0.0")
     port = int(os.environ.get("AGENT_RUNTIME_PORT", "8080"))
     server = ThreadingHTTPServer((host, port), RuntimeHandler)
