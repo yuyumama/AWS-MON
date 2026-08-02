@@ -5,7 +5,7 @@ pydantic>=2.0
 python-dotenv>=1.0.0
 # AWSドキュメントMCP(フェーズ2-4)。strandsのMCPClient(stdio)から起動する。
 # strands-agents が mcp<2.0.0 を要求するため 2.x には上げられない(#58で衝突・revert)。
-mcp>=1.0,<2.0.0
+mcp>=2.0.0,<3.0.0
 awslabs.aws-documentation-mcp-server>=1.1.27
 # オブザーバビリティ(フェーズ3-1)。ADOT SDKでCloudWatch OTLPエンドポイントへ直接送信する。
 # scripts/run_server_otel.sh から opentelemetry-instrument 経由で起動したときだけ有効。
