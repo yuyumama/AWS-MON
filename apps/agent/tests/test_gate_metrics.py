@@ -7,7 +7,9 @@ import pytest
 from quiz_agent import gate_metrics
 
 
-def test_emit_gate_metrics_writes_emf_structure(capsys: pytest.CaptureFixture[str]) -> None:
+def test_emit_gate_metrics_writes_emf_structure(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     gate_metrics.emit_gate_metrics(
         status="passed", grounding=0.82, relevance=0.61, cert="aip"
     )
@@ -29,7 +31,9 @@ def test_emit_gate_metrics_writes_emf_structure(capsys: pytest.CaptureFixture[st
     assert metric_names == {"GroundingScore", "RelevanceScore"}
 
 
-def test_emit_gate_metrics_omits_none_scores(capsys: pytest.CaptureFixture[str]) -> None:
+def test_emit_gate_metrics_omits_none_scores(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     gate_metrics.emit_gate_metrics(status="not_run", grounding=None, relevance=None)
 
     payload = json.loads(capsys.readouterr().out.strip())

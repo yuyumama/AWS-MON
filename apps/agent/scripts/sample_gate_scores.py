@@ -136,7 +136,9 @@ def main() -> int:
     )
     parser.add_argument("--n", type=int, default=20, help="サンプリング回数(既定20)")
     parser.add_argument("--cert", default="aip", help="資格コード(既定aip)")
-    parser.add_argument("--domain", default=None, help="AIPドメイン(省略時は重み付き抽選)")
+    parser.add_argument(
+        "--domain", default=None, help="AIPドメイン(省略時は重み付き抽選)"
+    )
     parser.add_argument(
         "--sleep", type=float, default=5.0, help="各回の間隔秒(既定5, 日次枠に配慮)"
     )
