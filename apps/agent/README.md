@@ -59,6 +59,12 @@ OPENROUTER_API_KEY=sk-or-v1-xxxx
   OpenRouter 利用時も **AWS認証は引き続き必要**
 - Bedrockプロンプトキャッシュ（`CacheConfig`）は OpenRouter 経路では使わない
 - Bedrockへ切り替える場合は `AGENT_MODEL_PROVIDER=bedrock` を明示する
+- **429（レート制限/日次枠切れ）は即時失敗**する（issue #70）: リトライや
+  ドキュメントなし生成へのフォールバックで枠を無駄に消費せず、HTTP境界は
+  `code="rate_limited"` のエラー応答を返す（ローカルサーバは429、AgentCore Runtimeは
+  200ボディ内エラー）。調査ターン中のstrands内蔵throttleリトライは
+  `AGENT_MODEL_RETRY_ATTEMPTS`（既定3）に短縮している。
+  同一警告の重複出力は `quiz_agent/log_filters.py` が60秒窓で抑制する
 
 ## 実行
 
@@ -117,7 +123,11 @@ python3 -m quiz_agent.server
 - MCPサーバーの起動や調査に失敗した場合は、生成を止めず**調査なし生成へ自動フォールバック**する
 - 起動コマンドは `AGENT_DOCS_MCP_COMMAND` で差し替え可（例: `uvx awslabs.aws-documentation-mcp-server@latest`）
 - ツール呼び出しが増えるぶん、1問あたりのLLMトークン消費と生成時間は増える。
-  調査量はプロンプトで1サービス・`read_documentation` 最大2回に制限している。
+  調査量はプロンプト指示に加えてコードでも上限を強制する（`quiz_agent/tool_limits.py`。
+  既定 `search_documentation` 1回 / `read_documentation` 2回。
+  `AGENT_DOCS_SEARCH_LIMIT` / `AGENT_DOCS_READ_LIMIT` で変更可）。
+  上限超過分のツール呼び出しはキャンセルされ、モデルにはそこまでの調査結果で
+  続行するよう伝わる（issue #70）。
   Bedrock選択時は、エージェントループで再送されるドキュメント原文をプロンプトキャッシュ
   （`CacheConfig(strategy="auto")`、読み取り約0.1倍）でコストを抑える
 

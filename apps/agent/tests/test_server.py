@@ -1,0 +1,84 @@
+from __future__ import annotations
+
+from http import HTTPStatus
+from typing import Any
+
+import pytest
+
+from quiz_agent import runtime as runtime_module
+from quiz_agent import server as server_module
+from quiz_agent.agent import QuotaExhaustedError
+
+
+class _FakeHandler:
+    """BaseHTTPRequestHandler.do_POST を実際のソケットなしで検証するための代役。"""
+
+    path = "/generate"
+
+    def __init__(self) -> None:
+        self.sent: tuple[int, Any] | None = None
+
+    def _send_json(self, status: int, body: object) -> None:
+        self.sent = (status, body)
+
+
+def test_error_response_includes_code_when_provided() -> None:
+    body = server_module.error_response(RuntimeError("boom"), code="rate_limited")
+
+    assert body["status"] == "error"
+    assert body["code"] == "rate_limited"
+    assert body["message"] == "boom"
+
+
+def test_error_response_omits_code_by_default() -> None:
+    body = server_module.error_response(RuntimeError("boom"))
+
+    assert "code" not in body
+
+
+def test_quota_exhausted_response_sets_rate_limited_code() -> None:
+    exc = QuotaExhaustedError("OpenRouterのレート制限/日次リクエスト上限に達しました")
+
+    body = server_module.quota_exhausted_response(exc)
+
+    assert body["status"] == "error"
+    assert body["code"] == "rate_limited"
+    assert body["message"] == str(exc)
+
+
+def test_server_do_post_returns_429_with_rate_limited_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def raise_quota(*args: Any, **kwargs: Any) -> None:
+        raise QuotaExhaustedError("上限に達しました")
+
+    monkeypatch.setattr(server_module, "_parse_body", lambda handler: {})
+    monkeypatch.setattr(server_module, "build_generate_response", raise_quota)
+
+    handler = _FakeHandler()
+    server_module.Handler.do_POST(handler)
+
+    assert handler.sent is not None
+    status, body = handler.sent
+    assert status == HTTPStatus.TOO_MANY_REQUESTS
+    assert body["code"] == "rate_limited"
+
+
+def test_runtime_do_post_returns_http_200_with_rate_limited_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def raise_quota(*args: Any, **kwargs: Any) -> None:
+        raise QuotaExhaustedError("上限に達しました")
+
+    monkeypatch.setattr(runtime_module, "_parse_body", lambda handler: {})
+    monkeypatch.setattr(runtime_module, "build_generate_response", raise_quota)
+
+    handler = _FakeHandler()
+    handler.path = "/invocations"
+    runtime_module.RuntimeHandler.do_POST(handler)
+
+    assert handler.sent is not None
+    status, body = handler.sent
+    # AgentCore は非200を例外扱いするため、エラーもHTTP 200で返す
+    assert status == HTTPStatus.OK
+    assert body["code"] == "rate_limited"

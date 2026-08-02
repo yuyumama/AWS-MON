@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 
 from .agent import generate_quiz
 from .certs import AIP_DOMAINS, CERT_FULL_NAMES
+from .log_filters import suppress_duplicate_strands_warnings
 from .schema import Explanation, Question
 
 
@@ -48,6 +49,7 @@ def _print_explanation(ex: Explanation) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     load_dotenv()
+    suppress_duplicate_strands_warnings()
 
     parser = argparse.ArgumentParser(description="AWS認定クイズをローカル生成する")
     parser.add_argument(

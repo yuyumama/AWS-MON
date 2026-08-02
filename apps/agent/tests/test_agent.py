@@ -227,3 +227,114 @@ def test_openrouter_api_key_requires_env_or_parameter(
 
     with pytest.raises(RuntimeError, match="OPENROUTER_API_KEY_PARAM"):
         agent_module._openrouter_api_key()
+
+
+class _FakeRateLimitError(Exception):
+    """openai.RateLimitError相当(status_code=429)のダミー例外。"""
+
+    def __init__(self, message: str = "rate limited") -> None:
+        super().__init__(message)
+        self.status_code = 429
+
+
+class _RateLimitedResearchAgent(FakeAgent):
+    def __call__(self, prompt: str) -> None:
+        raise _FakeRateLimitError("OpenRouter 429 during research")
+
+
+def test_is_rate_limit_detects_status_code_429() -> None:
+    assert agent_module._is_rate_limit(_FakeRateLimitError()) is True
+
+
+def test_is_rate_limit_detects_wrapped_exception_via_cause() -> None:
+    original = _FakeRateLimitError()
+    try:
+        raise RuntimeError("wrapped") from original
+    except RuntimeError as wrapped:
+        assert agent_module._is_rate_limit(wrapped) is True
+
+
+def test_is_rate_limit_false_for_unrelated_exception() -> None:
+    assert agent_module._is_rate_limit(ValueError("invalid output")) is False
+
+
+def test_structured_quiz_with_retries_raises_quota_exhausted_without_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(agent_module.time, "sleep", lambda seconds: None)
+
+    class _RateLimitedAgent:
+        def __init__(self) -> None:
+            self.structured_count = 0
+
+        def structured_output(self, output_model: type[QuizItem], prompt: str) -> QuizItem:
+            self.structured_count += 1
+            raise _FakeRateLimitError()
+
+    fake_agent = _RateLimitedAgent()
+
+    with pytest.raises(agent_module.QuotaExhaustedError):
+        agent_module._structured_quiz_with_retries(fake_agent, retries=2)
+
+    assert fake_agent.structured_count == 1
+
+
+def test_generate_helper_raises_quota_exhausted_without_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(agent_module.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(agent_module, "_model", lambda: object())
+
+    class _RateLimitedAgent:
+        def __init__(self, **kwargs: Any) -> None:
+            self.calls = 0
+
+        def structured_output(self, output_model: type[QuizItem], prompt: str) -> QuizItem:
+            self.calls += 1
+            raise _FakeRateLimitError()
+
+    created: list[_RateLimitedAgent] = []
+
+    def _factory(**kwargs: Any) -> _RateLimitedAgent:
+        instance = _RateLimitedAgent(**kwargs)
+        created.append(instance)
+        return instance
+
+    monkeypatch.setattr(agent_module, "Agent", _factory)
+
+    with pytest.raises(agent_module.QuotaExhaustedError):
+        agent_module._generate(
+            "system prompt", QuizItem, "問題生成プロンプト", retries=2
+        )
+
+    assert len(created) == 1
+    assert created[0].calls == 1
+
+
+def test_research_phase_429_raises_quota_exhausted_without_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_research(monkeypatch)
+    monkeypatch.setattr(agent_module, "Agent", _RateLimitedResearchAgent)
+    monkeypatch.setattr(
+        agent_module,
+        "_generate",
+        lambda *args, **kwargs: pytest.fail(
+            "ドキュメントなし生成へフォールバックしないこと"
+        ),
+    )
+
+    with pytest.raises(agent_module.QuotaExhaustedError):
+        agent_module.generate_quiz("saa")
+
+
+def test_research_retry_kwargs_shortens_throttle_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("AGENT_MODEL_RETRY_ATTEMPTS", raising=False)
+    kwargs = agent_module._research_retry_kwargs()
+    assert kwargs["retry_strategy"]._max_attempts == 3
+
+    monkeypatch.setenv("AGENT_MODEL_RETRY_ATTEMPTS", "2")
+    kwargs = agent_module._research_retry_kwargs()
+    assert kwargs["retry_strategy"]._max_attempts == 2

@@ -38,10 +38,59 @@ from .prompts import (
     build_quiz_prompt,
 )
 from .schema import QuizItem
+from .tool_limits import docs_tool_limiter
 
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
+
+
+class QuotaExhaustedError(RuntimeError):
+    """OpenRouterのレート制限/日次リクエスト上限(429)に達した。
+
+    リトライしても回復しないため、生成をここで即座に打ち切る。
+    """
+
+
+def _is_rate_limit(exc: BaseException | None) -> bool:
+    """例外チェーン(__cause__/__context__)を辿り、429(レート制限)を検知する。
+
+    OpenRouter(OpenAI互換API)からの429は経路によって現れ方が異なる:
+    - 通常のAgent呼び出し(agent(...))は strands の OpenAIModel.stream() が
+      openai.RateLimitError を捕まえて ModelThrottledException に変換する。
+    - 本プロジェクトの ToolCallStructuredOutputModel.structured_output() は
+      その変換を行わない独自実装のため、openai.RateLimitError がそのまま送出される。
+    どちらの経路でも検知できるよう、例外チェーン全体をたどって判定する。
+    """
+    seen: set[int] = set()
+    current = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if _is_rate_limit_exception(current):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def _is_rate_limit_exception(exc: BaseException) -> bool:
+    try:
+        from openai import RateLimitError
+    except ImportError:  # openai extra未導入でもBedrock経路を壊さない
+        RateLimitError = None  # noqa: N806
+    if RateLimitError is not None and isinstance(exc, RateLimitError):
+        return True
+
+    if getattr(exc, "status_code", None) == 429:
+        return True
+
+    try:
+        from strands.types.exceptions import ModelThrottledException
+    except ImportError:
+        ModelThrottledException = None  # noqa: N806
+    if ModelThrottledException is not None and isinstance(exc, ModelThrottledException):
+        return True
+
+    return False
 
 
 def _bedrock_model() -> BedrockModel:
@@ -118,6 +167,11 @@ def _generate(
             agent = Agent(model=_model(), system_prompt=system_prompt)
             return agent.structured_output(output_model, prompt)
         except Exception as e:  # noqa: BLE001 - ネットワーク/検証失敗をまとめて扱う
+            if _is_rate_limit(e):
+                # 日次枠切れはリトライしても回復しないので即座に失敗させる
+                raise QuotaExhaustedError(
+                    "OpenRouterのレート制限/日次リクエスト上限に達しました"
+                ) from e
             last_err = e
             if attempt < retries:
                 time.sleep(0.8 * (attempt + 1))
@@ -182,6 +236,22 @@ def _tool_result_texts(messages: list[Any]) -> list[str]:
     return texts
 
 
+def _research_retry_kwargs() -> dict[str, Any]:
+    """調査フェーズのthrottle自動リトライを短縮するAgent引数を返す。
+
+    strands既定のModelRetryStrategyはmax_attempts=6(待ち合計約2分)で、
+    日次枠切れの429は待っても回復しないため AGENT_MODEL_RETRY_ATTEMPTS(既定3)に
+    短縮する(分単位の一時的なレート制限は依然リトライで吸収できる)。
+    私有モジュールのためimportできないバージョンではstrands既定に任せる。
+    """
+    try:
+        from strands.event_loop._retry import ModelRetryStrategy
+    except ImportError:
+        return {}
+    attempts = int(os.environ.get("AGENT_MODEL_RETRY_ATTEMPTS", "3"))
+    return {"retry_strategy": ModelRetryStrategy(max_attempts=attempts)}
+
+
 @contextmanager
 def _researched_agent(quiz_prompt: str) -> Iterator[tuple[Agent, list[str]]]:
     """MCPクライアントを維持したまま、調査済みAgentと原文を提供する。"""
@@ -195,6 +265,9 @@ def _researched_agent(quiz_prompt: str) -> Iterator[tuple[Agent, list[str]]]:
                 model=model,
                 system_prompt=QUIZ_SYSTEM_PROMPT,
                 tools=client.list_tools_sync(),
+                # プロンプト指示(最大2回)を無視して呼ばれ続けるのをコードで強制する
+                hooks=[docs_tool_limiter()],
+                **_research_retry_kwargs(),
             )
             agent(build_docs_research_prompt(quiz_prompt))
             source_texts = _tool_result_texts(agent.messages)
@@ -203,6 +276,11 @@ def _researched_agent(quiz_prompt: str) -> Iterator[tuple[Agent, list[str]]]:
     except DocsResearchError:
         raise
     except Exception as e:
+        if _is_rate_limit(e):
+            # 429はフォールバック(ドキュメントなし生成)で無駄に枠を消費させず即座に失敗させる
+            raise QuotaExhaustedError(
+                "OpenRouterのレート制限/日次リクエスト上限に達しました"
+            ) from e
         if phase == "research":
             raise DocsResearchError(
                 f"AWSドキュメントMCPでの調査に失敗しました: {e}"
@@ -217,6 +295,10 @@ def _structured_quiz_with_retries(agent: Agent, retries: int = 2) -> QuizItem:
         try:
             return agent.structured_output(QuizItem, QUIZ_FROM_RESEARCH_PROMPT)
         except Exception as e:  # noqa: BLE001 - モデル/検証失敗をまとめて扱う
+            if _is_rate_limit(e):
+                raise QuotaExhaustedError(
+                    "OpenRouterのレート制限/日次リクエスト上限に達しました"
+                ) from e
             last_err = e
             if attempt < retries:
                 time.sleep(0.8 * (attempt + 1))
@@ -317,6 +399,9 @@ def generate_quiz(cert: str, domain: str | None = None) -> GenerationResult:
         try:
             return _generate_quiz_with_docs_and_gate(quiz_prompt)
         except GroundingBlockedError:
+            raise
+        except QuotaExhaustedError:
+            # 日次枠切れでの再生成は無駄なので、ドキュメントなし生成へフォールバックしない
             raise
         except DocsResearchError:
             logger.warning(
