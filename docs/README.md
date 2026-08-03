@@ -9,7 +9,7 @@
 - [`architecture.md`](architecture.md) — システム構成と代表的なリクエストフロー
 - [`data-model.md`](data-model.md) — DynamoDB データモデル（確定版）
 - [`cicd.md`](cicd.md) — CI/CDパイプライン構成（GitHub Actions / OIDC / tfstate管理）
-- [`observability.md`](observability.md) — 監視・オブザーバビリティ構成（トレース / ログ / 品質ゲート / オンライン評価）
+- [`observability.md`](observability.md) — 監視・オブザーバビリティ構成（トレース / ログ / 品質ゲート）
 - [`adr/`](adr/) — Architecture Decision Records（意思決定記録）
   - [0001](adr/0001-structured-output.md) 構造化出力（Pydantic）を採用
   - [0002](adr/0002-lambda-web-adapter.md) API層に Lambda Web Adapter を採用
@@ -17,12 +17,13 @@
   - [0004](adr/0004-local-first-dev.md) ローカルファースト開発
   - [0005](adr/0005-combined-generation.md) 問題と解説を同時生成する
   - [0006](adr/0006-auth-cognito-cloud-only.md) 認証は既存Cognito User Pool＋生成権限制御＋ローカルは devシム
-  - [0007](adr/0007-observability-stack.md) オブザーバビリティ構成（ADOT直送＋Guardrailsゲート＋オンライン評価）
+  - [0007](adr/0007-observability-stack.md) オブザーバビリティ構成（ADOT直送＋Guardrailsゲート＋オンライン評価。決定3は0011で撤回）
   - [0008](adr/0008-prod-deployment-shape.md) prodデプロイ構成（CloudFront/API分離・定期worker・AgentCore Runtime）
   - [0009](adr/0009-openrouter-default-provider.md) 生成モデルプロバイダの既定を Bedrock から OpenRouter へ昇格
   - [0010](adr/0010-grounding-gate-thresholds.md) グラウンディングゲートの閾値を実測分布に基づき grounding 0.6 へ引き下げる（提案）
+  - [0011](adr/0011-retire-online-evaluations.md) AgentCore Evaluations オンライン評価の廃止（費用実測に基づく）
 - [`research/`](research/) — 調査メモ
-  - [genai-observability-vs-xray](research/genai-observability-vs-xray.md) X-Ray / CloudWatch生成AIオブザーバビリティ / Evaluations の整理
+  - [genai-observability-vs-xray](research/genai-observability-vs-xray.md) X-Ray / CloudWatch生成AIオブザーバビリティ / Evaluations の整理（Evaluations は検証後に廃止）
 
 ## 運用ルール
 

@@ -3,7 +3,7 @@
 #
 # 1. CloudWatch Transaction Search を有効化
 #    (X-Rayスパンを構造化ログとして aws/spans ロググループへ取り込む)
-# 2. agent用のロググループを作成 (ADOTのOTLPログ送信先。オンライン評価のデータソースにもなる)
+# 2. agent用のロググループを作成 (ADOTのOTLPログ送信先)
 #
 # 実行にはAWS認証情報(管理者相当: logs/xray権限)が必要。再実行しても安全。
 #

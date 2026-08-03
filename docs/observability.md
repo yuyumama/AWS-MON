@@ -1,22 +1,24 @@
 # observability — 監視・オブザーバビリティ構成
 
-最終更新: 2026-07-09
+最終更新: 2026-08-03
 
 このプロジェクトに実装されている監視の全体像。設計の意思決定は
-[ADR 0007](adr/0007-observability-stack.md)、AWSサービス3手段の比較調査は
+[ADR 0007](adr/0007-observability-stack.md)（オンライン評価の廃止は
+[ADR 0011](adr/0011-retire-online-evaluations.md)）、AWSサービス3手段の比較調査は
 [research/genai-observability-vs-xray.md](research/genai-observability-vs-xray.md) を参照。
 本書は「**何が・どこで・どう監視されているか**」の実装リファレンス。
 
-## 全体像 — 3層の観測 + 1つのインラインゲート
+## 全体像 — 2層の観測 + 1つのインラインゲート
 
-監視対象の中心は問題生成エージェント（`apps/agent`）。「経路 / 中身 / 品質」の3層で観測し、
+監視対象の中心は問題生成エージェント（`apps/agent`）。「経路 / 中身」の2層で観測し、
 加えて生成時に不良問題を同期的に弾くインラインゲートを持つ。
+かつてあった第3層「品質（傾向）＝AgentCore Evaluations オンライン評価」は、費用の95%超が
+ジャッジトークンで便益に見合わなかったため廃止した（[ADR 0011](adr/0011-retire-online-evaluations.md)）。
 
 | # | 層 | 使うサービス | 見えるもの | タイミング |
 |---|---|---|---|---|
 | 1 | 経路 | X-Ray（Transaction Search） | リクエストの流れ・レイテンシ・スパン全量（インデックス100%） | 実行時・常時 |
 | 2 | 中身 | CloudWatch 生成AIオブザーバビリティ（GenAI Observability） | トークン消費・プロンプト・MCPツール呼び出し・セッション単位の束ね | 実行時・常時 |
-| 3 | 品質（傾向） | AgentCore Evaluations オンライン評価 | LLM-as-a-Judge（`Builtin.Correctness`）による採点。サンプリング20% | 非同期・事後 |
 | G | 品質（ゲート） | Bedrock Guardrails 文脈的グラウンディングチェック | 正解＋解説がAWSドキュメント原文に根拠づくか | 生成時・同期・全件 |
 
 ```mermaid
@@ -31,14 +33,12 @@ flowchart LR
         Spans["aws/spans<br/>（Transaction Search）"]
         LogGroup["/aws/aws-mon/quiz-agent<br/>（OTLPログ）"]
         GenAI["GenAI Observability<br/>ダッシュボード"]
-        Evals["AgentCore Evaluations<br/>オンライン評価（20%）"]
     end
 
     Agent -- "OTLP直送<br/>(ADOT SDK)" --> Spans
     Agent -- "OTLP直送" --> LogGroup
     Spans --> GenAI
     LogGroup --> GenAI
-    LogGroup -- "service.name=aws-mon-quiz-agent" --> Evals
 
     Gate -- "quality.inlineGate / score" --> API["apps/api → DynamoDB<br/>(問題itemのquality属性)"]
 ```
@@ -59,7 +59,7 @@ flowchart LR
 
 | 項目 | 既定値 |
 |---|---|
-| `service.name` | prod: `aws-mon-quiz-agent` / ローカル: `aws-mon-quiz-agent-local`（オンライン評価の対象から外すため分離） |
+| `service.name` | prod: `aws-mon-quiz-agent` / ローカル: `aws-mon-quiz-agent-local`（コンソールでトレースを区別するため分離） |
 | ロググループ | `/aws/aws-mon/quiz-agent` |
 | ログストリーム | `runtime-logs`（OTLPエクスポータは自動作成しないため事前作成が必要） |
 | メトリクス namespace | `aws-mon-agent` |
@@ -73,10 +73,10 @@ flowchart LR
 | ロググループ | 内容 | 管理 |
 |---|---|---|
 | `aws/spans` | Transaction Search が取り込むX-Rayスパン（構造化ログ、全量インデックス） | `setup_observability.sh` が有効化 |
-| `/aws/aws-mon/quiz-agent` | agent の OTLP ログ。**オンライン評価のデータソースも兼ねる** | Terraform 管理（retention 30日） |
+| `/aws/aws-mon/quiz-agent` | agent の OTLP ログ | Terraform 管理（retention 30日） |
 | `/aws/bedrock-agentcore/runtimes/*` | AgentCore Runtime の標準ログ | Runtime が自動作成（IAMで許可） |
 | `/aws/lambda/aws-mon-prod-api` / `-worker` | api / worker Lambda の実行ログ | Lambda が自動作成（IAMで許可） |
-| `/aws/bedrock-agentcore/evaluations/*` | オンライン評価の結果出力 | 評価実行ロールが書き込み |
+| `/aws/bedrock-agentcore/evaluations/*` | 廃止済みオンライン評価の過去の結果（16件）。retention 90日で自然消滅させる | 手動（新規書き込みなし） |
 
 ## 3. メトリクス（CloudWatch Metrics）
 
@@ -88,8 +88,8 @@ flowchart LR
 ## G. インライン品質ゲート（Guardrails 文脈的グラウンディングチェック）
 
 生成した問題を保存する**前**に、正解＋解説がドキュメントに根拠づくかを同期チェックする
-（`quiz_agent/guardrail.py`）。監視3層が「観測して後から気づく」のに対し、こちらは
-「不良品をその場で弾く」役割。
+（`quiz_agent/guardrail.py`）。観測層が「観測して後から気づく」のに対し、こちらは
+「不良品をその場で弾く」役割。**品質担保はこのゲートに一本化**されている（ADR 0011）。
 
 - **入力**: grounding_source = AWSドキュメントMCP調査で取得した公式ドキュメント原文 /
   query = 設問文 / guard content = 正解の選択肢＋解説
@@ -102,6 +102,7 @@ flowchart LR
   ゲートは品質・コスト保護であり可用性を落とさない
 - **文字数上限**: source 10万字 / query 1,000字 / content 5,000字（超過分は切り詰め＝判定対象外）
 - `AGENT_GUARDRAIL_ENFORCE=0` でレポートのみモード（しきい値チューニング用）
+- ゲート通過率・スコア分布の傾向は `scripts/sample_gate_scores.py` の手動バッチ計測で確認する
 
 結果は問題 item の `quality` 属性として DynamoDB に保存される:
 
@@ -109,24 +110,8 @@ flowchart LR
 |---|---|
 | `quality.inlineGate` | `passed` / `failed` / `not_run` |
 | `quality.score` | groundingスコア（判定時のみ） |
-| `quality.evaluator` | `agentcore_evaluate`（計装つき起動＝オンライン評価の対象トレース） / `none` |
+| `quality.evaluator` | 常に `none`（廃止済みオンライン評価の対象だった過去アイテムには `agentcore_evaluate` が残る） |
 | `quality.evaluatedAt` / `quality.issues` | 判定時刻 / 失敗・スキップ理由 |
-
-## 4. オンライン評価（AgentCore Evaluations）
-
-OTel計装で送ったトレースを LLM-as-a-Judge が非同期に採点する（旧 `evaluate_question`
-自己批評の置き換え）。設定は `scripts/setup_evaluations.py` が作成・更新する。
-
-- **データソース**: CloudWatchロググループ（`/aws/aws-mon/quiz-agent`）+ `service.name`
-  = `aws-mon-quiz-agent`（agent が Runtime 外でも動く前提の方式）。ローカルは
-  `aws-mon-quiz-agent-local` を使うため対象外＝開発中の試行にジャッジ課金が乗らない（2026-08-03）
-- **評価者**: `Builtin.Correctness` のみ。ドキュメント整合（Faithfulness相当）は上記
-  Guardrails ゲートが全件・同期で担保するため、オンライン評価から外した（コスト最適化 2026-07-04）
-- **サンプリング**: 20%（品質チューニング時は `--sampling` で一時的に上げる）
-- **実行ロール**: `AgentCoreEvaluationRole-aws-mon`（スクリプトが作成。トレース読取 /
-  評価結果書込 / spans インデックス / ジャッジモデル呼び出しの最小権限）
-- **結果の置き場**: CloudWatch > GenAI Observability の Evaluations のみ。
-  DynamoDB へは書き戻さない（ダッシュボードで傾向を見る用途のため）
 
 ## セットアップ（一度きり）
 
@@ -140,9 +125,6 @@ cd apps/agent
 python scripts/create_guardrail.py
 #    ローカル: .env の AGENT_GUARDRAIL_ID に設定
 #    prod:     SSM /app/aws-mon/prod/agent-guardrail-id に手動登録（Terraformが Runtime に注入）
-
-# 3. オンライン評価設定の作成（同名設定があればサンプリング率・評価者を更新）
-python scripts/setup_evaluations.py
 ```
 
 prod では `/aws/aws-mon/quiz-agent` ロググループを Terraform 管理に取り込み済みで、
@@ -154,13 +136,13 @@ prod では `/aws/aws-mon/quiz-agent` ロググループを Terraform 管理に�
 |---|---|---|
 | トレース計装 | オプトイン（`run_server_otel.sh`） | 常時有効（Runtime環境変数） |
 | グラウンディングゲート | `.env` の `AGENT_GUARDRAIL_ID` 設定時のみ | 常時有効（SSM経由で注入） |
-| オンライン評価 | **対象外**（`service.name` が `-local` のため。評価したいときだけ `AGENT_OTEL_SERVICE_NAME` を prod と揃える） | 全トレースが対象（うち20%を採点） |
+| `service.name` | `aws-mon-quiz-agent-local`（コンソールで prod と区別。`AGENT_OTEL_SERVICE_NAME` で変更可） | `aws-mon-quiz-agent` |
 | 観測層の再現 | しない（観測は実AWSのみ。[ADR 0004](adr/0004-local-first-dev.md)） | — |
 
 ## 確認方法（コンソール）
 
 - **CloudWatch > GenAI Observability** — トレース（トークン・プロンプト・MCPツール呼び出し）、
-  セッション（`session.id` で束ねた一覧）、Evaluations（オンライン評価スコアの傾向）
+  セッション（`session.id` で束ねた一覧）
 - **X-Ray Trace Map / Transaction Search** — 経路・レイテンシ・エラーの分布
 - **CloudWatch Logs** — 上記ロググループ表を参照
 
@@ -169,7 +151,9 @@ prod では `/aws/aws-mon/quiz-agent` ロググループを Terraform 管理に�
 - Transaction Search はスパンのインデックスに課金（個人利用の低トラフィック前提で全量インデックス）
 - グラウンディングチェックは文字数課金。ブロック時の再生成は Bedrock 呼び出しが倍になる
   （リトライ既定1回に抑制）
-- オンライン評価はジャッジモデルの推論コストがかかるため、サンプリング20%・評価者1つに絞っている
+- かつての最大コスト要因は AgentCore Evaluations のジャッジトークン（AgentCore 費用の95%超、
+  1評価 $0.06〜$0.13）だったため廃止した。実測と経緯は
+  [ADR 0011](adr/0011-retire-online-evaluations.md)
 
 ## 未実装（今後の候補）
 

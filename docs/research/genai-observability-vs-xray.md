@@ -45,7 +45,8 @@ Transaction Search経由で CloudWatch Logs の `aws/spans` ロググループ�
 - オンライン評価（継続、サンプリング指定）と、オンデマンド/バッチ/データセット評価がある。
 - **Runtime外エージェントもデータソースに「CloudWatchロググループ + service.name」を指定すれば対象にできる**。
 - 実行には専用のサービスロール（トレース読取・結果書込・judgeモデル呼び出し）が必要。
-  `apps/agent/scripts/setup_evaluations.py` がロール作成と設定作成を行う。
+  当時は `apps/agent/scripts/setup_evaluations.py` がロール作成と設定作成を行っていた
+  （オンライン評価の廃止に伴い削除済み。git 履歴から参照可）。
 - 結果はCloudWatch（GenAI ObservabilityのEvaluationsビュー、`/aws/bedrock-agentcore/evaluations/*` ロググループ）へ。
 
 ### （関連）Bedrock Guardrails 文脈的グラウンディングチェック
@@ -81,3 +82,27 @@ Transaction Search経由で CloudWatch Logs の `aws/spans` ロググループ�
 2. **OTLPログエクスポータはログストリームを自動作成しない**（400 "log stream does not exist"）。
    ロググループだけでなくストリームも事前作成が必要（`setup_observability.sh` で対応済み）。
 3. 生成レイテンシはMCP調査あり+ゲートで1問 2〜3.5分程度。計装自体のオーバーヘッドは体感なし。
+
+## 費用実測とオンライン評価の廃止（2026-08-03）
+
+Cost Explorer で AgentCore の請求内訳を調査した結果、**費用のほぼ全額が Evaluations の
+ジャッジトークン**だったため、オンライン評価を廃止した（[ADR 0011](../adr/0011-retire-online-evaluations.md)、issue #74）。
+
+| 期間 | AgentCore 合計 | うち Evaluations | Runtime(vCPU/Mem) |
+|---|---|---|---|
+| 2026年7月 | $0.550 | **$0.525（95%）** | $0.026 |
+| 8/1〜8/3 | $0.930 | **$0.895（96%）** | $0.035 |
+
+- 課金が発生したのは2日だけ、評価イベントは合計16回（ユニークtrace 8件 × 評価者2つ）。
+  **1評価あたり 29,000〜53,000 入力トークン、$0.06〜$0.13**。
+- 費用の主因は回数ではなく**1トレースあたりのペイロード**。ジャッジはトレース全体を読み、
+  そこに MCP で取得した AWS ドキュメント原文がまるごと入る（`gen_ai.evaluation.explanation`
+  がツール出力の HTML を逐一照合していた）。ドキュメント調査型エージェントと
+  LLM-as-a-Judge の組み合わせは構造的に単価が高い。
+- **設定ドリフトに注意**: 2026-07-04 に決めた「サンプリング20% / Correctness のみ」が
+  AWS 側に未反映（sampling 100% + 評価者2つのまま）だった。`setup_evaluations.py` は
+  再実行で更新する設計だったが、再実行されていなかった。IaC 外の一度きりスクリプトは
+  ドリフトしても気づけない、という教訓。
+- 検証としては「Runtime外エージェントのオンライン評価が動く」ことまで確認済みで目的達成。
+  個人利用の規模（評価母数が2桁/月未満）では傾向監視の便益がなく、品質担保は
+  Guardrails グラウンディングゲート（全件・同期）に一本化した。

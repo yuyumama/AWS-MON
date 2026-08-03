@@ -98,4 +98,5 @@ QUIZ_REGENERATE_FEEDBACK_PROMPT = (
 
 
 # 旧レビュー用プロンプト(REVIEW_SYSTEM_PROMPT / build_review_prompt)はフェーズ3-2で
-# AgentCore Evaluations オンライン評価に置き換えたため削除した。
+# AgentCore Evaluations オンライン評価に置き換えたため削除した
+# (そのオンライン評価も費用対効果からADR 0011で廃止。品質担保はGuardrailsゲートのみ)。

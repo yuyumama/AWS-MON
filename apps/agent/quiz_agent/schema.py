@@ -51,4 +51,4 @@ class QuizItem(BaseModel):
 
 
 # 旧 Evaluation(自己批評の構造化出力)はフェーズ3-2で AgentCore Evaluations に
-# 置き換えたため削除した。
+# 置き換えたため削除した(そのオンライン評価もADR 0011で廃止)。

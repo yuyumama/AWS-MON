@@ -498,5 +498,5 @@ def generate_quiz(cert: str, domain: str | None = None) -> GenerationResult:
 
 
 # 旧 evaluate_question(自己批評のプレースホルダ)はフェーズ3-2で AgentCore Evaluations の
-# オンライン評価(scripts/setup_evaluations.py)に置き換えた。品質採点はトレースに対して
-# 非同期に行われ、結果はCloudWatch(GenAI Observability)側に蓄積される。
+# オンライン評価に置き換えたが、費用のほぼ全額がジャッジトークンだったため
+# ADR 0011 で廃止した。品質担保はインラインの Guardrails ゲート(guardrail.py)のみ。
