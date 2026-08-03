@@ -20,6 +20,7 @@ def test_emit_gate_metrics_writes_emf_structure(
     assert payload["Status"] == "passed"
     assert payload["GroundingScore"] == 0.82
     assert payload["RelevanceScore"] == 0.61
+    assert payload["GateEvaluationCount"] == 1
     assert payload["cert"] == "aip"
 
     aws = payload["_aws"]
@@ -28,20 +29,36 @@ def test_emit_gate_metrics_writes_emf_structure(
     assert metric_group["Namespace"] == "AWSMon/Agent"
     assert metric_group["Dimensions"] == [["Status"]]
     metric_names = {m["Name"] for m in metric_group["Metrics"]}
-    assert metric_names == {"GroundingScore", "RelevanceScore"}
+    assert metric_names == {
+        "GateEvaluationCount",
+        "GroundingScore",
+        "RelevanceScore",
+    }
 
 
 def test_emit_gate_metrics_omits_none_scores(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    gate_metrics.emit_gate_metrics(status="not_run", grounding=None, relevance=None)
+    gate_metrics.emit_gate_metrics(
+        status="not_run",
+        grounding=None,
+        relevance=None,
+        reason="no_tool_calls",
+    )
 
     payload = json.loads(capsys.readouterr().out.strip())
 
     assert "GroundingScore" not in payload
     assert "RelevanceScore" not in payload
     assert "cert" not in payload
-    assert payload["_aws"]["CloudWatchMetrics"][0]["Metrics"] == []
+    assert payload["Status"] == "not_run"
+    assert payload["GateEvaluationCount"] == 1
+    assert payload["Reason"] == "no_tool_calls"
+    metric_group = payload["_aws"]["CloudWatchMetrics"][0]
+    assert metric_group["Dimensions"] == [["Status"]]
+    assert metric_group["Metrics"] == [
+        {"Name": "GateEvaluationCount", "Unit": "Count"}
+    ]
 
 
 @pytest.mark.parametrize("value", ["0", "false", "off", "False", "OFF"])

@@ -198,6 +198,9 @@ def error_response(
     exc: Exception, *, agent_version: str = AGENT_VERSION, code: str | None = None
 ) -> dict[str, Any]:
     body: dict[str, Any] = {"status": "error"}
+    if code is None:
+        exception_code = getattr(exc, "error_code", None)
+        code = exception_code if isinstance(exception_code, str) else None
     if code:
         body["code"] = code
     body["message"] = str(exc)
@@ -262,12 +265,22 @@ class Handler(BaseHTTPRequestHandler):
             )
         except Exception as exc:  # noqa: BLE001 - HTTP boundary returns JSON error
             # .agent は重い依存(strands/mcp)を持つため、エラー時のみ遅延importする
-            from .agent import QuotaExhaustedError
+            from .agent import (
+                QuotaExhaustedError,
+                ResearchFailedError,
+                ResearchIncompleteError,
+            )
 
             if isinstance(exc, QuotaExhaustedError):
                 self._send_json(
                     HTTPStatus.TOO_MANY_REQUESTS, quota_exhausted_response(exc)
                 )
+                return
+            if isinstance(exc, ResearchIncompleteError):
+                self._send_json(HTTPStatus.UNPROCESSABLE_ENTITY, error_response(exc))
+                return
+            if isinstance(exc, ResearchFailedError):
+                self._send_json(HTTPStatus.BAD_GATEWAY, error_response(exc))
                 return
             self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, error_response(exc))
 

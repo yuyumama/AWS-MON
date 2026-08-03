@@ -12,6 +12,7 @@ prod実測の初回通過率が低い(issue #63)ことを受けて、しきい�
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import json
 import os
 import statistics as stats
@@ -33,10 +34,31 @@ AGENT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(AGENT_DIR))
 
 from quiz_agent.agent import generate_quiz  # noqa: E402
+from quiz_agent.model_config import model_id  # noqa: E402
 
 # しきい値候補(create_guardrail.py の既定 grounding=0.7 / relevance=0.5 周辺を含む)。
 THRESHOLDS = [0.5, 0.55, 0.6, 0.65, 0.7]
 MAX_CONSECUTIVE_FAILURES = 3
+DEPENDENCIES = (
+    "strands-agents",
+    "openai",
+    "awslabs.aws-documentation-mcp-server",
+)
+
+
+def sampling_metadata() -> dict[str, Any]:
+    """再現性のためモデルIDと主要依存バージョンを記録する。"""
+    versions: dict[str, str | None] = {}
+    for dependency in DEPENDENCIES:
+        try:
+            versions[dependency] = importlib.metadata.version(dependency)
+        except importlib.metadata.PackageNotFoundError:
+            versions[dependency] = None
+    return {
+        "type": "metadata",
+        "model_id": model_id(),
+        "dependencies": versions,
+    }
 
 
 def _percentile(values: list[float], pct: float) -> float | None:
@@ -123,6 +145,7 @@ def _sample_once(cert: str, domain: str | None) -> dict[str, Any]:
             "status": "error",
             "grounding": None,
             "relevance": None,
+            "detail": None,
             "duration_sec": time.monotonic() - started,
             "error": str(e),
         }
@@ -131,6 +154,7 @@ def _sample_once(cert: str, domain: str | None) -> dict[str, Any]:
         "status": gate.status,
         "grounding": gate.grounding_score,
         "relevance": gate.relevance_score,
+        "detail": gate.detail,
         "duration_sec": time.monotonic() - started,
         "error": None,
     }
@@ -162,9 +186,13 @@ def main() -> int:
     args = parser.parse_args()
 
     records: list[dict[str, Any]] = []
+    metadata = sampling_metadata()
     consecutive_failures = 0
     out_fh = open(args.out, "w", encoding="utf-8") if args.out else None
     try:
+        if out_fh:
+            out_fh.write(json.dumps(metadata, ensure_ascii=False) + "\n")
+            out_fh.flush()
         for i in range(args.n):
             record = _sample_once(args.cert, args.domain)
             records.append(record)
@@ -197,6 +225,7 @@ def main() -> int:
             out_fh.close()
 
     summary = summarize(records)
+    summary["metadata"] = metadata
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0
 

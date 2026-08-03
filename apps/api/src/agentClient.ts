@@ -192,7 +192,10 @@ async function generateAndSaveQuestionWithAgentCore(
 	}
 
 	if (isAgentErrorResponse(body)) {
-		if (body.code === "grounding_blocked") {
+		if (
+			body.code === "grounding_blocked" ||
+			body.code === "research_incomplete"
+		) {
 			throw new ApiError(body.message ?? "agent grounding blocked", 422);
 		}
 		throw new ApiError(body.message ?? "agent generation failed", 502);

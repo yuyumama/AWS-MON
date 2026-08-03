@@ -102,7 +102,8 @@ DRAFT を直接書き換えると本番の判定が即座に変わり、切り�
 
 ## 判明した別課題（本ADRの対象外）
 
-- **not_run 23%（7/30）**: 調査ターンで `read_documentation` が呼ばれず根拠文書ゼロとなり、`agent.py` で early return してゲートが一切走らないケース。所要時間が平均64秒（全体平均146秒）と短いことと整合する。本番の約4分の1の生成が品質ゲートを通っていないことになり、**閾値調整より影響が大きい可能性がある**（閾値 0.7→0.6 で稼げるのが23件中2件に対し、こちらは30件中7件）。issue #77 として切り出した。
+- **not_run 23%（7/30）**: 本番の約4分の1の生成が品質ゲートを通っていないことになり、**閾値調整より影響が大きい可能性がある**（閾値 0.7→0.6 で稼げるのが23件中2件に対し、こちらは30件中7件）。issue #77 として切り出した。
+  - **訂正（2026-08-03, issue #77 のログ解析による）**: 当初ここに「調査ターンで `read_documentation` が呼ばれず early return するケース」と記載していたが、実測ではそれは7件中1件のみだった。支配的原因（6件）は**調査ターンのモデル呼び出しが上流エラー（ストリーム途中の `openai.APIError`、`status_code` なし）で中断し、`DocsResearchError` としてドキュメントなし生成へフォールバック**したもの。MCP通信障害は確認されていない。詳細と対応は issue #77 を参照。
 - **`sample_gate_scores.py` が `.env` を読んでいなかった**: `cli.py` / `server.py` と異なり `load_dotenv()` を呼んでおらず、そのままでは `AGENT_GUARDRAIL_ID` / `OPENROUTER_API_KEY` 未設定で全件 `not_run` になる。計測前に修正した。
 - **`reasoningContent is not supported in multi-turn conversations with the Chat Completions API.`** の警告が多発する（生成自体は成功）。OpenRouter 経路のマルチターン会話で reasoning フィールドが欠落している旨で、別途確認の価値がある。
 - OpenRouter 無料枠は 50 リクエスト/日ではなく **1000 リクエスト/日**だった（$10クレジット購入済みのため。`GET /api/v1/key` の `is_free_tier: false` で確認）。issue #63 が前提としていた「50/日」の制約は現状には当てはまらず、30件規模の採取は枠的に問題ない。

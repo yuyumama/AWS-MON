@@ -100,11 +100,31 @@ flowchart LR
   `1`（旧しきい値 grounding 0.7）に戻して apply する
 - **ブロック時**: 再生成（`AGENT_GUARDRAIL_RETRIES`、既定1回）。それでも通らなければ
   生成失敗（HTTP 422 `grounding_blocked`）
-- **fail-open**: ガードレール自体の障害や MCP 調査なし生成では判定なし（`not_run`）で生成継続。
-  ゲートは品質・コスト保護であり可用性を落とさない
+- **fail-open はガードレール呼び出し自体の障害に限る**: `ApplyGuardrail` のエラー（権限・
+  リージョン等）は判定なし（`not_run`）で生成継続。ゲートは品質・コスト保護であり可用性を落とさない
+- **根拠ゼロは fail-closed**（issue #77）: grounding source が空のままの生成は「無検査で通した」
+  状態になるため、ゲート有効かつ `AGENT_GUARDRAIL_ENFORCE=1` では保存させない。原因を3分類する:
+  - `research_failed` … 調査ターンがリトライ後も失敗（依存障害。HTTP 502 `research_failed`。
+    422 の品質不合格とは区別する）
+  - `no_tool_calls` … 調査ターンでツールが1回も呼ばれなかった（HTTP 422 `research_incomplete`）
+  - `no_read_documentation` … search のみで成功した `read_documentation` の結果がゼロ
+    （HTTP 422 `research_incomplete`）。検索結果スニペットを根拠扱いする旧フォールバックは撤去した
+  レポートモード（`ENFORCE=0`）やゲート未設定時は従来どおり生成を返し、`not_run` + 上記の
+  `detail` を記録する
+- **調査ターンの一過性エラーはリトライ**: ストリーム途中の上流エラー（`status_code` を持たない
+  `openai.APIError`）は `AGENT_RESEARCH_RETRIES`（既定1）回まで調査ターンをやり直す
+  （試行ごとに新しい Agent、backoff+jitter つき。429 は即時終了でリトライしない）。
+  not_run 23% の支配的原因だった（issue #77 のログ解析）
 - **文字数上限**: source 10万字 / query 1,000字 / content 5,000字（超過分は切り詰め＝判定対象外）
 - `AGENT_GUARDRAIL_ENFORCE=0` でレポートのみモード（しきい値チューニング用）
+- **計測**（EMF、namespace `AWSMon/Agent`、`quiz_agent/gate_metrics.py`）: 全結果で
+  `GateEvaluationCount=1` を発行し、`Status`（passed / failed / not_run）を dimension に持つ。
+  スコアが算出されない `not_run` も CloudWatch Metrics で件数集計できる。理由（上記3分類等）は
+  高カーディナリティ化を避けるため dimension にせず、EMF payload の `Reason` フィールドと
+  構造化ログ（`grounding_gate` イベントの `detail`）に残す。早期リターン・調査失敗フォールバックを
+  含む全経路が同じ計測関数を通る（issue #77 で計測の穴を塞いだ）
 - ゲート通過率・スコア分布の傾向は `scripts/sample_gate_scores.py` の手動バッチ計測で確認する
+  （JSONL には `detail`、先頭のメタ行に model ID と主要依存バージョンを記録する）
 
 ### 再生成回数（`AGENT_GUARDRAIL_RETRIES`）と無料枠のトレードオフ
 
