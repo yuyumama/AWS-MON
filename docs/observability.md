@@ -59,7 +59,7 @@ flowchart LR
 
 | 項目 | 既定値 |
 |---|---|
-| `service.name` | `aws-mon-quiz-agent` |
+| `service.name` | prod: `aws-mon-quiz-agent` / ローカル: `aws-mon-quiz-agent-local`（オンライン評価の対象から外すため分離） |
 | ロググループ | `/aws/aws-mon/quiz-agent` |
 | ログストリーム | `runtime-logs`（OTLPエクスポータは自動作成しないため事前作成が必要） |
 | メトリクス namespace | `aws-mon-agent` |
@@ -94,7 +94,8 @@ flowchart LR
 - **入力**: grounding_source = AWSドキュメントMCP調査で取得した公式ドキュメント原文 /
   query = 設問文 / guard content = 正解の選択肢＋解説
 - **判定**: `ApplyGuardrail`（bedrock-runtime）。しきい値は grounding 0.7 / relevance 0.5 起点
-  （`scripts/create_guardrail.py`）
+  （`scripts/create_guardrail.py`）。実測分布に基づく grounding 0.6 への引き下げを
+  [ADR 0010](adr/0010-grounding-gate-thresholds.md) で提案中（未適用）
 - **ブロック時**: 再生成（`AGENT_GUARDRAIL_RETRIES`、既定1回）。それでも通らなければ
   生成失敗（HTTP 422 `grounding_blocked`）
 - **fail-open**: ガードレール自体の障害や MCP 調査なし生成では判定なし（`not_run`）で生成継続。
@@ -117,7 +118,8 @@ OTel計装で送ったトレースを LLM-as-a-Judge が非同期に採点する
 自己批評の置き換え）。設定は `scripts/setup_evaluations.py` が作成・更新する。
 
 - **データソース**: CloudWatchロググループ（`/aws/aws-mon/quiz-agent`）+ `service.name`
-  （agent が Runtime 外でも動く前提の方式）
+  = `aws-mon-quiz-agent`（agent が Runtime 外でも動く前提の方式）。ローカルは
+  `aws-mon-quiz-agent-local` を使うため対象外＝開発中の試行にジャッジ課金が乗らない（2026-08-03）
 - **評価者**: `Builtin.Correctness` のみ。ドキュメント整合（Faithfulness相当）は上記
   Guardrails ゲートが全件・同期で担保するため、オンライン評価から外した（コスト最適化 2026-07-04）
 - **サンプリング**: 20%（品質チューニング時は `--sampling` で一時的に上げる）
@@ -152,7 +154,7 @@ prod では `/aws/aws-mon/quiz-agent` ロググループを Terraform 管理に�
 |---|---|---|
 | トレース計装 | オプトイン（`run_server_otel.sh`） | 常時有効（Runtime環境変数） |
 | グラウンディングゲート | `.env` の `AGENT_GUARDRAIL_ID` 設定時のみ | 常時有効（SSM経由で注入） |
-| オンライン評価 | 計装つき起動時のみ対象 | 全トレースが対象（うち20%を採点） |
+| オンライン評価 | **対象外**（`service.name` が `-local` のため。評価したいときだけ `AGENT_OTEL_SERVICE_NAME` を prod と揃える） | 全トレースが対象（うち20%を採点） |
 | 観測層の再現 | しない（観測は実AWSのみ。[ADR 0004](adr/0004-local-first-dev.md)） | — |
 
 ## 確認方法（コンソール）

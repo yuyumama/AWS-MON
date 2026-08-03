@@ -20,8 +20,17 @@ import time
 from pathlib import Path
 from typing import Any
 
+try:
+    from dotenv import load_dotenv
+except ModuleNotFoundError:
+
+    def load_dotenv() -> bool:
+        return False
+
+
 # scripts/ から実行しても quiz_agent パッケージ(apps/agent直下)を解決できるようにする。
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+AGENT_DIR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(AGENT_DIR))
 
 from quiz_agent.agent import generate_quiz  # noqa: E402
 
@@ -129,7 +138,12 @@ def _sample_once(cert: str, domain: str | None) -> dict[str, Any]:
 
 def main() -> int:
     # 生成自体をブロックしないレポートモードに固定する(枠を無駄撃ちしないため)。
+    # load_dotenv より先に設定する(load_dotenv は既存の環境変数を上書きしないため、
+    # .env 側に AGENT_GUARDRAIL_ENFORCE=1 があってもレポートモードのままにできる)。
     os.environ.setdefault("AGENT_GUARDRAIL_ENFORCE", "0")
+    # cli.py / server.py と違いこのスクリプトは .env を読んでいなかったため、
+    # AGENT_GUARDRAIL_ID や OPENROUTER_API_KEY が未設定のまま実行されていた。
+    load_dotenv(AGENT_DIR / ".env")
 
     parser = argparse.ArgumentParser(
         description="グラウンディングゲートのスコア分布を採取する"

@@ -65,4 +65,4 @@ prodアカウント（147856894803）は Bedrock の日次トークンクォー�
 - OTel: `trace_id=... trace_sampled=True service.name=aws-mon-quiz-agent` を確認。オンライン評価ロググループ（`/aws/bedrock-agentcore/evaluations/results/...online_eval...`）も存在。
 - 削減最適化 A の実機確認: ゲート失敗リトライ時、MCP 調査を再実行せず `structured_output` のみ 1 コールで再試行していることをログで確認。
 
-**残課題**: 無料 nemotron モデルはグラウンディングスコアが閾値付近（0.63〜0.73）で揺らぎ、初回ブロック→リトライで無料枠を余分に消費する。品質・コストの改善は別 issue に切り出した → issue #63
+**残課題**: 無料 nemotron モデルはグラウンディングスコアが閾値付近（0.63〜0.73）で揺らぎ、初回ブロック→リトライで無料枠を余分に消費する。品質・コストの改善は別 issue に切り出した → issue #63（後続の閾値再設定は [ADR 0010](0010-grounding-gate-thresholds.md)）
