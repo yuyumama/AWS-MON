@@ -68,10 +68,9 @@ locals {
   }
 
   agent_environment = {
-    AGENT_MODEL_PROVIDER            = var.agent_model_provider
     OPENROUTER_API_KEY_PARAM        = "/app/aws-mon/prod/openrouter-api-key"
-    BEDROCK_MODEL_ID                = var.bedrock_model_id
     AGENT_GUARDRAIL_ID              = data.aws_ssm_parameter.agent_guardrail_id.value
+    AGENT_GUARDRAIL_VERSION         = var.agent_guardrail_version
     AGENT_OBSERVABILITY_ENABLED     = "true"
     OTEL_PYTHON_DISTRO              = "aws_distro"
     OTEL_PYTHON_CONFIGURATOR        = "aws_configurator"
@@ -520,19 +519,6 @@ data "aws_iam_policy_document" "agent_runtime" {
     resources = [
       "arn:${local.partition}:bedrock-agentcore:${local.region}:${local.account_id}:workload-identity-directory/default",
       "arn:${local.partition}:bedrock-agentcore:${local.region}:${local.account_id}:workload-identity-directory/default/workload-identity/aws_mon_prod_agent-*",
-    ]
-  }
-
-  statement {
-    sid = "BedrockModelInvocation"
-    actions = [
-      "bedrock:InvokeModel",
-      "bedrock:InvokeModelWithResponseStream",
-    ]
-    resources = [
-      "arn:${local.partition}:bedrock:*::foundation-model/*",
-      "arn:${local.partition}:bedrock:${local.region}:${local.account_id}:inference-profile/*",
-      "arn:${local.partition}:bedrock:${local.region}:${local.account_id}:application-inference-profile/*",
     ]
   }
 

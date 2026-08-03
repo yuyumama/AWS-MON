@@ -7,7 +7,7 @@ AWS-MON/
 ├─ apps/            動くもの（機能追加は基本ここ）
 │  ├─ web/          フロント（Vite+React+TS）
 │  ├─ api/          ビジネスロジックAPI（Hono+LWA, TS）
-│  └─ agent/        問題生成エージェント（Strands+OpenRouter/Bedrock, Python）
+│  └─ agent/        問題生成エージェント（Strands+OpenRouter, Python）
 ├─ packages/
 │  └─ shared/       web⇄api⇄seed 共有のTS型・テーブル定義（@aws-mon/shared）
 ├─ infra/           Terraform（modules/ と envs/{local,prod}）
@@ -32,7 +32,7 @@ AWS-MON/
   - web⇄api で共有するデータ形（DTO・enum）とDynamoDBテーブル定義は `packages/shared`（`@aws-mon/shared`）に置く。`apps/api` は shared のビルド出力（`dist/`）に依存するため、shared を変更したら先に `npm run build -w @aws-mon/shared`。
 - **Python（agent）**
   - **構造化出力（Pydantic）**を使い、モデル出力のJSONパース・正規化はしない。
-  - 環境変数は `python-dotenv`（`.env`）で読む。既定はOpenRouterの `nvidia/nemotron-3-ultra-550b-a55b:free`。`AGENT_MODEL_PROVIDER=bedrock` でBedrockへ切り替え可能。
+  - 環境変数は `python-dotenv`（`.env`）で読む。生成モデルはOpenRouterの `nvidia/nemotron-3-ultra-550b-a55b:free`（`AGENT_MODEL_ID` で上書き可）に一本化している（ADR 0012）。
 
 ## 命名・スタイル
 
@@ -49,5 +49,5 @@ AWS-MON/
 
 - **ローカル**: `.env`（各appの `.env.example` をコピー）。
 - **クラウド**: **SSM Parameter Store(SecureString) を既定**。ローテーションが要るもの（外部APIトークン等）だけ Secrets Manager。
-- OpenRouterのprodキーはSSM SecureStringからRuntimeが取得する。BedrockはIAMロールで呼ぶのでAPIキー不要。
+- OpenRouterのprodキーはSSM SecureStringからRuntimeが取得する。Guardrails・SSM・CloudWatchはIAMロールで呼ぶのでAPIキー不要。
 - **tfstate に平文の秘密を書かない**。SSM/Secretsは別作成しARN参照＋`sensitive`。stateは暗号化バックエンドへ。

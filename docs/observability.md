@@ -93,9 +93,11 @@ flowchart LR
 
 - **入力**: grounding_source = AWSドキュメントMCP調査で取得した公式ドキュメント原文 /
   query = 設問文 / guard content = 正解の選択肢＋解説
-- **判定**: `ApplyGuardrail`（bedrock-runtime）。しきい値は grounding 0.7 / relevance 0.5 起点
-  （`scripts/create_guardrail.py`）。実測分布に基づく grounding 0.6 への引き下げを
-  [ADR 0010](adr/0010-grounding-gate-thresholds.md) で提案中（未適用）
+- **判定**: `ApplyGuardrail`（bedrock-runtime）。しきい値は grounding 0.6 / relevance 0.5
+  （実測分布に基づく再設定の根拠は [ADR 0010](adr/0010-grounding-gate-thresholds.md)）
+- **バージョン運用**: DRAFT ではなく発行済みバージョンを `AGENT_GUARDRAIL_VERSION` で固定する。
+  prod は `agent_guardrail_version`（Terraform変数、既定 `2`）で注入し、切り戻しは
+  `1`（旧しきい値 grounding 0.7）に戻して apply する
 - **ブロック時**: 再生成（`AGENT_GUARDRAIL_RETRIES`、既定1回）。それでも通らなければ
   生成失敗（HTTP 422 `grounding_blocked`）
 - **fail-open**: ガードレール自体の障害や MCP 調査なし生成では判定なし（`not_run`）で生成継続。
@@ -103,6 +105,23 @@ flowchart LR
 - **文字数上限**: source 10万字 / query 1,000字 / content 5,000字（超過分は切り詰め＝判定対象外）
 - `AGENT_GUARDRAIL_ENFORCE=0` でレポートのみモード（しきい値チューニング用）
 - ゲート通過率・スコア分布の傾向は `scripts/sample_gate_scores.py` の手動バッチ計測で確認する
+
+### 再生成回数（`AGENT_GUARDRAIL_RETRIES`）と無料枠のトレードオフ
+
+既定は **1**（初回＋再生成1回）。判断材料:
+
+- **1回の再生成で消費するのは `structured_output` 1リクエストのみ**。調査フェーズ（MCP）は
+  やり直さず、調査済みの会話履歴を再利用する（[ADR 0009](adr/0009-openrouter-default-provider.md) 決定4-A）。
+  再生成時はブロック理由をフィードバックとして注入し、初回と同条件の繰り返しにならないようにしている
+- **初回通過率は 60.9%**（ADR 0010 の実測、grounding 0.6 換算・評価が走った23件中14件）。
+  残りを拾うために再生成があり、この値がそのまま「再生成が必要になる頻度」の目安になる
+- **無料枠**: OpenRouter は 1,000リクエスト/日（$10クレジット購入済みのアカウント。未購入だと50/日）。
+  1問あたりの消費は調査ツール呼び出し＋生成で数リクエスト規模のため、既定の1回では枠が制約にならない
+- **0 にする判断**: 枠が逼迫している、または生成失敗（422）よりレイテンシを優先する場合。
+  ただし初回で落ちた問題はそのまま失格になる
+- **2以上にする判断**: 現時点では推奨しない。再生成の通過率は未実測（ADR 0010 は `RETRIES=0` で
+  採取したため）で、回数を増やす根拠がない。prod の `grounding_gate` メトリクス（attempt 別）が
+  溜まってから再検討する
 
 結果は問題 item の `quality` 属性として DynamoDB に保存される:
 
@@ -125,6 +144,18 @@ cd apps/agent
 python scripts/create_guardrail.py
 #    ローカル: .env の AGENT_GUARDRAIL_ID に設定
 #    prod:     SSM /app/aws-mon/prod/agent-guardrail-id に手動登録（Terraformが Runtime に注入）
+```
+
+しきい値を変えるときは DRAFT を運用したままにせず、バージョンを発行して固定する:
+
+```bash
+# 現行DRAFTをそのまま版として発行（変更前の切り戻し先を確保する）
+python scripts/create_guardrail.py --publish
+
+# しきい値を更新して新しい版を発行 → 表示された版番号を
+# infra/envs/prod/variables.tf の agent_guardrail_version 既定値（およびローカルは .env）に
+# 反映して apply する
+python scripts/create_guardrail.py --update --grounding-threshold 0.6 --publish
 ```
 
 prod では `/aws/aws-mon/quiz-agent` ロググループを Terraform 管理に取り込み済みで、

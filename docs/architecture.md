@@ -27,7 +27,7 @@ flowchart TB
             Agent["apps/agent<br/>Strands Agents（Python）"]
         end
 
-        LLM["OpenRouter（既定）<br/>Nemotron 3 Ultra free<br/>/ Amazon Bedrock（切替可）"]
+        LLM["OpenRouter<br/>Nemotron 3 Ultra free"]
         MCP["AWS Documentation MCP<br/>最新ドキュメント参照"]
 
         subgraph DDB["DynamoDB（4テーブル）"]
@@ -126,7 +126,7 @@ sequenceDiagram
     participant U as ユーザー/API利用者
     participant API as apps/api
     participant Agent as apps/agent (Strands)
-    participant LLM as OpenRouter（既定）/ Bedrock
+    participant LLM as OpenRouter
     participant Q as AwsMonQuestions
     participant S as AwsMonSessions
     participant J as AwsMonGenerationJobs
@@ -154,7 +154,7 @@ sequenceDiagram
     participant Q as AwsMonQuestions
     participant S as AwsMonSessions
     participant Agent as apps/agent
-    participant LLM as OpenRouter（既定）/ Bedrock
+    participant LLM as OpenRouter
 
     Dev->>API: POST /dev/jobs/run {limit}
     API->>J: GSI1_Runnableから QUEUED/RETRY_WAIT を取得
@@ -198,7 +198,7 @@ sequenceDiagram
 | 生成権限チェック | 実装済み。`BANK` は登録済みユーザー可、`GENERATE` / `MIXED` は生成グループ必須（権限なしは403）。stale 再生成は job 種別ごと未実装で、実装時に権限確認を入れる | [ADR 0006](adr/0006-auth-cognito-cloud-only.md) |
 | agent ⇄ API の生成連携 | 実装済み。`AGENT_MODE=http`（local HTTP）/ `agentcore`（AgentCore Runtime `InvokeAgentRuntime`）の切替。境界のJSON形は共通 | [ADR 0008](adr/0008-prod-deployment-shape.md) |
 | spaced repetition（復習期限） | 未実装。`GSI2_DueList` の属性予約のみ（復習マーク/一覧のAP-06/07は実装済み: `/reviews`） | `docs/data-model.md` |
-| `apps/web` のS3+CloudFront配備 | デプロイ済み（2026-07-06、二段階apply完了）。CloudFront経由のログインE2Eまで確認済み。GENERATEの実機確認のみ、新規AWSアカウントのBedrock日次クォータ引き上げ（サポートケース）待ち | [ADR 0008](adr/0008-prod-deployment-shape.md)、`docs/cicd.md` |
+| `apps/web` のS3+CloudFront配備 | デプロイ済み（2026-07-06、二段階apply完了）。CloudFront経由のログインE2E・GENERATE ともに確認済み（GENERATE は 2026-08-02、OpenRouter 経路。[ADR 0009](adr/0009-openrouter-default-provider.md)） | [ADR 0008](adr/0008-prod-deployment-shape.md)、`docs/cicd.md` |
 | prod worker（GENERATE/MIXED job） | デプロイ済み（EventBridge Scheduler rate 1分 + worker Lambda稼働中） | [ADR 0008](adr/0008-prod-deployment-shape.md) |
 | stale化 / abandoned化 job | 未実装（GSI設計のみ存在） | `docs/data-model.md` AP-08, AP-12 |
 | `ops/`（readonlyポリシー・スケジューラ） | 未着手 | [ADR 0003](adr/0003-monorepo-and-terraform-envs.md) |

@@ -10,7 +10,7 @@ import pytest
 
 from quiz_agent import agent as agent_module
 from quiz_agent.guardrail import GateResult
-from quiz_agent.model_config import model_provider
+from quiz_agent.model_config import model_id
 from quiz_agent.schema import QuizItem
 
 
@@ -170,12 +170,12 @@ def test_structured_output_failure_does_not_fall_back_without_research(
         agent_module.generate_quiz("saa")
 
 
-def test_model_provider_defaults_to_openrouter(
+def test_model_id_defaults_to_openrouter_free_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("AGENT_MODEL_PROVIDER", raising=False)
+    monkeypatch.delenv("AGENT_MODEL_ID", raising=False)
 
-    assert model_provider() == "openrouter"
+    assert model_id() == "nvidia/nemotron-3-ultra-550b-a55b:free"
 
 
 def test_openrouter_api_key_prefers_environment(
