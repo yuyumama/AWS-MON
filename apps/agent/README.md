@@ -108,7 +108,6 @@ python3 -m quiz_agent.server
 | `scripts/run_server_otel.sh` | OTel(ADOT)計装つきでサーバ起動 |
 | `scripts/create_guardrail.py` | グラウンディングチェック用ガードレール作成（一度きり） |
 | `scripts/sample_gate_scores.py` | ゲートのグラウンディング/関連度スコア分布を採取するバッチ実行（しきい値再設定の材料集め） |
-| `scripts/setup_evaluations.py` | AgentCore Evaluations オンライン評価の設定作成（一度きり） |
 
 > 出力フォーマットは**構造化出力（Pydanticスキーマ）で保証**しているため、
 > モデル出力のJSONパースや末尾カンマ除去などの後処理は不要。
@@ -148,8 +147,9 @@ python3 -m quiz_agent.server
 - CloudWatchコンソール > **GenAI Observability** でトレース（トークン・プロンプト・MCPツール呼び出し）を確認
 - APIから渡される `sessionId` は OTel baggage `session.id` に載り、セッション単位で束なる
 - service.name / ロググループは `.env` の `AGENT_OTEL_*` で変更（既定: `aws-mon-quiz-agent-local` / `/aws/aws-mon/quiz-agent`）
-- **ローカルはオンライン評価の対象外**: service.name が prod（`aws-mon-quiz-agent`）と別なので
-  ジャッジ課金が発生しない。ローカルのトレースも採点したいときだけ `AGENT_OTEL_SERVICE_NAME` を prod と揃える
+- **ローカルの service.name は prod と分離**: 既定 `aws-mon-quiz-agent-local` のため、
+  コンソール上でローカルの試行と prod のトレースを区別できる。prod と同一視したいときだけ
+  `AGENT_OTEL_SERVICE_NAME` を揃える
 - **本番（AgentCore Runtime）は常時計装**: Terraform が `AGENT_OBSERVABILITY_ENABLED=true` と
   `OTEL_*` 一式をRuntime環境変数に注入し、`docker-entrypoint.sh` が計装つきで起動する
 
@@ -213,23 +213,17 @@ status別件数、grounding/relevanceスコアの mean・median・p25・p75、
 `create_guardrail.py` のしきい値既定値変更・ガードレールのバージョン発行は、
 この分布計測を踏まえた後続作業として別途行う（今回は未実施）。
 
-## AgentCore Evaluations（フェーズ3-2）
+## AgentCore Evaluations オンライン評価（フェーズ3-2 → 廃止）
 
-旧 `evaluate_question`（自己批評）の置き換え。OTel計装で送ったトレースを
-LLM-as-a-Judge（既定 `Builtin.Correctness`、サンプリング20%）が非同期に採点する。
-ドキュメント整合（Faithfulness相当）は生成時のGuardrailsゲートが全件担保するため、
-オンライン評価はCorrectnessの傾向監視に絞っている（コスト最適化）。
-
-```bash
-# 初回: 実行ロール + オンライン評価設定を作成。同名設定があればサンプリング率・評価者を更新
-python scripts/setup_evaluations.py
-```
-
-結果は CloudWatch > GenAI Observability の Evaluations に蓄積（DynamoDBには書き戻さない）。
+旧 `evaluate_question`（自己批評）を置き換える形で、トレースを LLM-as-a-Judge が
+非同期採点するオンライン評価を運用していたが、**費用のほぼ全額がジャッジトークン
+だったため廃止した**（[ADR 0011](../../docs/adr/0011-retire-online-evaluations.md)、issue #74）。
+品質担保は Guardrails グラウンディングゲート（全件・同期）に一本化。
+セットアップスクリプト `scripts/setup_evaluations.py` も削除済み（git 履歴から参照可）。
 
 ## TODO（次の段階）
 
 - [x] 最新AWS情報の取得（AWSドキュメントMCPで実装。Web検索ツールは必要になったら追加）
-- [x] `evaluate_question` を AgentCore Evaluations（オンライン評価）に置き換え
+- [x] `evaluate_question` を AgentCore Evaluations（オンライン評価）に置き換え（その後 ADR 0011 で廃止）
 - [x] 生成済み問題を DynamoDB に保存 →「生成済みから出題」モード（API側で実装: 生成結果を `AwsMonQuestions` に保存し、`BANK`/`MIXED` モードがバンクから出題する）
 - [x] AgentCore Runtime へのデプロイ（2026-07-06完了。`quiz_agent/runtime.py` + `deploy-agent` ワークフロー）

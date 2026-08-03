@@ -1,6 +1,6 @@
 # ADR 0007: オブザーバビリティ構成（ADOT直送＋Guardrailsインラインゲート＋AgentCoreオンライン評価）
 
-- ステータス: 採用（実装済み。2026-07-03 実AWSでライブ確認済み — スパン到着・グラウンディングゲートpassed・オンライン評価の結果出力まで確認。残りはコンソールでのX-Ray/GenAIダッシュボード見え方比較のみ。実地の記録は `docs/research/genai-observability-vs-xray.md`）
+- ステータス: 一部撤回（決定3のオンライン評価は費用実測に基づき [ADR 0011](0011-retire-online-evaluations.md) で廃止。決定1・2は採用のまま。実装済み。2026-07-03 実AWSでライブ確認済み — スパン到着・グラウンディングゲートpassed・オンライン評価の結果出力まで確認。実地の記録は `docs/research/genai-observability-vs-xray.md`）
 - 日付: 2026-07-02
 
 ## 背景
@@ -34,7 +34,10 @@ agent は当面 AgentCore Runtime 外（ローカル/自前ホスト）で動く
   ゲートはコスト・品質保護であり可用性を落とさない。
 - ガードレール作成は `apps/agent/scripts/create_guardrail.py`（しきい値: grounding 0.7 / relevance 0.5 起点）。
 
-### 3. 継続品質評価は AgentCore Evaluations のオンライン評価
+### 3. 継続品質評価は AgentCore Evaluations のオンライン評価（→ ADR 0011 で撤回）
+
+> **2026-08-03 撤回**: 費用のほぼ全額（95%超）がジャッジトークンで、個人利用の規模では
+> 便益に見合わないため廃止した。経緯と実測は [ADR 0011](0011-retire-online-evaluations.md)。
 - 旧 `evaluate_question`（生成ごとの自己批評。ADR 0005時点のつなぎ）を**削除**し、
   トレースに対する非同期評価に置き換え（`apps/agent/scripts/setup_evaluations.py`）。
 - agentはRuntime外のため、データソースは **CloudWatchロググループ + service.name** 方式。

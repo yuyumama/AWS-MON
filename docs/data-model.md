@@ -206,6 +206,8 @@ type QuestionItem = {
 
   quality?: {
     inlineGate: "not_run" | "passed" | "failed";
+    // 新規保存は常に "none"(オンライン評価は ADR 0011 で廃止)。
+    // 既存アイテムに self_review / agentcore_evaluate が残るため union は維持
     evaluator: "none" | "self_review" | "agentcore_evaluate";
     valid?: boolean;
     score?: number;

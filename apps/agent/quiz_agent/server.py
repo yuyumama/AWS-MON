@@ -84,38 +84,12 @@ def _generate_quiz(cert: str, domain: str | None) -> tuple[QuizItem, GateResult]
     return result.item, result.gate
 
 
-ONLINE_EVAL_SERVICE_NAME = "aws-mon-quiz-agent"
-
-
-def _otel_service_name() -> str:
-    """OTEL_RESOURCE_ATTRIBUTES から service.name を取り出す(未設定なら空文字)。"""
-    for pair in os.environ.get("OTEL_RESOURCE_ATTRIBUTES", "").split(","):
-        key, _, value = pair.partition("=")
-        if key.strip() == "service.name":
-            return value.strip()
-    return ""
-
-
-def _evaluator_label() -> str:
-    """オンライン評価(AgentCore Evaluations)の対象になっているかをメタデータとして残す。
-
-    計装つき(scripts/run_server_otel.sh / prod Runtime)ならトレースは送信されるが、
-    オンライン評価のデータソースは service.name で絞られている。ローカル既定の
-    `aws-mon-quiz-agent-local` は対象外(ジャッジ課金を避けるため)なので none とする。
-    """
-    if os.environ.get("AGENT_OBSERVABILITY_ENABLED", "").lower() != "true":
-        return "none"
-    service_name = _otel_service_name()
-    eval_service = os.environ.get(
-        "AGENT_ONLINE_EVAL_SERVICE_NAME", ONLINE_EVAL_SERVICE_NAME
-    )
-    return "agentcore_evaluate" if service_name == eval_service else "none"
-
-
 def _quality(gate: GateResult, evaluated_at: str) -> dict[str, Any]:
+    # evaluator はオンライン評価(AgentCore Evaluations)廃止後は常に none(ADR 0011)。
+    # 過去アイテムに agentcore_evaluate / self_review が残るためフィールド自体は維持する。
     quality: dict[str, Any] = {
         "inlineGate": gate.status,
-        "evaluator": _evaluator_label(),
+        "evaluator": "none",
     }
     if gate.status != "not_run":
         quality["evaluatedAt"] = evaluated_at
