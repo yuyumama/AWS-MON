@@ -18,7 +18,11 @@ if [[ -f .env ]]; then
   set +a
 fi
 
-SERVICE_NAME="${AGENT_OTEL_SERVICE_NAME:-aws-mon-quiz-agent}"
+# service.name はローカル専用の値にする。オンライン評価(setup_evaluations.py)の
+# データソースは serviceNames=aws-mon-quiz-agent(prod)で絞っているため、
+# ローカルの試行がジャッジ課金の対象になるのを防ぐ。
+# ローカルのトレースも評価したいときだけ AGENT_OTEL_SERVICE_NAME で prod 側に揃える。
+SERVICE_NAME="${AGENT_OTEL_SERVICE_NAME:-aws-mon-quiz-agent-local}"
 LOG_GROUP="${AGENT_OTEL_LOG_GROUP:-/aws/aws-mon/quiz-agent}"
 LOG_STREAM="${AGENT_OTEL_LOG_STREAM:-runtime-logs}"
 METRIC_NAMESPACE="${AGENT_OTEL_METRIC_NAMESPACE:-aws-mon-agent}"
