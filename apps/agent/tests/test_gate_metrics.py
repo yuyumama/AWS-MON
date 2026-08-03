@@ -56,9 +56,7 @@ def test_emit_gate_metrics_omits_none_scores(
     assert payload["Reason"] == "no_tool_calls"
     metric_group = payload["_aws"]["CloudWatchMetrics"][0]
     assert metric_group["Dimensions"] == [["Status"]]
-    assert metric_group["Metrics"] == [
-        {"Name": "GateEvaluationCount", "Unit": "Count"}
-    ]
+    assert metric_group["Metrics"] == [{"Name": "GateEvaluationCount", "Unit": "Count"}]
 
 
 @pytest.mark.parametrize("value", ["0", "false", "off", "False", "OFF"])

@@ -43,9 +43,7 @@ def emit_gate_metrics(
     if not gate_metrics_enabled():
         return
 
-    metrics: list[dict[str, str]] = [
-        {"Name": "GateEvaluationCount", "Unit": "Count"}
-    ]
+    metrics: list[dict[str, str]] = [{"Name": "GateEvaluationCount", "Unit": "Count"}]
     payload: dict[str, Any] = {"Status": status, "GateEvaluationCount": 1}
     if grounding is not None:
         metrics.append({"Name": "GroundingScore", "Unit": "None"})

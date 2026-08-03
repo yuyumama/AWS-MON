@@ -106,9 +106,7 @@ def test_server_do_post_maps_research_errors(
         raise exc
 
     monkeypatch.setattr(server_module, "_parse_body", lambda handler: {})
-    monkeypatch.setattr(
-        server_module, "build_generate_response", raise_research_error
-    )
+    monkeypatch.setattr(server_module, "build_generate_response", raise_research_error)
 
     handler = _FakeHandler()
     server_module.Handler.do_POST(handler)

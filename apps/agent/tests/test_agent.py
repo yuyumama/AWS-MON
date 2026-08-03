@@ -327,7 +327,9 @@ def test_research_transient_model_error_retries_with_fresh_agents(
     assert client.list_tools_count == 1
     assert len(FakeAgent.instances) == 3
     assert [instance.research_count for instance in FakeAgent.instances] == [1, 1, 1]
-    assert len({id(instance.kwargs["hooks"][0]) for instance in FakeAgent.instances}) == 3
+    assert (
+        len({id(instance.kwargs["hooks"][0]) for instance in FakeAgent.instances}) == 3
+    )
 
 
 def test_research_transient_model_error_exhaustion_reports_attempt_metadata(
@@ -640,9 +642,7 @@ def _search_only_messages() -> list[Any]:
     ]
 
 
-def _mock_empty_research(
-    monkeypatch: pytest.MonkeyPatch, messages: list[Any]
-) -> None:
+def _mock_empty_research(monkeypatch: pytest.MonkeyPatch, messages: list[Any]) -> None:
     @contextmanager
     def researched_agent(prompt: str) -> Any:
         agent = FakeAgent()

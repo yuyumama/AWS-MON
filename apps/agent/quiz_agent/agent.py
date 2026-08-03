@@ -122,8 +122,7 @@ def _is_transient_model_error(exc: BaseException | None) -> bool:
         return False
 
     return any(
-        isinstance(current, APIError)
-        and getattr(current, "status_code", None) is None
+        isinstance(current, APIError) and getattr(current, "status_code", None) is None
         for current in _exception_chain(exc)
     )
 
@@ -353,9 +352,7 @@ def _successful_tool_call_count(messages: list[Any]) -> int:
 def _missing_research_detail(messages: list[Any]) -> str:
     """根拠ゼロをツール呼び出し履歴から分類する。"""
     return (
-        "no_tool_calls"
-        if _tool_call_count(messages) == 0
-        else "no_read_documentation"
+        "no_tool_calls" if _tool_call_count(messages) == 0 else "no_read_documentation"
     )
 
 
@@ -413,7 +410,10 @@ def _researched_agent(quiz_prompt: str) -> Iterator[tuple[Agent, list[str]]]:
                         raise QuotaExhaustedError(
                             "OpenRouterのレート制限/日次リクエスト上限に達しました"
                         ) from e
-                    if _is_transient_model_error(e) and research_attempts <= research_retries:
+                    if (
+                        _is_transient_model_error(e)
+                        and research_attempts <= research_retries
+                    ):
                         logger.warning(
                             "調査ターンの一過性モデルエラーを再試行します (%d/%d回目)",
                             research_attempts,
@@ -421,9 +421,7 @@ def _researched_agent(quiz_prompt: str) -> Iterator[tuple[Agent, list[str]]]:
                         )
                         # 上流混雑は数秒〜数十秒持続する(実測で1〜2.5秒待ちでは連敗した)
                         # ため、試行ごとに待ちを線形に伸ばして同じ混雑への再突入を避ける
-                        time.sleep(
-                            3.0 * research_attempts + random.uniform(0.0, 1.0)
-                        )
+                        time.sleep(3.0 * research_attempts + random.uniform(0.0, 1.0))
                         continue
                     raise DocsResearchError(
                         "model",
