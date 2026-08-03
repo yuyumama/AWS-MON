@@ -2,8 +2,8 @@
 
 Strands Agents で、AWS認定試験の模擬問題・解説を生成する。
 プロトタイプ `aws-quiz-v2.tsx` のプロンプト資産を Python に移植したもの。
-生成モデルは **OpenRouter（既定）**。`AGENT_MODEL_PROVIDER=bedrock` を明示すると
-Amazon Bedrockへ切り替えられる。
+生成モデルは **OpenRouter 一本化**（[ADR 0012](../../docs/adr/0012-openrouter-only-inference.md)）。
+Bedrock は Guardrails（`ApplyGuardrail`）と AgentCore Runtime でのみ使い、モデル推論には使わない。
 
 本番は **AgentCore Runtime で稼働中**（2026-07-06デプロイ。[ADR 0008](../../docs/adr/0008-prod-deployment-shape.md)、
 デプロイ経路は `deploy-agent` ワークフロー → [docs/cicd.md](../../docs/cicd.md)）。
@@ -29,25 +29,13 @@ cp .env.example .env   # 中身を自分の環境に合わせて編集
 本番Runtimeは `OPENROUTER_API_KEY_PARAM=/app/aws-mon/prod/openrouter-api-key` を使い、
 オーナーが手動作成したSSM Parameter StoreのSecureStringから実行時に取得する。
 
-`AGENT_MODEL_PROVIDER=bedrock` でBedrockを使う場合は、以下のいずれかが必要:
+加えて、Guardrailsゲート（`ApplyGuardrail`）・SSM・CloudWatch を呼ぶため **AWS認証情報**
+（`aws configure` 済み、または `.env` の `AWS_PROFILE`）が必要。生成モデルの推論自体は
+AWSを経由しない。
 
-- **AWS認証情報**: `aws configure` 済み、または `.env` の `AWS_PROFILE`
-- **Bedrock APIキー**: `.env` の `AWS_BEARER_TOKEN_BEDROCK`
-
-加えて、使うリージョンで対象モデルへの **Bedrockモデルアクセス** を有効化しておくこと
-（AWSコンソール → Bedrock → Model access）。
-
-> BedrockのモデルIDはリージョンやクロスリージョン推論プロファイルにより異なる。
-> Bedrock選択時の既定は `us.anthropic.claude-haiku-4-5-20251001-v1:0`。動かない場合は `.env` の `BEDROCK_MODEL_ID` を
-> 自分のアカウントで有効なIDに変更する。
-
-## モデルプロバイダ切り替え
-
-OpenRouterの無料モデルが既定
-（無料枠: 20リクエスト/分・50リクエスト/日。詳細は `.env.example` 参照）。
+## モデル設定
 
 ```bash
-AGENT_MODEL_PROVIDER=openrouter
 OPENROUTER_API_KEY=sk-or-v1-xxxx
 # AGENT_MODEL_ID=nvidia/nemotron-3-ultra-550b-a55b:free   # 既定値
 ```
@@ -57,8 +45,6 @@ OPENROUTER_API_KEY=sk-or-v1-xxxx
   （Pydanticスキーマ準拠は変わらず保証される）
 - Guardrails グラウンディングチェック（`ApplyGuardrail`）は生成モデルと独立したAWS APIのため、
   OpenRouter 利用時も **AWS認証は引き続き必要**
-- Bedrockプロンプトキャッシュ（`CacheConfig`）は OpenRouter 経路では使わない
-- Bedrockへ切り替える場合は `AGENT_MODEL_PROVIDER=bedrock` を明示する
 - **429（レート制限/日次枠切れ）は即時失敗**する（issue #70）: リトライや
   ドキュメントなし生成へのフォールバックで枠を無駄に消費せず、HTTP境界は
   `code="rate_limited"` のエラー応答を返す（ローカルサーバは429、AgentCore Runtimeは
@@ -95,7 +81,7 @@ python3 -m quiz_agent.server
 | `quiz_agent/schema.py` | 構造化出力のPydanticスキーマ（QuizItem=Question+Explanation） |
 | `quiz_agent/prompts.py` | 問題＋解説（同時）のプロンプト生成（内容面のみ） |
 | `quiz_agent/agent.py` | Strands の `structured_output` 呼び出し（`generate_quiz` → `GenerationResult`） |
-| `quiz_agent/model_config.py` | モデルプロバイダ（bedrock / openrouter）とモデルIDの解決 |
+| `quiz_agent/model_config.py` | モデルID・OpenRouterエンドポイントの解決 |
 | `quiz_agent/openrouter_model.py` | OpenRouter用モデル（ツール呼び出しベースの `structured_output`） |
 | `quiz_agent/guardrail.py` | Guardrails文脈的グラウンディングチェック（インライン品質ゲート） |
 | `quiz_agent/gate_metrics.py` | ゲート評価結果のCloudWatch EMFメトリクス出力（`AWSMon/Agent`名前空間） |
@@ -129,8 +115,6 @@ python3 -m quiz_agent.server
   `AGENT_DOCS_SEARCH_LIMIT` / `AGENT_DOCS_READ_LIMIT` で変更可）。
   上限超過分のツール呼び出しはキャンセルされ、モデルにはそこまでの調査結果で
   続行するよう伝わる（issue #70）。
-  Bedrock選択時は、エージェントループで再送されるドキュメント原文をプロンプトキャッシュ
-  （`CacheConfig(strategy="auto")`、読み取り約0.1倍）でコストを抑える
 
 ## オブザーバビリティ（フェーズ3-1、実装リファレンスは [docs/observability.md](../../docs/observability.md)、意思決定は ADR 0007）
 

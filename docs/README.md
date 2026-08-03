@@ -19,9 +19,10 @@
   - [0006](adr/0006-auth-cognito-cloud-only.md) 認証は既存Cognito User Pool＋生成権限制御＋ローカルは devシム
   - [0007](adr/0007-observability-stack.md) オブザーバビリティ構成（ADOT直送＋Guardrailsゲート＋オンライン評価。決定3は0011で撤回）
   - [0008](adr/0008-prod-deployment-shape.md) prodデプロイ構成（CloudFront/API分離・定期worker・AgentCore Runtime）
-  - [0009](adr/0009-openrouter-default-provider.md) 生成モデルプロバイダの既定を Bedrock から OpenRouter へ昇格
-  - [0010](adr/0010-grounding-gate-thresholds.md) グラウンディングゲートの閾値を実測分布に基づき grounding 0.6 へ引き下げる（提案）
+  - [0009](adr/0009-openrouter-default-provider.md) 生成モデルプロバイダの既定を Bedrock から OpenRouter へ昇格（決定1・3は0012で更新）
+  - [0010](adr/0010-grounding-gate-thresholds.md) グラウンディングゲートの閾値を実測分布に基づき grounding 0.6 へ引き下げる
   - [0011](adr/0011-retire-online-evaluations.md) AgentCore Evaluations オンライン評価の廃止（費用実測に基づく）
+  - [0012](adr/0012-openrouter-only-inference.md) 生成モデルの推論は OpenRouter に一本化し Bedrock 推論経路を撤去する
 - [`research/`](research/) — 調査メモ
   - [genai-observability-vs-xray](research/genai-observability-vs-xray.md) X-Ray / CloudWatch生成AIオブザーバビリティ / Evaluations の整理（Evaluations は検証後に廃止）
 

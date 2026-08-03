@@ -1,6 +1,6 @@
 """Strands による問題・解説の生成と評価（構造化出力）。
 
-モデルは AGENT_MODEL_PROVIDER で OpenRouter（既定）と Bedrock を切り替える。
+生成モデルは OpenRouter に一本化している（ADR 0012。モデルIDは AGENT_MODEL_ID）。
 """
 
 from __future__ import annotations
@@ -19,7 +19,6 @@ from typing import Any, TypeVar
 from mcp import StdioServerParameters, stdio_client
 from pydantic import BaseModel
 from strands import Agent
-from strands.models import BedrockModel, CacheConfig
 from strands.models.model import Model
 from strands.tools.mcp import MCPClient
 
@@ -32,7 +31,7 @@ from .guardrail import (
     gate_enforced,
     gate_retries,
 )
-from .model_config import model_id, model_provider, openrouter_base_url
+from .model_config import model_id, openrouter_base_url
 from .prompts import (
     QUIZ_FROM_RESEARCH_PROMPT,
     QUIZ_REGENERATE_FEEDBACK_PROMPT,
@@ -96,21 +95,11 @@ def _is_rate_limit_exception(exc: BaseException) -> bool:
     return False
 
 
-def _bedrock_model() -> BedrockModel:
-    return BedrockModel(
-        model_id=model_id(),
-        region_name=os.environ.get("AWS_REGION", "us-east-1"),
-        # エージェントループでMCPツール結果(AWSドキュメント原文)を再送するためキャッシュする。
-        cache_config=CacheConfig(strategy="auto"),
-    )
-
-
 def _openrouter_model() -> Model:
-    # openai extra 未導入の環境でも bedrock 経路が壊れないよう遅延importする
+    # openai extra を必要とするため、importを初期化時まで遅らせる
     from .openrouter_model import ToolCallStructuredOutputModel
 
     api_key = _openrouter_api_key()
-    # OpenRouterにはプロンプトキャッシュ設定(CacheConfig)を渡さない(Bedrock固有)。
     return ToolCallStructuredOutputModel(
         client_args={"api_key": api_key, "base_url": openrouter_base_url()},
         model_id=model_id(),
@@ -151,9 +140,8 @@ def _openrouter_api_key() -> str:
 
 
 def _model() -> Model:
-    if model_provider() == "openrouter":
-        return _openrouter_model()
-    return _bedrock_model()
+    """生成モデルを返す。プロバイダは OpenRouter 固定(ADR 0012)。"""
+    return _openrouter_model()
 
 
 def _generate(

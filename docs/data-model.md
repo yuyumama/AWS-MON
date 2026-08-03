@@ -25,7 +25,7 @@ DynamoDB は **単一テーブルではなく、責務別の4テーブル**で�
 ## 設計原則
 
 - Cognito の `sub` を `userId` として使う。メール等のユーザー本体情報は原則 DynamoDB に持たない。
-- `BANK` モードは登録済みユーザーであれば利用できる。`GENERATE` / `MIXED` / stale 再生成など Bedrock/LLM 呼び出しに到達し得る処理は、追加の生成権限を必須にする。
+- `BANK` モードは登録済みユーザーであれば利用できる。`GENERATE` / `MIXED` / stale 再生成など LLM 呼び出しに到達し得る処理は、追加の生成権限を必須にする。
 - API は問題取得時に `correct` をクライアントへ返さない。回答後にだけ正解・解説を返す。
 - セッションには問題本文を埋め込まず、`questionId` 参照を保持する。問題の source of truth は `AwsMonQuestions`。
 - 問題と解説は `QuizItem{question, explanation}` として **1回の生成で同時に作る**。DynamoDB には問題だけ・解説未完了の部分状態を持たない。
@@ -585,7 +585,7 @@ worker は session を更新するとき、必ず次を condition に入れる�
 ### セッション開始
 
 1. API が `cert` と `domainSelection` を受け取る。
-2. Cognito JWT 検証済みの `sub` を `userId` とする。`mode=BANK` は登録済みユーザーなら許可する。`mode=GENERATE` / `mode=MIXED` は Bedrock/LLM 課金に到達し得るため、追加の生成権限 `canGenerateQuestions` を確認する。
+2. Cognito JWT 検証済みの `sub` を `userId` とする。`mode=BANK` は登録済みユーザーなら許可する。`mode=GENERATE` / `mode=MIXED` は LLM 課金に到達し得るため、追加の生成権限 `canGenerateQuestions` を確認する。
 3. `domainSelection="all"` の場合、アプリ側で具体 `domain` を重み付き抽選する。
 4. `mode` に応じて `AwsMonQuestions.GSI1_BankRandom` から候補を探す。未回答表示に必要な属性は GSI projection で足りる。
 5. 候補がなく、かつ `mode=GENERATE` または `mode=MIXED` の場合だけ `GenerationJob(kind=INITIAL)` を作り、同期または worker で問題＋解説を同時生成する。`mode=BANK` では新規生成にフォールバックせず、候補なしとして返す。

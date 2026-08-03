@@ -10,12 +10,6 @@ variable "agent_image_tag" {
   default     = ""
 }
 
-variable "bedrock_model_id" {
-  description = "Bedrock model ID used by the AgentCore Runtime."
-  type        = string
-  default     = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
-}
-
 variable "agent_guardrail_version" {
   description = "Published Bedrock guardrail version used by the grounding gate. Roll back by setting a previous version (1 = grounding 0.7)."
   type        = string
@@ -27,13 +21,3 @@ variable "agent_guardrail_version" {
   }
 }
 
-variable "agent_model_provider" {
-  description = "Model provider used by the AgentCore Runtime."
-  type        = string
-  default     = "openrouter"
-
-  validation {
-    condition     = contains(["bedrock", "openrouter"], var.agent_model_provider)
-    error_message = "agent_model_provider must be either bedrock or openrouter."
-  }
-}
