@@ -16,6 +16,17 @@ variable "bedrock_model_id" {
   default     = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 }
 
+variable "agent_guardrail_version" {
+  description = "Published Bedrock guardrail version used by the grounding gate. Roll back by setting a previous version (1 = grounding 0.7)."
+  type        = string
+  default     = "2"
+
+  validation {
+    condition     = can(regex("^([0-9]+|DRAFT)$", var.agent_guardrail_version))
+    error_message = "agent_guardrail_version must be a published version number or DRAFT."
+  }
+}
+
 variable "agent_model_provider" {
   description = "Model provider used by the AgentCore Runtime."
   type        = string

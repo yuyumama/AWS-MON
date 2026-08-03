@@ -72,6 +72,7 @@ locals {
     OPENROUTER_API_KEY_PARAM        = "/app/aws-mon/prod/openrouter-api-key"
     BEDROCK_MODEL_ID                = var.bedrock_model_id
     AGENT_GUARDRAIL_ID              = data.aws_ssm_parameter.agent_guardrail_id.value
+    AGENT_GUARDRAIL_VERSION         = var.agent_guardrail_version
     AGENT_OBSERVABILITY_ENABLED     = "true"
     OTEL_PYTHON_DISTRO              = "aws_distro"
     OTEL_PYTHON_CONFIGURATOR        = "aws_configurator"
