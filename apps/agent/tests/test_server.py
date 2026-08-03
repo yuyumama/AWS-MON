@@ -7,7 +7,11 @@ import pytest
 
 from quiz_agent import runtime as runtime_module
 from quiz_agent import server as server_module
-from quiz_agent.agent import QuotaExhaustedError
+from quiz_agent.agent import (
+    QuotaExhaustedError,
+    ResearchFailedError,
+    ResearchIncompleteError,
+)
 
 
 class _FakeHandler:
@@ -36,6 +40,19 @@ def test_error_response_omits_code_by_default() -> None:
     assert "code" not in body
 
 
+@pytest.mark.parametrize(
+    ("exc", "code"),
+    [
+        (ResearchIncompleteError("incomplete"), "research_incomplete"),
+        (ResearchFailedError("failed"), "research_failed"),
+    ],
+)
+def test_error_response_uses_exception_error_code(exc: Exception, code: str) -> None:
+    body = server_module.error_response(exc)
+
+    assert body["code"] == code
+
+
 def test_quota_exhausted_response_sets_rate_limited_code() -> None:
     exc = QuotaExhaustedError("OpenRouterのレート制限/日次リクエスト上限に達しました")
 
@@ -62,6 +79,42 @@ def test_server_do_post_returns_429_with_rate_limited_code(
     status, body = handler.sent
     assert status == HTTPStatus.TOO_MANY_REQUESTS
     assert body["code"] == "rate_limited"
+
+
+@pytest.mark.parametrize(
+    ("exc", "expected_status", "expected_code"),
+    [
+        (
+            ResearchIncompleteError("調査が不完全です"),
+            HTTPStatus.UNPROCESSABLE_ENTITY,
+            "research_incomplete",
+        ),
+        (
+            ResearchFailedError("調査依存が失敗しました"),
+            HTTPStatus.BAD_GATEWAY,
+            "research_failed",
+        ),
+    ],
+)
+def test_server_do_post_maps_research_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    exc: Exception,
+    expected_status: HTTPStatus,
+    expected_code: str,
+) -> None:
+    def raise_research_error(*args: Any, **kwargs: Any) -> None:
+        raise exc
+
+    monkeypatch.setattr(server_module, "_parse_body", lambda handler: {})
+    monkeypatch.setattr(server_module, "build_generate_response", raise_research_error)
+
+    handler = _FakeHandler()
+    server_module.Handler.do_POST(handler)
+
+    assert handler.sent is not None
+    status, body = handler.sent
+    assert status == expected_status
+    assert body["code"] == expected_code
 
 
 def test_runtime_do_post_returns_http_200_with_rate_limited_code(

@@ -8,13 +8,14 @@ from __future__ import annotations
 import json
 import logging
 import os
+import random
 import shlex
 import sys
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, TypeVar
+from typing import Any, Literal, TypeVar
 
 from mcp import StdioServerParameters, stdio_client
 from pydantic import BaseModel
@@ -54,6 +55,28 @@ class QuotaExhaustedError(RuntimeError):
     """
 
 
+class ResearchIncompleteError(RuntimeError):
+    """調査ツールが十分な根拠を取得できず、品質要件を満たさなかった。"""
+
+    error_code = "research_incomplete"
+
+
+class ResearchFailedError(RuntimeError):
+    """依存障害によりドキュメント調査を完了できなかった。"""
+
+    error_code = "research_failed"
+
+
+def _exception_chain(exc: BaseException | None) -> Iterator[BaseException]:
+    """__cause__/__context__ を循環を避けながら順に返す。"""
+    seen: set[int] = set()
+    current = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        yield current
+        current = current.__cause__ or current.__context__
+
+
 def _is_rate_limit(exc: BaseException | None) -> bool:
     """例外チェーン(__cause__/__context__)を辿り、429(レート制限)を検知する。
 
@@ -64,13 +87,9 @@ def _is_rate_limit(exc: BaseException | None) -> bool:
       その変換を行わない独自実装のため、openai.RateLimitError がそのまま送出される。
     どちらの経路でも検知できるよう、例外チェーン全体をたどって判定する。
     """
-    seen: set[int] = set()
-    current = exc
-    while current is not None and id(current) not in seen:
-        seen.add(id(current))
+    for current in _exception_chain(exc):
         if _is_rate_limit_exception(current):
             return True
-        current = current.__cause__ or current.__context__
     return False
 
 
@@ -93,6 +112,27 @@ def _is_rate_limit_exception(exc: BaseException) -> bool:
         return True
 
     return False
+
+
+def _is_transient_model_error(exc: BaseException | None) -> bool:
+    """ストリーム途中で届くstatus_codeなしのOpenAI APIErrorを検知する。"""
+    try:
+        from openai import APIError
+    except ImportError:
+        return False
+
+    return any(
+        isinstance(current, APIError) and getattr(current, "status_code", None) is None
+        for current in _exception_chain(exc)
+    )
+
+
+def _original_exception_type(exc: BaseException) -> str:
+    """ラッパー例外の最深部にある元例外の型名を返す。"""
+    original = exc
+    for current in _exception_chain(exc):
+        original = current
+    return type(original).__name__
 
 
 def _openrouter_model() -> Model:
@@ -173,12 +213,31 @@ def _generate(
 
 # --- AWSドキュメントMCP(フェーズ2-4) -----------------------------------------
 # 生成前に search_documentation / read_documentation で最新の公式ドキュメントを
-# 調査させてから出題する。MCPサーバーの起動・調査に失敗した場合は、生成自体を
-# 止めないよう従来のドキュメントなし生成にフォールバックする。
+# 調査させてから出題する。MCPサーバーの起動・調査に失敗した場合、レポートモード
+# ではドキュメントなし生成へフォールバックし、強制モードでは依存障害として止める。
 
 
 class DocsResearchError(RuntimeError):
-    """MCPサーバーの起動またはドキュメント調査に失敗した。"""
+    """モデルまたはMCPの障害によりドキュメント調査に失敗した。"""
+
+    def __init__(
+        self,
+        cause_kind: Literal["model", "mcp"],
+        original: BaseException,
+        *,
+        successful_tool_calls: int,
+        research_attempts: int,
+    ) -> None:
+        self.cause_kind = cause_kind
+        self.original_exception_type = _original_exception_type(original)
+        self.successful_tool_calls = successful_tool_calls
+        self.research_attempts = research_attempts
+        source = (
+            "調査ターンのモデル呼び出し"
+            if cause_kind == "model"
+            else "ドキュメント調査用MCPの接続またはツール処理"
+        )
+        super().__init__(f"{source}に失敗しました: {original}")
 
 
 def _docs_mcp_enabled() -> bool:
@@ -212,9 +271,7 @@ def _tool_result_texts(messages: list[Any]) -> list[str]:
     グラウンディングチェックの grounding_source として使う。search_documentation の
     結果(検索結果一覧のJSON)はドキュメント原文ではなくノイズになるため、
     toolUse(toolUseId -> ツール名)を手がかりに read_documentation の結果だけに絞る。
-    read_documentation の結果が1件も無い場合(検索しかしなかった等)は、
-    grounding_source が空になってゲートが not_run に退化しないよう、
-    従来どおり全ツール結果へフォールバックする。
+    status=error の結果(上限超過によるキャンセル等)は根拠として扱わない。
     """
     tool_names: dict[str, str] = {}
     for message in messages:
@@ -230,7 +287,6 @@ def _tool_result_texts(messages: list[Any]) -> list[str]:
             if isinstance(tool_use_id, str) and isinstance(name, str):
                 tool_names[tool_use_id] = name
 
-    all_texts: list[str] = []
     read_doc_texts: list[str] = []
     for message in messages:
         content = message.get("content") if isinstance(message, dict) else None
@@ -240,17 +296,64 @@ def _tool_result_texts(messages: list[Any]) -> list[str]:
             tool_result = block.get("toolResult")
             if not isinstance(tool_result, dict):
                 continue
+            if tool_result.get("status") == "error":
+                continue
             texts = [
                 part.get("text")
                 for part in tool_result.get("content") or []
                 if isinstance(part, dict) and isinstance(part.get("text"), str)
             ]
             texts = [t for t in texts if t]
-            all_texts.extend(texts)
             if tool_names.get(tool_result.get("toolUseId")) == "read_documentation":
                 read_doc_texts.extend(texts)
 
-    return read_doc_texts if read_doc_texts else all_texts
+    return read_doc_texts
+
+
+def _tool_call_count(messages: list[Any]) -> int:
+    """会話履歴に記録されたtoolUseの件数を返す。"""
+    count = 0
+    for message in messages:
+        content = message.get("content") if isinstance(message, dict) else None
+        count += sum(
+            1
+            for block in content or []
+            if isinstance(block, dict) and isinstance(block.get("toolUse"), dict)
+        )
+    return count
+
+
+def _successful_tool_call_count(messages: list[Any]) -> int:
+    """toolUseと対応し、status=errorでないtoolResultの件数を返す。"""
+    tool_use_ids: set[str] = set()
+    for message in messages:
+        content = message.get("content") if isinstance(message, dict) else None
+        for block in content or []:
+            tool_use = block.get("toolUse") if isinstance(block, dict) else None
+            if isinstance(tool_use, dict) and isinstance(
+                tool_use.get("toolUseId"), str
+            ):
+                tool_use_ids.add(tool_use["toolUseId"])
+
+    count = 0
+    for message in messages:
+        content = message.get("content") if isinstance(message, dict) else None
+        for block in content or []:
+            tool_result = block.get("toolResult") if isinstance(block, dict) else None
+            if (
+                isinstance(tool_result, dict)
+                and tool_result.get("toolUseId") in tool_use_ids
+                and tool_result.get("status") != "error"
+            ):
+                count += 1
+    return count
+
+
+def _missing_research_detail(messages: list[Any]) -> str:
+    """根拠ゼロをツール呼び出し履歴から分類する。"""
+    return (
+        "no_tool_calls" if _tool_call_count(messages) == 0 else "no_read_documentation"
+    )
 
 
 def _research_retry_kwargs() -> dict[str, Any]:
@@ -274,33 +377,73 @@ def _researched_agent(quiz_prompt: str) -> Iterator[tuple[Agent, list[str]]]:
     """MCPクライアントを維持したまま、調査済みAgentと原文を提供する。"""
     # APIキー解決を含むモデル生成の失敗は調査失敗(フォールバック対象)にせず即エラーにする
     model = _model()
-    phase = "research"
+    phase = "mcp"
+    research_attempts = 0
+    successful_tool_calls = 0
     try:
         client = _docs_mcp_client()
         with client:
-            agent = Agent(
-                model=model,
-                system_prompt=QUIZ_SYSTEM_PROMPT,
-                tools=client.list_tools_sync(),
-                # プロンプト指示(最大2回)を無視して呼ばれ続けるのをコードで強制する
-                hooks=[docs_tool_limiter()],
-                **_research_retry_kwargs(),
+            tools = client.list_tools_sync()
+            phase = "research"
+            # 既定2: リトライ1回では上流混雑の持続に連敗する(2026-08-03再サンプリングで
+            # research_failed 3/30。試行あたり失敗率23%に対し2回で期待1%台まで下がる)
+            research_retries = max(
+                0, int(os.environ.get("AGENT_RESEARCH_RETRIES", "2"))
             )
-            agent(build_docs_research_prompt(quiz_prompt))
+            for research_attempts in range(1, research_retries + 2):
+                # 失敗した会話履歴とツール呼び出し回数を次の試行へ持ち越さない。
+                agent = Agent(
+                    model=model,
+                    system_prompt=QUIZ_SYSTEM_PROMPT,
+                    tools=tools,
+                    # プロンプト指示(最大2回)を無視して呼ばれ続けるのをコードで強制する
+                    hooks=[docs_tool_limiter()],
+                    **_research_retry_kwargs(),
+                )
+                try:
+                    agent(build_docs_research_prompt(quiz_prompt))
+                    break
+                except Exception as e:  # noqa: BLE001 - 例外チェーンで再試行可否を判定
+                    successful_tool_calls += _successful_tool_call_count(agent.messages)
+                    if _is_rate_limit(e):
+                        # 429はフォールバックも調査ターン再試行も行わない。
+                        raise QuotaExhaustedError(
+                            "OpenRouterのレート制限/日次リクエスト上限に達しました"
+                        ) from e
+                    if (
+                        _is_transient_model_error(e)
+                        and research_attempts <= research_retries
+                    ):
+                        logger.warning(
+                            "調査ターンの一過性モデルエラーを再試行します (%d/%d回目)",
+                            research_attempts,
+                            research_retries + 1,
+                        )
+                        # 上流混雑は数秒〜数十秒持続する(実測で1〜2.5秒待ちでは連敗した)
+                        # ため、試行ごとに待ちを線形に伸ばして同じ混雑への再突入を避ける
+                        time.sleep(3.0 * research_attempts + random.uniform(0.0, 1.0))
+                        continue
+                    raise DocsResearchError(
+                        "model",
+                        e,
+                        successful_tool_calls=successful_tool_calls,
+                        research_attempts=research_attempts,
+                    ) from e
+            successful_tool_calls += _successful_tool_call_count(agent.messages)
             source_texts = _tool_result_texts(agent.messages)
             phase = "generation"
             yield agent, source_texts
     except DocsResearchError:
         raise
+    except QuotaExhaustedError:
+        raise
     except Exception as e:
-        if _is_rate_limit(e):
-            # 429はフォールバック(ドキュメントなし生成)で無駄に枠を消費させず即座に失敗させる
-            raise QuotaExhaustedError(
-                "OpenRouterのレート制限/日次リクエスト上限に達しました"
-            ) from e
-        if phase == "research":
+        if phase != "generation":
             raise DocsResearchError(
-                f"AWSドキュメントMCPでの調査に失敗しました: {e}"
+                "mcp",
+                e,
+                successful_tool_calls=successful_tool_calls,
+                research_attempts=research_attempts,
             ) from e
         raise
 
@@ -389,6 +532,7 @@ def _log_gate_result(
                 "attempt": attempt,
                 "attempts": attempts,
                 "cert": cert,
+                "detail": gate.detail,
             },
             ensure_ascii=False,
         )
@@ -398,6 +542,7 @@ def _log_gate_result(
         grounding=gate.grounding_score,
         relevance=gate.relevance_score,
         cert=cert,
+        reason=gate.detail,
     )
 
 
@@ -416,17 +561,27 @@ def _generate_quiz_with_docs_and_gate(
     last: GenerationResult | None = None
 
     with _researched_agent(quiz_prompt) as (agent, source_texts):
-        item = _structured_quiz_with_retries(agent)
-        for attempt in range(attempts):
-            if not gate_is_enabled:
-                return GenerationResult(item=item)
-            if not source_texts:
-                # 調査ターンでツールが使われなかった場合は根拠が無いので判定不能
-                return GenerationResult(
-                    item=item,
-                    gate=GateResult(status="not_run", detail="no research documents"),
+        # 構造化出力も同じAgentの履歴へtoolUseを追加しうるため、調査直後に分類する。
+        missing_detail = (
+            _missing_research_detail(agent.messages) if not source_texts else None
+        )
+        if missing_detail:
+            gate = GateResult(status="not_run", detail=missing_detail)
+            _log_gate_result(gate, attempt=1, attempts=1, cert=cert)
+            if gate_is_enabled and gate_enforced():
+                raise ResearchIncompleteError(
+                    f"ドキュメント調査が不完全なため生成を中止しました ({missing_detail})"
                 )
+            item = _structured_quiz_with_retries(agent)
+            return GenerationResult(item=item, gate=gate)
 
+        item = _structured_quiz_with_retries(agent)
+        if not gate_is_enabled:
+            gate = GateResult(status="not_run", detail="gate_disabled")
+            _log_gate_result(gate, attempt=1, attempts=1, cert=cert)
+            return GenerationResult(item=item, gate=gate)
+
+        for attempt in range(attempts):
             gate = check_grounding(
                 grounding_source="\n\n".join(source_texts),
                 query=_gate_query(item),
@@ -475,14 +630,36 @@ def generate_quiz(cert: str, domain: str | None = None) -> GenerationResult:
         except QuotaExhaustedError:
             # 日次枠切れでの再生成は無駄なので、ドキュメントなし生成へフォールバックしない
             raise
-        except DocsResearchError:
+        except DocsResearchError as e:
+            fail_closed = gate_enabled() and gate_enforced()
             logger.warning(
-                "AWSドキュメントMCPでの調査に失敗したため、ドキュメントなし生成へフォールバックします",
+                json.dumps(
+                    {
+                        "event": "docs_research_failed",
+                        "cause_kind": e.cause_kind,
+                        "exception_type": e.original_exception_type,
+                        "successful_tool_calls": e.successful_tool_calls,
+                        "research_attempts": e.research_attempts,
+                        "fallback": not fail_closed,
+                    },
+                    ensure_ascii=False,
+                ),
                 exc_info=True,
             )
+            gate = GateResult(status="not_run", detail="research_failed")
+            _log_gate_result(gate, attempt=1, attempts=1, cert=cert)
+            if fail_closed:
+                raise ResearchFailedError(
+                    "ドキュメント調査の依存障害により生成を中止しました"
+                ) from e
+
+            item = _generate(QUIZ_SYSTEM_PROMPT, QuizItem, quiz_prompt, retries=retries)
+            return GenerationResult(item=item, gate=gate)
 
     item = _generate(QUIZ_SYSTEM_PROMPT, QuizItem, quiz_prompt, retries=retries)
-    return GenerationResult(item=item)
+    gate = GateResult(status="not_run", detail="docs_mcp_disabled")
+    _log_gate_result(gate, attempt=1, attempts=1, cert=cert)
+    return GenerationResult(item=item, gate=gate)
 
 
 # 旧 evaluate_question(自己批評のプレースホルダ)はフェーズ3-2で AgentCore Evaluations の

@@ -32,17 +32,19 @@ def emit_gate_metrics(
     grounding: float | None,
     relevance: float | None,
     cert: str | None = None,
+    reason: str | None = None,
 ) -> None:
     """ゲート評価結果をEMF形式でstdoutに出力する。
 
     Dimensions は [["Status"]](値は passed/failed/not_run)。
-    grounding / relevance が None のメトリクスは出さない(ゲート未実施・未算出のため)。
+    全結果に GateEvaluationCount を出し、スコア None でも件数を集計可能にする。
+    Reason は高カーディナリティを避けるためDimensionには含めない。
     """
     if not gate_metrics_enabled():
         return
 
-    metrics: list[dict[str, str]] = []
-    payload: dict[str, Any] = {"Status": status}
+    metrics: list[dict[str, str]] = [{"Name": "GateEvaluationCount", "Unit": "Count"}]
+    payload: dict[str, Any] = {"Status": status, "GateEvaluationCount": 1}
     if grounding is not None:
         metrics.append({"Name": "GroundingScore", "Unit": "None"})
         payload["GroundingScore"] = grounding
@@ -51,6 +53,8 @@ def emit_gate_metrics(
         payload["RelevanceScore"] = relevance
     if cert:
         payload["cert"] = cert
+    if reason:
+        payload["Reason"] = reason
 
     payload["_aws"] = {
         "Timestamp": int(time.time() * 1000),

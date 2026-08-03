@@ -107,7 +107,12 @@ python3 -m quiz_agent.server
 `_generate_quiz_with_docs`。調査1ターン → 会話履歴を踏まえた `structured_output`）。
 
 - `AGENT_DOCS_MCP=0` で無効化（従来どおり調査なしで生成）
-- MCPサーバーの起動や調査に失敗した場合は、生成を止めず**調査なし生成へ自動フォールバック**する
+- 調査ターンの一過性モデルエラー（ストリーム途中の `status_code` なし `openai.APIError`）は
+  `AGENT_RESEARCH_RETRIES`（既定2）回まで調査ターンをやり直す（試行ごとに新しいAgent、
+  backoff+jitterつき。429は即時終了しリトライしない。issue #77）
+- リトライ後も調査に失敗した場合の扱いはゲート設定に依存する: ゲート有効かつ
+  `AGENT_GUARDRAIL_ENFORCE=1` では生成を中止（502 `research_failed`）、それ以外は
+  **調査なし生成へ自動フォールバック**する（`inlineGate=not_run` / `detail=research_failed`）
 - 起動コマンドは `AGENT_DOCS_MCP_COMMAND` で差し替え可（例: `uvx awslabs.aws-documentation-mcp-server@latest`）
 - ツール呼び出しが増えるぶん、1問あたりのLLMトークン消費と生成時間は増える。
   調査量はプロンプト指示に加えてコードでも上限を強制する（`quiz_agent/tool_limits.py`。
@@ -156,14 +161,19 @@ python scripts/create_guardrail.py
   （`QUIZ_REGENERATE_FEEDBACK_PROMPT`）で作り直す。それでも通らなければ生成失敗
   (422 `grounding_blocked`)
 - `AGENT_GUARDRAIL_ENFORCE=0` でレポートのみ（しきい値チューニング用）
-- MCP調査なし生成やガードレール自体の障害時は判定なし（fail-open、`inlineGate=not_run`）
+- fail-open はガードレール自体の障害（`ApplyGuardrail` エラー）に限る（`inlineGate=not_run`）。
+  根拠ゼロ（調査失敗 `research_failed` / ツール未使用 `no_tool_calls` / search のみ
+  `no_read_documentation`）は、ゲート有効かつ enforce 時は fail-closed で生成失敗
+  （422 `research_incomplete` または 502 `research_failed`）、それ以外は `not_run` +
+  `detail` に分類を記録して生成継続（issue #77）
 - 結果は `/generate` レスポンスの `quality.inlineGate` / `quality.score` としてAPI側に保存される
 
 ### ゲート入力の整形（issue #63）
 
-- `grounding_source`（調査原文）は会話履歴の `read_documentation` ツール結果だけに絞る
-  （`search_documentation` の検索結果一覧JSONはドキュメント原文ではなくノイズになるため除外）。
-  `read_documentation` を1回も呼んでいない場合のみ、判定不能に退化しないよう全ツール結果へフォールバックする
+- `grounding_source`（調査原文）は会話履歴の**成功した** `read_documentation` ツール結果だけに絞る
+  （`search_documentation` の検索結果一覧JSONはドキュメント原文ではなくノイズになるため除外。
+  status=error のツール結果も根拠として扱わない）。`read_documentation` の結果ゼロ時に
+  全ツール結果へフォールバックする旧挙動は、検索スニペットを根拠に見せかけるため撤去した（issue #77）
 - `guard_content`（ゲート対象テキスト）から「正解: A, D」のようなラベル行を削除した
   （ドキュメント原文に存在しえない文字列で常に減点要因になっていたため）。既定は
   正解選択肢の本文 + `explanation.correct_reason`。`AGENT_GATE_INCLUDE_OVERVIEW=1`
@@ -174,10 +184,13 @@ python scripts/create_guardrail.py
 
 ### ゲートスコアの記録・分布計測（issue #63）
 
-`check_grounding` の評価結果は合否・not_run問わず毎回、構造化ログ
-（`{"event": "grounding_gate", "status": ..., "grounding": ..., "relevance": ..., "attempt": ..., "attempts": ..., "cert": ...}`）
+評価結果は合否・not_run問わず毎回、構造化ログ
+（`{"event": "grounding_gate", "status": ..., "grounding": ..., "relevance": ..., "attempt": ..., "attempts": ..., "cert": ..., "detail": ...}`）
 と CloudWatch EMF形式のメトリクス（`quiz_agent/gate_metrics.py`、名前空間 `AWSMon/Agent`、
-ディメンション `Status`、メトリクス `GroundingScore` / `RelevanceScore`）の両方で記録する。
+ディメンション `Status`、メトリクス `GateEvaluationCount`（全結果で1） / `GroundingScore` /
+`RelevanceScore`（算出時のみ）、理由は非ディメンションの `Reason` フィールド）の両方で記録する。
+ゲートが走らない経路（早期リターン・調査失敗フォールバック等）も同じ計測を通るため、
+`Status=not_run` も件数として集計できる（issue #77）。
 AgentCore Runtime のコンテナログは CloudWatch Logs に入るため、EMFログは追加設定なしで
 自動的にカスタムメトリクス化される。
 
