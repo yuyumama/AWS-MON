@@ -112,7 +112,7 @@ flowchart LR
   レポートモード（`ENFORCE=0`）やゲート未設定時は従来どおり生成を返し、`not_run` + 上記の
   `detail` を記録する
 - **調査ターンの一過性エラーはリトライ**: ストリーム途中の上流エラー（`status_code` を持たない
-  `openai.APIError`）は `AGENT_RESEARCH_RETRIES`（既定1）回まで調査ターンをやり直す
+  `openai.APIError`）は `AGENT_RESEARCH_RETRIES`（既定2）回まで調査ターンをやり直す
   （試行ごとに新しい Agent、backoff+jitter つき。429 は即時終了でリトライしない）。
   not_run 23% の支配的原因だった（issue #77 のログ解析）
 - **文字数上限**: source 10万字 / query 1,000字 / content 5,000字（超過分は切り詰め＝判定対象外）

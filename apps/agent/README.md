@@ -108,7 +108,7 @@ python3 -m quiz_agent.server
 
 - `AGENT_DOCS_MCP=0` で無効化（従来どおり調査なしで生成）
 - 調査ターンの一過性モデルエラー（ストリーム途中の `status_code` なし `openai.APIError`）は
-  `AGENT_RESEARCH_RETRIES`（既定1）回まで調査ターンをやり直す（試行ごとに新しいAgent、
+  `AGENT_RESEARCH_RETRIES`（既定2）回まで調査ターンをやり直す（試行ごとに新しいAgent、
   backoff+jitterつき。429は即時終了しリトライしない。issue #77）
 - リトライ後も調査に失敗した場合の扱いはゲート設定に依存する: ゲート有効かつ
   `AGENT_GUARDRAIL_ENFORCE=1` では生成を中止（502 `research_failed`）、それ以外は

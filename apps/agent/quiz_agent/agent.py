@@ -388,8 +388,10 @@ def _researched_agent(quiz_prompt: str) -> Iterator[tuple[Agent, list[str]]]:
         with client:
             tools = client.list_tools_sync()
             phase = "research"
+            # 既定2: リトライ1回では上流混雑の持続に連敗する(2026-08-03再サンプリングで
+            # research_failed 3/30。試行あたり失敗率23%に対し2回で期待1%台まで下がる)
             research_retries = max(
-                0, int(os.environ.get("AGENT_RESEARCH_RETRIES", "1"))
+                0, int(os.environ.get("AGENT_RESEARCH_RETRIES", "2"))
             )
             for research_attempts in range(1, research_retries + 2):
                 # 失敗した会話履歴とツール呼び出し回数を次の試行へ持ち越さない。
@@ -417,9 +419,10 @@ def _researched_agent(quiz_prompt: str) -> Iterator[tuple[Agent, list[str]]]:
                             research_attempts,
                             research_retries + 1,
                         )
+                        # 上流混雑は数秒〜数十秒持続する(実測で1〜2.5秒待ちでは連敗した)
+                        # ため、試行ごとに待ちを線形に伸ばして同じ混雑への再突入を避ける
                         time.sleep(
-                            min(2.0, float(research_attempts))
-                            + random.uniform(0.0, 0.5)
+                            3.0 * research_attempts + random.uniform(0.0, 1.0)
                         )
                         continue
                     raise DocsResearchError(
