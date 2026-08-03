@@ -147,7 +147,9 @@ python3 -m quiz_agent.server
 
 - CloudWatchコンソール > **GenAI Observability** でトレース（トークン・プロンプト・MCPツール呼び出し）を確認
 - APIから渡される `sessionId` は OTel baggage `session.id` に載り、セッション単位で束なる
-- service.name / ロググループは `.env` の `AGENT_OTEL_*` で変更（既定: `aws-mon-quiz-agent` / `/aws/aws-mon/quiz-agent`）
+- service.name / ロググループは `.env` の `AGENT_OTEL_*` で変更（既定: `aws-mon-quiz-agent-local` / `/aws/aws-mon/quiz-agent`）
+- **ローカルはオンライン評価の対象外**: service.name が prod（`aws-mon-quiz-agent`）と別なので
+  ジャッジ課金が発生しない。ローカルのトレースも採点したいときだけ `AGENT_OTEL_SERVICE_NAME` を prod と揃える
 - **本番（AgentCore Runtime）は常時計装**: Terraform が `AGENT_OBSERVABILITY_ENABLED=true` と
   `OTEL_*` 一式をRuntime環境変数に注入し、`docker-entrypoint.sh` が計装つきで起動する
 
