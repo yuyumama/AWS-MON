@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 
-DEFAULT_OPENROUTER_MODEL_ID = "nvidia/nemotron-3-ultra-550b-a55b:free"
+DEFAULT_OPENROUTER_MODEL_ID = "inclusionai/ling-3.0-flash:free"
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 
