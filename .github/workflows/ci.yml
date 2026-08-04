@@ -57,6 +57,9 @@ jobs:
       - name: Typecheck
         run: npm run typecheck --workspaces --if-present
 
+      - name: Test
+        run: npm test
+
       - name: Biome
         run: npm run lint
 
