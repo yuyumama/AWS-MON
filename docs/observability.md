@@ -2,15 +2,15 @@
 
 最終更新: 2026-08-03
 
-このプロジェクトに実装されている監視の全体像。設計の意思決定は
+このプロジェクトに実装されている監視の全体像を示す。設計上の意思決定は
 [ADR 0007](adr/0007-observability-stack.md)（オンライン評価の廃止は
 [ADR 0011](adr/0011-retire-online-evaluations.md)）、AWSサービス3手段の比較調査は
-[research/genai-observability-vs-xray.md](research/genai-observability-vs-xray.md) を参照。
-本書は「**何が・どこで・どう監視されているか**」の実装リファレンス。
+[research/genai-observability-vs-xray.md](research/genai-observability-vs-xray.md) を参照。本書は、
+「**何が・どこで・どう監視されているか**」を示す実装リファレンスである。
 
 ## 全体像 — 2層の観測 + 1つのインラインゲート
 
-監視対象の中心は問題生成エージェント（`apps/agent`）。「経路 / 中身」の2層で観測し、
+監視対象の中心は問題生成エージェント（`apps/agent`）である。「経路 / 中身」の2層で観測し、
 加えて生成時に不良問題を同期的に弾くインラインゲートを持つ。
 かつてあった第3層「品質（傾向）＝AgentCore Evaluations オンライン評価」は、費用の95%超が
 ジャッジトークンで便益に見合わなかったため廃止した（[ADR 0011](adr/0011-retire-online-evaluations.md)）。
@@ -47,7 +47,7 @@ flowchart LR
 
 - `aws-opentelemetry-distro` を `opentelemetry-instrument` 経由で被せて起動する。
   **Collector は使わない**（AgentCore Runtime 外のエージェントでは ADOT Collector が
-  非サポートのため、SDKからCloudWatch OTLPエンドポイントへの直送が唯一のサポート経路）。
+  サポートされていないため、SDKからCloudWatch OTLPエンドポイントへの直送が唯一のサポート経路）。
 - **計装はオプトイン**。通常起動（`python -m quiz_agent.server`）では何も送らず、挙動・依存も変わらない。
 
 | 環境 | 計装の有効化 | 実装 |
@@ -101,7 +101,7 @@ flowchart LR
 - **ブロック時**: 再生成（`AGENT_GUARDRAIL_RETRIES`、既定1回）。それでも通らなければ
   生成失敗（HTTP 422 `grounding_blocked`）
 - **fail-open はガードレール呼び出し自体の障害に限る**: `ApplyGuardrail` のエラー（権限・
-  リージョン等）は判定なし（`not_run`）で生成継続。ゲートは品質・コスト保護であり可用性を落とさない
+  リージョンなど）は判定なし（`not_run`）で生成を継続する。ゲートは品質・コストを保護し、可用性を落とさない
 - **根拠ゼロは fail-closed**（issue #77）: grounding source が空のままの生成は「無検査で通した」
   状態になるため、ゲート有効かつ `AGENT_GUARDRAIL_ENFORCE=1` では保存させない。原因を3分類する:
   - `research_failed` … 調査ターンがリトライ後も失敗（依存障害。HTTP 502 `research_failed`。
@@ -119,7 +119,7 @@ flowchart LR
 - `AGENT_GUARDRAIL_ENFORCE=0` でレポートのみモード（しきい値チューニング用）
 - **計測**（EMF、namespace `AWSMon/Agent`、`quiz_agent/gate_metrics.py`）: 全結果で
   `GateEvaluationCount=1` を発行し、`Status`（passed / failed / not_run）を dimension に持つ。
-  スコアが算出されない `not_run` も CloudWatch Metrics で件数集計できる。理由（上記3分類等）は
+  スコアが算出されない `not_run` も CloudWatch Metrics で件数集計できる。理由（上記3分類など）は
   高カーディナリティ化を避けるため dimension にせず、EMF payload の `Reason` フィールドと
   構造化ログ（`grounding_gate` イベントの `detail`）に残す。早期リターン・調査失敗フォールバックを
   含む全経路が同じ計測関数を通る（issue #77 で計測の穴を塞いだ）
@@ -132,18 +132,18 @@ flowchart LR
 
 - **1回の再生成で消費するのは `structured_output` 1リクエストのみ**。調査フェーズ（MCP）は
   やり直さず、調査済みの会話履歴を再利用する（[ADR 0009](adr/0009-openrouter-default-provider.md) 決定4-A）。
-  再生成時はブロック理由をフィードバックとして注入し、初回と同条件の繰り返しにならないようにしている
+  再生成時はブロック理由をフィードバックとして注入し、初回と同じ条件を繰り返さないようにしている
 - **初回通過率は 60.9%**（ADR 0010 の実測、grounding 0.6 換算・評価が走った23件中14件）。
-  残りを拾うために再生成があり、この値がそのまま「再生成が必要になる頻度」の目安になる
+  残りを補うために再生成し、この値を「再生成が必要になる頻度」の目安とする
 - **無料枠**: OpenRouter は 1,000リクエスト/日（$10クレジット購入済みのアカウント。未購入だと50/日）。
   1問あたりの消費は調査ツール呼び出し＋生成で数リクエスト規模のため、既定の1回では枠が制約にならない
 - **0 にする判断**: 枠が逼迫している、または生成失敗（422）よりレイテンシを優先する場合。
   ただし初回で落ちた問題はそのまま失格になる
 - **2以上にする判断**: 現時点では推奨しない。再生成の通過率は未実測（ADR 0010 は `RETRIES=0` で
   採取したため）で、回数を増やす根拠がない。prod の `grounding_gate` メトリクス（attempt 別）が
-  溜まってから再検討する
+  蓄積されてから再検討する
 
-結果は問題 item の `quality` 属性として DynamoDB に保存される:
+結果は、問題 item の `quality` 属性として DynamoDB に保存される:
 
 | フィールド | 値 |
 |---|---|

@@ -4,10 +4,10 @@
 - 日付: 2026-07-02
 
 ## 背景
-フェーズ3（②オブザーバビリティ）の目的は「AIオブザーバビリティの検証」。
+フェーズ3（②オブザーバビリティ）の目的は「AIオブザーバビリティの検証」である。
 経路（X-Ray）/ 中身の可視化（CloudWatch生成AIオブザーバビリティ）/ 品質採点（AgentCore
-Evaluations）の3層に加え、生成時に不良問題を弾くインラインゲートが必要。
-agent は当面 AgentCore Runtime 外（ローカル/自前ホスト）で動く。
+Evaluations）の3層に加え、生成時に不良問題を弾くインラインゲートが必要である。
+agent は当面、AgentCore Runtime 外（ローカル/自前ホスト）で動く。
 
 ## 決定
 
@@ -19,7 +19,7 @@ agent は当面 AgentCore Runtime 外（ローカル/自前ホスト）で動く
   必要があるため、`.env` は起動スクリプトが読み込む（server内の `load_dotenv` では間に合わない）。
 - 前提の一度きりセットアップ（CloudWatch Transaction Search 有効化・ロググループ作成）は
   `apps/agent/scripts/setup_observability.sh`。
-- 出題セッションとの紐付けは、API→agentへ `sessionId` を渡し OTel baggage `session.id` に設定。
+- 出題セッションとの紐付けでは、API→agentへ `sessionId` を渡し、OTel baggage `session.id` に設定する。
 - **計装はオプトイン**: 通常起動（`python -m quiz_agent.server`）では計装されず、挙動も依存も変わらない。
 
 ### 2. インライン品質ゲートは Bedrock Guardrails 文脈的グラウンディングチェック
@@ -29,7 +29,7 @@ agent は当面 AgentCore Runtime 外（ローカル/自前ホスト）で動く
 - ブロック時は再生成（`AGENT_GUARDRAIL_RETRIES`、既定1回）。それでも通らなければ
   生成失敗として弾く（HTTP 422 `grounding_blocked`）。`AGENT_GUARDRAIL_ENFORCE=0` で
   レポートのみモード（しきい値チューニング用）。
-- 結果は `quality.inlineGate`（passed/failed/not_run）と `quality.score`（groundingスコア）として保存。
+- 結果は `quality.inlineGate`（passed/failed/not_run）と `quality.score`（groundingスコア）として保存する。
 - ガードレール自体の障害・MCP調査なし生成では **fail-open**（not_runで生成継続）。
   ゲートはコスト・品質保護であり可用性を落とさない。
 - ガードレール作成は `apps/agent/scripts/create_guardrail.py`（しきい値: grounding 0.7 / relevance 0.5 起点）。
@@ -40,7 +40,7 @@ agent は当面 AgentCore Runtime 外（ローカル/自前ホスト）で動く
 > 便益に見合わないため廃止した。経緯と実測は [ADR 0011](0011-retire-online-evaluations.md)。
 - 旧 `evaluate_question`（生成ごとの自己批評。ADR 0005時点のつなぎ）を**削除**し、
   トレースに対する非同期評価に置き換え（`apps/agent/scripts/setup_evaluations.py`）。
-- agentはRuntime外のため、データソースは **CloudWatchロググループ + service.name** 方式。
+- agentはRuntime外のため、データソースには **CloudWatchロググループ + service.name** 方式を使用する。
 - 評価者は組み込みの `Builtin.Correctness`（クイズ問題の正確さを明示的に想定した判定プロンプト）のみ。
   当初は `Builtin.Faithfulness`（ツール出力=ドキュメント原文との整合）も併用したが、
   Guardrailsグラウンディングゲート（上記2）が全件・同期で同等の整合チェックを担うため、
@@ -60,13 +60,13 @@ agent は当面 AgentCore Runtime 外（ローカル/自前ホスト）で動く
 ## トレードオフ / 留意
 - グラウンディングチェックは1回あたり文字数課金（source原文が大きいと単価増）。上限
   （source 10万字/query 1,000字/content 5,000字）で切り詰めるため、超過分は判定対象外。
-- ブロック時の再生成はBedrock呼び出しが倍になる。リトライ既定は1回に抑制。
+- ブロック時の再生成ではBedrock呼び出しが倍になる。リトライの既定は1回に抑える。
 - オンライン評価はジャッジモデルの推論コストがかかる（組み込み評価者は入力$2.4/百万トークンで、
   Haiku 4.5の生成単価より高い）。サンプリング100%・評価者2つで開始したが、コスト最適化
   （2026-07-04）で既定をサンプリング20%・`Builtin.Correctness` のみに変更した。
   品質チューニング時は `setup_evaluations.py --sampling` で一時的に上げる。
 - Transaction Search はスパンのインデックスに課金（全量インデックス設定）。
-- ローカルでは観測層は再現しない方針（ADR 0004）のまま。計装なし起動がデフォルト。
+- ローカルでは観測層を再現しない方針（ADR 0004）を維持する。計装なしの起動をデフォルトとする。
 - CloudWatch生成AIオブザーバビリティ / AgentCore Evaluations は新しいサービスのため、
   APIやデータソース要件が変わる可能性がある。ライブ確認時に `docs/research/` のメモを更新する。
 

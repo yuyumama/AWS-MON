@@ -8,7 +8,7 @@
 フェーズ4で「ログイン → BANK出題 → GENERATE生成」をクラウドで通すため、
 `infra/envs/prod` に本番スタックを実装した。決めるべき点は3つあった:
 
-1. CloudFrontとAPIの接続形態（同一ディストリビューション or 分離）
+1. CloudFrontとAPIの接続形態（同一ディストリビューションまたは分離）
 2. GENERATE/MIXED job worker（現 `POST /dev/jobs/run`）のクラウド実行方式
 3. `apps/agent` のAgentCore Runtime化とそのIaC管理方法
 
@@ -16,8 +16,8 @@
 
 ### 1. CloudFrontはweb配信専用、APIはLambda Function URLで分離公開
 
-- CloudFront(+OAC) は S3 の webビルド成果物配信のみを担当する。
-- API は Lambda(LWA) の **Function URL**（`authorization_type = NONE`）で公開し、
+- CloudFront（+OAC）は S3 の webビルド成果物配信のみを担当する。
+- API は Lambda（LWA）の **Function URL**（`authorization_type = NONE`）で公開し、
   認証はアプリ層のJWT検証（fail-closed、ADR 0006）に一本化する。
   CORS は Function URL 側で CloudFront ドメインのみに許可する。
 - 理由: GENERATE の同期生成パス（セッション開始・prefetch未完時のフォールバック）は
@@ -26,7 +26,7 @@
   分離により web は `VITE_API_BASE_URL` にFunction URLをビルド時注入する
   （ローカルの `/api` プロキシと同じく、APIルートにプレフィックスは付けない）。
 - 公開diagnosticの縮小: `/health/tables` と `/health/dynamo` はテーブル名や
-  AWSエラー文言（ロールARN等）を返すため、`/dev/*` と同じ devモード限定ガードに載せた。
+  AWSエラー文言（ロールARNなど）を返すため、`/dev/*` と同じ devモード限定ガードに載せた。
   本番で無認証公開されるのは liveness用 `/health` のみ。
 
 ### 2. workerは EventBridge Scheduler + 専用Lambda（定期実行、SQSにしない）
@@ -37,7 +37,7 @@
 - 理由: prefetch未完時はAPI側に同期生成フォールバックが既にあり、workerは
   「加速装置」でよい。個人利用の低トラフィックではSQS駆動は過剰。
   job側の `lockedUntil` 排他により重複起動しても安全。
-- ADR 0006 との整合: jobは生成権限を検証済みのユーザー操作でのみ enqueue されるため、
+- ADR 0006 との整合: jobは、生成権限を検証済みのユーザー操作でのみ enqueue されるため、
   workerは「信頼済み内部実行コンテキスト」として権限を再確認しない（コードに明記）。
   workerを起動できるのは scheduler ロールのみ。
 
@@ -58,7 +58,7 @@
 ### 4. 二段階apply（コンテナイメージの鶏卵問題）
 
 Lambda / AgentCore Runtime は作成時点でECRにイメージが存在する必要がある。
-`api_image_tag` / `agent_image_tag` 変数（既定 `""` = 該当リソースをスキップ）で分け、
+`api_image_tag` / `agent_image_tag` 変数（既定 `""` = 該当リソースをスキップ）で段階を分け、
 ①イメージ非依存リソースをapply → ②deploy-api/deploy-agentでECRへpush →
 ③tfvarsにタグを入れて再apply、の順で立ち上げる。手順の詳細は `docs/cicd.md`。
 
@@ -80,6 +80,6 @@ SSMへ書き出す。パラメータ一覧は `docs/cicd.md` を参照。
 
 ## 影響
 
-- `GET /health/tables` / `GET /health/dynamo` は本番(cognitoモード)で404になる。
+- `GET /health/tables` / `GET /health/dynamo` は本番（cognitoモード）で404になる。
 - AgentCore Runtime上のOTel/Evaluations構成はADR 0007の「ロググループ+service.name」方式を
   当面維持する。Runtimeネイティブ連携への切替は運用開始後に再評価する。

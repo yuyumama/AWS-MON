@@ -2,8 +2,8 @@
 
 最終更新: 2026-07-06
 
-GitHub Actions による CI/CD の確定構成。`docs/architecture.md` がシステム構成、本書は
-**コードがどう検証され、どうAWSに届くか**を示す。
+GitHub Actions による CI/CD の確定構成である。`docs/architecture.md` はシステム構成、本書は
+**コードがどのように検証され、AWSに届くか**を示す。
 
 ## 全体像: 3段構え
 
@@ -15,7 +15,7 @@ GitHub Actions による CI/CD の確定構成。`docs/architecture.md` がシ�
   必ず GitHub Actions 側に置く。チェック内容は両者で同一（スクリプトを共有し乖離を防ぐ）。
 - **CD は main への push のみを契機**とする。PRや手動pushから本番リソースには触れない。
 - `terraform apply` の前には GitHub Environments（`prod`）の**手動承認**を挟む。
-- AWSへのアクセスは全て **OIDC による一時クレデンシャル**。GitHub Secrets に
+- AWSへのアクセスには、すべて **OIDC による一時クレデンシャル**を使用する。GitHub Secrets に
   長期アクセスキーは保存しない。
 
 ## ディレクトリ構成
@@ -53,13 +53,13 @@ infra/
 | security | gitleaks（シークレット検知）+ trivy（IaCミスコンフィグ検知） | 常時 |
 
 フォーマッタは3系統: TS = **Biome**、Python = **ruff**、Terraform = `terraform fmt`。
-いずれもCIが書式を強制する（複数のAIエージェントがコードを書くため、書式は機械的に統一する）。
+いずれもCIで書式を強制する（複数のAIエージェントがコードを書くため、書式は機械的に統一する）。
 
 ### セキュリティチェックの分担
 
 - **CIゲート（必須・自動）**: gitleaks / trivy / Dependabot。決定的（同じ入力なら同じ結果）で
   無料・高速なツールのみをゲートにする。trivyの除外はリポジトリルートの `.trivyignore` で
-  管理し、**除外には必ず理由コメントを付ける**（現状: CloudFront WAF / ECRタグMUTABLE /
+  管理する。**除外には必ず理由コメントを付ける**（現状: CloudFront WAF / ECRタグMUTABLE /
   S3のCMK暗号化。いずれも個人利用のコスト・運用判断）。
 - **LLMレビュー（ローカル・助言的）**: 認証・IAM・データアクセスに触る変更はマージ前に
   Claude Code の `/security-review` をローカルで実行する。文脈依存の指摘（権限設計の穴、
@@ -67,7 +67,7 @@ infra/
 
 ## CD — infra と app の分離
 
-デプロイは4本のワークフローに分離し、**パスフィルタで変更されたものだけ**が動く
+デプロイは4本のワークフローに分離し、**パスフィルタで変更されたものだけ**を実行する
 （軽微な修正で全コンポーネントが再デプロイされることはない）。全ワークフローに
 `workflow_dispatch` も付与し、手動再実行を可能にする。
 
@@ -80,7 +80,7 @@ infra/
 
 ### Terraform とアプリデプロイの境界（規約）
 
-- Terraform は**入れ物**を管理する: S3 / CloudFront / Lambda関数 / ECR / DynamoDB / SSM 等。
+- Terraform は**入れ物**を管理する: S3 / CloudFront / Lambda関数 / ECR / DynamoDB / SSM など。
 - アプリの**中身**（webの静的ファイル、api/agent のコンテナイメージ）は app ワークフローが
   直接更新する。Lambda の `image_uri` には `lifecycle { ignore_changes = [image_uri] }` を
   付け、Terraform が app デプロイの結果を巻き戻さないようにする
@@ -91,7 +91,7 @@ infra/
 
 ### SSMパラメータ契約（`/app/aws-mon/prod/*`, type=String）
 
-アカウント固有値をリポジトリにコミットしないための受け渡し場所。
+アカウント固有値をリポジトリにコミットせず受け渡す場所である。
 
 | パス | 作成者 | 用途 |
 |---|---|---|
@@ -107,10 +107,10 @@ infra/
 ### 初回立ち上げ（二段階apply）
 
 **この手順は2026-07-05〜06に実施済み**（現在は通常運用 = パスフィルタ契機の自動デプロイ）。
-再構築時の手順として残す。
+再構築時に備えて手順を残す。
 
-Lambda / AgentCore Runtime は作成時にECRイメージが必要（鶏卵問題）。
-`api_image_tag` / `agent_image_tag` 変数（既定 `""` = 該当リソース未作成）で分ける。
+Lambda / AgentCore Runtime は作成時にECRイメージが必要である（鶏卵問題）。
+`api_image_tag` / `agent_image_tag` 変数（既定 `""` = 該当リソース未作成）で段階を分ける。
 
 1. オーナーがSSMパラメータ3つ（上表の手動分）を作成。
 2. 実装PRマージ → deploy-infra: DynamoDB / ECR / S3+CloudFront / IAM / SSM出力を作成。

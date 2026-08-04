@@ -5,7 +5,7 @@
 
 ## 背景
 
-agent は生成失敗時に `grounding_blocked` / `research_incomplete` / `research_failed` / `rate_limited` を返しているが、API の `ApiError.code` に引き継いでいなかった。さらにローカルのHTTP経路ではレスポンスの `code` 自体を読んでいなかったため、job に到達するまでに原因が失われ、`generation_failed` と `generation_timeout` 以外を区別できなかった。
+agent は生成失敗時に `grounding_blocked` / `research_incomplete` / `research_failed` / `rate_limited` を返しているが、API の `ApiError.code` に引き継いでいなかった。さらに、ローカルのHTTP経路ではレスポンスの `code` 自体を読んでいなかったため、job に到達するまでに原因が失われ、`generation_failed` と `generation_timeout` 以外を区別できなかった。
 
 job は原因にかかわらず最大3回・30秒バックオフで再試行していた。この一律方針には次の問題がある。
 
@@ -34,7 +34,7 @@ job は `ApiError.code` を写像し、次の `errorCode` を記録する。
 - `rate_limited`
 - `content_invalid`
 
-`content_invalid` は issue #86 でagent側が返す予定のコードであり、APIとjobの受け口を先に用意する。未知のコードまたはコードなしは、従来どおり `generation_failed` にフォールバックする。
+`content_invalid` は issue #86 でagent側が返す予定のコードであり、APIとjobで先に受け取れるようにする。未知のコードまたはコードなしは、従来どおり `generation_failed` にフォールバックする。
 
 ### 2. 失敗種別ごとに最大試行回数とバックオフを切り替える
 
@@ -50,7 +50,7 @@ job は `ApiError.code` を写像し、次の `errorCode` を記録する。
 
 `GenerationJobItem.maxAttempts` は登録時の3を維持する。失敗種別ごとの上限はこれとは別に完了判定へ適用し、`attemptCount >= min(maxAttempts, 種別上限)` なら `FAILED` にする。
 
-`content_invalid` は本ADRの表に個別の打ち切り根拠がないため、agent側実装に先行する受け口として `generation_failed` と同じ3回・30秒を適用する。
+`content_invalid` は本ADRの表に個別の打ち切り根拠がないため、agent側実装に先行して受け取り、`generation_failed` と同じ3回・30秒を適用する。
 
 ### 3. job作成から10分の実時間締切を設ける
 
@@ -62,7 +62,7 @@ jobの締切を `createdAt` から10分（`jobDeadlineMs = 600_000`）とする�
 
 - **すべて最大3回・30秒のままにする**: `research_incomplete` の回復を不要に遅らせ、`grounding_blocked` のagent内外二重リトライと、回復しない `rate_limited` の再実行を残す。
 - **`GenerationJobItem.maxAttempts` 自体を失敗後に書き換える**: 登録時点では失敗種別が分からない。永続属性の意味を変えず、完了判定で種別上限との小さい方を使えば足りる。
-- **試行開始前に10分締切で中断する**: 本ADRの目的は利用者が待たなくなった後の再試行を止めることであり、既に走っている試行を途中で中断すると成功結果まで捨てる。締切は再試行のスケジュール直前だけで判定する。
+- **試行開始前に10分締切で中断する**: 本ADRの目的は利用者が待たなくなった後の再試行を止めることであり、既に実行中の試行を途中で中断すると成功結果まで破棄する。締切は再試行のスケジュール直前だけで判定する。
 
 ## 影響 / 留意
 
