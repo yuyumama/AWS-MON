@@ -6,7 +6,6 @@ import type {
 import { useEffect, useState } from "react";
 import { errorMessage, listSessions, startSession } from "../lib/api";
 import { aipDomains, certOptions, modeLabel, modeOptions } from "../lib/certs";
-import { useElapsedSeconds } from "../lib/useElapsedSeconds";
 
 type Props = {
 	// 生成権限(/me の canGenerateQuestions)。無いユーザーには GENERATE/MIXED を出さない。
@@ -35,7 +34,6 @@ export function HomeView({ canGenerate, onOpenSession, onResume }: Props) {
 	const [mode, setMode] = useState<SessionMode>("BANK");
 	const [starting, setStarting] = useState(false);
 	const [startError, setStartError] = useState<string | null>(null);
-	const elapsed = useElapsedSeconds(starting);
 
 	const [sessions, setSessions] = useState<SessionSummaryDto[] | null>(null);
 	const [sessionsError, setSessionsError] = useState<string | null>(null);
@@ -58,7 +56,7 @@ export function HomeView({ canGenerate, onOpenSession, onResume }: Props) {
 		setStarting(true);
 		setStartError(null);
 		try {
-			const session = await startSession({
+			const { session } = await startSession({
 				cert,
 				domainSelection: cert === "aip" ? domainSelection : undefined,
 				mode,
@@ -145,11 +143,7 @@ export function HomeView({ canGenerate, onOpenSession, onResume }: Props) {
 					onClick={() => void start()}
 					disabled={starting}
 				>
-					{starting
-						? mode === "BANK"
-							? "開始中…"
-							: `問題を生成しています… ${elapsed}秒`
-						: "演習をはじめる"}
+					{starting ? "開始中…" : "演習をはじめる"}
 				</button>
 			</section>
 

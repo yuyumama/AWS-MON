@@ -51,6 +51,32 @@ function agentMode(): AgentMode {
 	return process.env.AGENT_MODE === "agentcore" ? "agentcore" : "http";
 }
 
+export function agentRequestTimeoutMs(): number {
+	const value = Number.parseInt(
+		process.env.AGENT_REQUEST_TIMEOUT_MS ?? String(defaultTimeoutMs),
+		10,
+	);
+	return Number.isFinite(value) && value > 0 ? value : defaultTimeoutMs;
+}
+
+function isAgentRequestTimeout(error: unknown): boolean {
+	return (
+		typeof error === "object" &&
+		error !== null &&
+		"name" in error &&
+		((error as { name?: unknown }).name === "AbortError" ||
+			(error as { name?: unknown }).name === "TimeoutError")
+	);
+}
+
+function generationTimeoutError(): ApiError {
+	return new ApiError(
+		"問題の生成に時間がかかっています。しばらくしてからもう一度お試しください。",
+		504,
+		"generation_timeout",
+	);
+}
+
 function agentRuntimeArn(): string {
 	const value = process.env.AGENT_RUNTIME_ARN;
 	if (!value) {
@@ -119,7 +145,7 @@ async function generateAndSaveQuestionWithHttp(
 	input: GenerateAndSaveQuestionInput,
 ): Promise<QuestionItem> {
 	const controller = new AbortController();
-	const timeout = setTimeout(() => controller.abort(), defaultTimeoutMs);
+	const timeout = setTimeout(() => controller.abort(), agentRequestTimeoutMs());
 
 	let body: unknown;
 	try {
@@ -142,6 +168,7 @@ async function generateAndSaveQuestionWithHttp(
 		}
 	} catch (error) {
 		if (error instanceof ApiError) throw error;
+		if (isAgentRequestTimeout(error)) throw generationTimeoutError();
 		const message =
 			error instanceof Error ? error.message : "agent request failed";
 		throw new ApiError(`agent request failed: ${message}`, 502);
@@ -160,7 +187,7 @@ async function generateAndSaveQuestionWithAgentCore(
 	input: GenerateAndSaveQuestionInput,
 ): Promise<QuestionItem> {
 	const controller = new AbortController();
-	const timeout = setTimeout(() => controller.abort(), defaultTimeoutMs);
+	const timeout = setTimeout(() => controller.abort(), agentRequestTimeoutMs());
 
 	let body: unknown;
 	try {
@@ -180,6 +207,7 @@ async function generateAndSaveQuestionWithAgentCore(
 		body = JSON.parse(text) as unknown;
 	} catch (error) {
 		if (error instanceof ApiError) throw error;
+		if (isAgentRequestTimeout(error)) throw generationTimeoutError();
 		const message =
 			error instanceof Error ? error.message : "agentcore request failed";
 		throw new ApiError(`agentcore request failed: ${message}`, 502);

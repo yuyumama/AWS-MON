@@ -88,9 +88,23 @@ export const policy = {
 		default: 90,
 	},
 	abandonAfterDays: 7,
+	initialGuardTtlSeconds: 24 * 60 * 60,
 	lastSeenQuestionIdsLimit: 50,
 	randomSortDigits: 12,
 } as const;
+
+export function initialSessionGuardKey(input: {
+	userId: string;
+	cert: string;
+	domainSelection: string;
+	mode: string;
+}) {
+	const segment = (value: string) => encodeURIComponent(value);
+	return {
+		sessionId: `GUARD#USER#${segment(input.userId)}#CERT#${segment(input.cert)}#DOMAIN#${segment(input.domainSelection)}#MODE#${segment(input.mode)}`,
+		itemKey: "INITIAL" as const,
+	};
+}
 
 export const fastMovingCerts = ["aip", "aif", "mla"] as const;
 
@@ -201,7 +215,7 @@ export function abandonKeys(input: {
 
 export function jobRunKeys(input: {
 	jobId: string;
-	state: "QUEUED" | "RETRY_WAIT";
+	state: "QUEUED" | "RUNNING" | "RETRY_WAIT";
 	runAfter: string;
 }) {
 	const jobBucket = bucket(input.jobId, bucketCounts.job);

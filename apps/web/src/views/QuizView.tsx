@@ -19,6 +19,20 @@ type Props = {
 	onExit: () => void;
 };
 
+const pollIntervalMs = 3_000;
+const pollTimeoutMs = 10 * 60 * 1_000;
+
+function generationFailureMessage(
+	errorCode?: string,
+	recovery = "ホームに戻ってもう一度お試しください。",
+): string {
+	const cause =
+		errorCode === "generation_timeout"
+			? "生成に時間がかかりすぎました。"
+			: "問題を生成できませんでした。";
+	return `${cause}${recovery}`;
+}
+
 // 回答比較はAPI側の正規化(trim + 大文字化 + 重複除去 + ソート)に合わせる
 function normalizeAnswers(answers: string[]): string[] {
 	return [...new Set(answers.map((a) => a.trim().toUpperCase()))].sort();
@@ -37,15 +51,33 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 	const [pending, setPending] = useState<"answer" | "next" | null>(null);
 	const [actionError, setActionError] = useState<string | null>(null);
 	const [conflicted, setConflicted] = useState(false);
+	const [initialPollError, setInitialPollError] = useState<string | null>(null);
+	const [nextWaiting, setNextWaiting] = useState(false);
 	// 出題からの経過時間(elapsedMs)計測用
 	const shownAtRef = useRef(Date.now());
-	const generating = pending === "next" && session?.mode !== "BANK";
-	const elapsed = useElapsedSeconds(generating);
+	const initialWaitStartedAtRef = useRef<number | null>(null);
+	const nextWaitStartedAtRef = useRef<number | null>(null);
+	const nextFromSequenceRef = useRef<number | null>(null);
+	const initialPreparing =
+		session !== null &&
+		!session.current &&
+		session.preparing?.state === "QUEUED" &&
+		initialPollError === null;
+	const initialElapsed = useElapsedSeconds(initialPreparing);
+	const generatingNext = pending === "next" && session?.mode !== "BANK";
+	const nextElapsed = useElapsedSeconds(generatingNext);
 
 	const reload = useCallback(async () => {
 		setLoadError(null);
 		setActionError(null);
 		setConflicted(false);
+		setInitialPollError(null);
+		setNextWaiting(false);
+		setPending(null);
+		// 待ち時間の予算も測り直す(残したままだと再読み込み直後に上限超過扱いになる)
+		initialWaitStartedAtRef.current = null;
+		nextWaitStartedAtRef.current = null;
+		nextFromSequenceRef.current = null;
 		try {
 			const fresh = await getSession(sessionId);
 			setSession(fresh);
@@ -60,6 +92,58 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 	useEffect(() => {
 		if (!initialSession) void reload();
 	}, []);
+
+	useEffect(() => {
+		if (!initialPreparing) return;
+		if (initialWaitStartedAtRef.current === null) {
+			initialWaitStartedAtRef.current = Date.now();
+		}
+
+		let cancelled = false;
+		let timer: number | undefined;
+
+		const poll = async () => {
+			const startedAt = initialWaitStartedAtRef.current ?? Date.now();
+			if (Date.now() - startedAt >= pollTimeoutMs) {
+				setInitialPollError(generationFailureMessage("generation_timeout"));
+				return;
+			}
+
+			try {
+				const fresh = await getSession(sessionId);
+				if (cancelled) return;
+				setSession(fresh);
+
+				if (fresh.current) {
+					setSelected(fresh.current.selectedAnswers ?? []);
+					shownAtRef.current = Date.now();
+					initialWaitStartedAtRef.current = null;
+					return;
+				}
+				if (fresh.preparing?.state === "FAILED") return;
+				if (fresh.preparing?.state !== "QUEUED") {
+					setInitialPollError(
+						"問題の準備状況を確認できませんでした。ホームに戻ってもう一度お試しください。",
+					);
+					return;
+				}
+
+				if (Date.now() - startedAt >= pollTimeoutMs) {
+					setInitialPollError(generationFailureMessage("generation_timeout"));
+					return;
+				}
+				timer = window.setTimeout(() => void poll(), pollIntervalMs);
+			} catch (error) {
+				if (!cancelled) setInitialPollError(errorMessage(error));
+			}
+		};
+
+		timer = window.setTimeout(() => void poll(), pollIntervalMs);
+		return () => {
+			cancelled = true;
+			if (timer !== undefined) window.clearTimeout(timer);
+		};
+	}, [initialPreparing, sessionId]);
 
 	const current = session?.current;
 	const question = current?.question;
@@ -133,21 +217,125 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 	};
 
 	const goNext = async () => {
-		if (!session) return;
+		if (!session || !current) return;
 		setPending("next");
 		setActionError(null);
+		setConflicted(false);
+		nextWaitStartedAtRef.current = Date.now();
+		nextFromSequenceRef.current = current.sequence;
 		try {
-			const fresh = await nextQuestion(session.sessionId, session.version);
-			setSession(fresh);
+			const result = await nextQuestion(session.sessionId, session.version);
+			setSession(result.session);
+			if (result.preparing) {
+				setNextWaiting(true);
+				return;
+			}
 			setSelected([]);
 			shownAtRef.current = Date.now();
+			nextWaitStartedAtRef.current = null;
+			nextFromSequenceRef.current = null;
+			setPending(null);
 		} catch (error) {
 			setActionError(errorMessage(error));
 			setConflicted(isConflict(error));
-		} finally {
+			nextWaitStartedAtRef.current = null;
+			nextFromSequenceRef.current = null;
 			setPending(null);
 		}
 	};
+
+	useEffect(() => {
+		if (!nextWaiting) return;
+		let cancelled = false;
+		let timer: number | undefined;
+
+		const stopWithError = (message: string, conflicted = false) => {
+			setActionError(message);
+			setConflicted(conflicted);
+			setNextWaiting(false);
+			setPending(null);
+			nextWaitStartedAtRef.current = null;
+			nextFromSequenceRef.current = null;
+		};
+
+		const poll = async () => {
+			const startedAt = nextWaitStartedAtRef.current ?? Date.now();
+			if (Date.now() - startedAt >= pollTimeoutMs) {
+				stopWithError(
+					"次の問題の生成に時間がかかりすぎました。もう一度お試しください。",
+				);
+				return;
+			}
+
+			try {
+				const fresh = await getSession(sessionId);
+				if (cancelled) return;
+				setSession(fresh);
+
+				const fromSequence = nextFromSequenceRef.current;
+				if (
+					fresh.current &&
+					fromSequence !== null &&
+					fresh.current.sequence > fromSequence
+				) {
+					setSelected(fresh.current.selectedAnswers ?? []);
+					shownAtRef.current = Date.now();
+					setNextWaiting(false);
+					setPending(null);
+					nextWaitStartedAtRef.current = null;
+					nextFromSequenceRef.current = null;
+					return;
+				}
+
+				// 生成が失敗しきった先読みをポーリングから再投入しない。nextは先読みFAILEDを
+				// 見ると新しい生成jobを作るため、自動で叩き続けると3秒ごとに生成が積み上がる。
+				// 再試行は利用者の操作(「次の問題へ」を押し直す)に委ねる。
+				if (fresh.prefetch?.state === "FAILED") {
+					stopWithError(
+						generationFailureMessage(
+							fresh.prefetch.errorCode,
+							"「次の問題へ」をもう一度押すと再試行します。",
+						),
+						false,
+					);
+					return;
+				}
+
+				if (fresh.prefetch?.state !== "QUEUED") {
+					const result = await nextQuestion(fresh.sessionId, fresh.version);
+					if (cancelled) return;
+					setSession(result.session);
+					if (!result.preparing) {
+						setSelected([]);
+						shownAtRef.current = Date.now();
+						setNextWaiting(false);
+						setPending(null);
+						nextWaitStartedAtRef.current = null;
+						nextFromSequenceRef.current = null;
+						return;
+					}
+				}
+
+				if (Date.now() - startedAt >= pollTimeoutMs) {
+					stopWithError(
+						"次の問題の生成に時間がかかりすぎました。もう一度お試しください。",
+					);
+					return;
+				}
+				timer = window.setTimeout(() => void poll(), pollIntervalMs);
+			} catch (error) {
+				if (!cancelled) {
+					stopWithError(errorMessage(error), isConflict(error));
+				}
+			}
+		};
+
+		timer = window.setTimeout(() => void poll(), pollIntervalMs);
+		return () => {
+			cancelled = true;
+			if (timer !== undefined) window.clearTimeout(timer);
+		};
+	}, [nextWaiting, sessionId]);
 
 	if (loadError) {
 		return (
@@ -169,6 +357,65 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 						ホームへ戻る
 					</button>
 				</div>
+			</div>
+		);
+	}
+
+	const preparingFailure =
+		session && !session.current && session.preparing?.state === "FAILED"
+			? generationFailureMessage(session.preparing.errorCode)
+			: initialPollError;
+
+	if (session && !session.current && preparingFailure) {
+		return (
+			<div className="quiz">
+				<article className="sheet">
+					<h2 className="sheet-heading">
+						<span className="sheet-no">準備エラー</span>
+						問題を準備できませんでした
+					</h2>
+					<p className="notice notice-error">{preparingFailure}</p>
+					<div className="actions">
+						<button
+							type="button"
+							className="button button-primary"
+							onClick={onExit}
+						>
+							ホームへ戻る
+						</button>
+					</div>
+				</article>
+			</div>
+		);
+	}
+
+	if (session && !session.current && initialPreparing) {
+		return (
+			<div className="quiz">
+				<div className="quiz-bar">
+					<button
+						type="button"
+						className="button button-ghost"
+						onClick={onExit}
+					>
+						← ホーム
+					</button>
+					<span className="quiz-cert">
+						{session.cert} / {modeLabel(session.mode)}
+					</span>
+				</div>
+				<article className="sheet">
+					<h2 className="sheet-heading">
+						<span className="sheet-no">準備中</span>
+						最初の問題を生成しています
+					</h2>
+					<p className="notice" role="status">
+						経過 {initialElapsed}秒
+					</p>
+					<p className="hint">
+						問題の生成には数分かかることがあります。しばらくお待ちください。
+					</p>
+				</article>
 			</div>
 		);
 	}
@@ -368,6 +615,13 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 							</dd>
 						</dl>
 
+						{nextWaiting && (
+							<p className="notice" role="status">
+								次の問題を準備しています。生成には数分かかることがあります。
+								しばらくお待ちください。(経過 {nextElapsed}秒)
+							</p>
+						)}
+
 						<div className="actions">
 							<button
 								type="button"
@@ -378,7 +632,7 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 								{pending === "next"
 									? session.mode === "BANK"
 										? "次の問題を取得中…"
-										: `次の問題を準備中… ${elapsed}秒`
+										: `次の問題を準備中… ${nextElapsed}秒`
 									: "次の問題へ →"}
 							</button>
 							<button

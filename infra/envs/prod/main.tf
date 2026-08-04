@@ -65,6 +65,11 @@ locals {
     GENERATION_JOBS_TABLE = local.table_names.generation_jobs
     AGENT_MODE            = "agentcore"
     AGENT_RUNTIME_ARN     = local.runtime_enabled ? aws_bedrockagentcore_agent_runtime.agent[0].agent_runtime_arn : ""
+    # 既定値(APIロール)。ADR 0013 で初回生成・先読みとも非同期job化したため、API Lambda から
+    # AgentCore を同期呼び出しする経路は残っていない。将来そういう経路を足しても
+    # API Lambda の timeout=300 を超えないよう、保険として短めに固定する。
+    # 実際に生成を待つのは worker で、下の aws_lambda_function.worker が上書きする。
+    AGENT_REQUEST_TIMEOUT_MS = "120000"
   }
 
   agent_environment = {
@@ -341,11 +346,18 @@ resource "aws_lambda_function" "worker" {
   timeout       = 900
   memory_size   = 512
   # reserved_concurrent_executions は設定しない(apiと同じクォータ理由)。
-  # worker重複起動はjob側のlockedUntil排他で安全
+  # worker重複起動はjobのclaim(state条件付きUpdate + lockedBy)で排他される。
+  # lockedUntil は「落ちたworkerが掴んだままのRUNNING jobを回収する期限」であって、
+  # 排他そのものではない(ADR 0013 決定6)。
 
   environment {
     variables = merge(local.lambda_environment, {
       WORKER_JOBS_LIMIT = "5"
+      # 生成の実測は中央値190秒 / p90 284秒 / 最大429秒(ADR 0013)。最大値に十分な
+      # マージンを取って600秒にする。jobのロック期限とworkerの時間予算はこの値から
+      # 算出される(jobExecutionBudgetMs = 本値 + 30秒)ため、worker Lambda の
+      # timeout=900 との関係は「1呼び出しで概ね2件処理して打ち切り」になる。
+      AGENT_REQUEST_TIMEOUT_MS = "600000"
     })
   }
 

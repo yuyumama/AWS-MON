@@ -21,6 +21,7 @@ export class ApiClientError extends Error {
 	constructor(
 		message: string,
 		readonly status: number,
+		readonly code?: string,
 	) {
 		super(message);
 		this.name = "ApiClientError";
@@ -38,9 +39,17 @@ export function isConflict(error: unknown): boolean {
 	return error instanceof ApiClientError && error.status === 409;
 }
 
-type Envelope = { status?: string; message?: string };
+type Envelope = { status?: string; message?: string; code?: string };
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+type ApiResponse<T> = {
+	body: T;
+	httpStatus: number;
+};
+
+async function requestWithStatus<T>(
+	path: string,
+	init?: RequestInit,
+): Promise<ApiResponse<T>> {
 	// devモードは x-dev-user-id、cognitoモードは Authorization: Bearer を付ける
 	const authHeaders = await getAuthHeaders();
 	let res: Response;
@@ -65,10 +74,24 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 		| undefined;
 
 	if (!res.ok || body?.status !== "ok") {
-		throw new ApiClientError(body?.message ?? `HTTP ${res.status}`, res.status);
+		throw new ApiClientError(
+			body?.message ?? `HTTP ${res.status}`,
+			res.status,
+			body?.code,
+		);
 	}
-	return body as T;
+	return { body: body as T, httpStatus: res.status };
 }
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+	return (await requestWithStatus<T>(path, init)).body;
+}
+
+export type SessionMutationResult = {
+	session: SessionDto;
+	preparing: boolean;
+	httpStatus: number;
+};
 
 export type MeDto = {
 	userId: string;
@@ -85,12 +108,21 @@ export async function startSession(input: {
 	cert: string;
 	domainSelection?: string;
 	mode: SessionMode;
-}): Promise<SessionDto> {
-	const body = await request<{ session: SessionDto }>("/sessions", {
-		method: "POST",
-		body: JSON.stringify(input),
-	});
-	return body.session;
+}): Promise<SessionMutationResult> {
+	const { body, httpStatus } = await requestWithStatus<{ session: SessionDto }>(
+		"/sessions",
+		{
+			method: "POST",
+			body: JSON.stringify(input),
+		},
+	);
+	return {
+		session: body.session,
+		preparing:
+			httpStatus === 202 ||
+			(!body.session.current && body.session.preparing?.state === "QUEUED"),
+		httpStatus,
+	};
 }
 
 export async function listSessions(
@@ -132,12 +164,18 @@ export async function submitAnswer(
 export async function nextQuestion(
 	sessionId: string,
 	version: number,
-): Promise<SessionDto> {
-	const body = await request<{ session: SessionDto }>(
-		`/sessions/${encodeURIComponent(sessionId)}/next`,
-		{ method: "POST", body: JSON.stringify({ version }) },
-	);
-	return body.session;
+): Promise<SessionMutationResult> {
+	const { body, httpStatus } = await requestWithStatus<{
+		session: SessionDto;
+	}>(`/sessions/${encodeURIComponent(sessionId)}/next`, {
+		method: "POST",
+		body: JSON.stringify({ version }),
+	});
+	return {
+		session: body.session,
+		preparing: httpStatus === 202,
+		httpStatus,
+	};
 }
 
 export async function listReviews(cert?: string): Promise<ReviewItemDto[]> {

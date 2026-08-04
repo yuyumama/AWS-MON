@@ -97,7 +97,7 @@ app.post("/sessions", async (c) => {
 		const mode = asString(body.mode);
 
 		const auth = getAuth(c);
-		const session = await startSession({
+		const result = await startSession({
 			userId: auth.userId,
 			cert,
 			domainSelection,
@@ -105,8 +105,14 @@ app.post("/sessions", async (c) => {
 			mode: mode === "GENERATE" || mode === "MIXED" ? mode : "BANK",
 			canGenerateQuestions: auth.canGenerateQuestions,
 		});
+		const responseStatus =
+			result.disposition === "CREATED_READY"
+				? 201
+				: result.disposition === "CREATED_PREPARING"
+					? 202
+					: 200;
 
-		return c.json({ status: "ok", session }, 201);
+		return c.json({ status: "ok", session: result.session }, responseStatus);
 	} catch (e) {
 		return errorResponse(c, e);
 	}
@@ -169,14 +175,17 @@ app.post("/sessions/:sessionId/next", async (c) => {
 	try {
 		const body = asObject(await c.req.json().catch(() => ({})));
 		const auth = getAuth(c);
-		const session = await nextSessionQuestion({
+		const result = await nextSessionQuestion({
 			userId: auth.userId,
 			sessionId: c.req.param("sessionId"),
 			version: asNumber(body.version),
 			canGenerateQuestions: auth.canGenerateQuestions,
 		});
 
-		return c.json({ status: "ok", session });
+		return c.json(
+			{ status: "ok", session: result.session },
+			result.preparing ? 202 : 200,
+		);
 	} catch (e) {
 		return errorResponse(c, e);
 	}

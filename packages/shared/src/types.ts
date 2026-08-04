@@ -125,6 +125,12 @@ export type SessionMetaItem = {
 	cert: Cert | string;
 	domainSelection: string;
 	mode: SessionMode;
+	initial?: {
+		state: "QUEUED" | "FAILED";
+		jobId: string;
+		errorCode?: string;
+		updatedAt: string;
+	};
 	current?: {
 		sequence: number;
 		questionId: string;
@@ -156,6 +162,20 @@ export type SessionMetaItem = {
 	abandonPk?: string;
 	abandonSk?: string;
 	deleteAt?: number;
+};
+
+export type InitialSessionGuardItem = {
+	sessionId: string;
+	itemKey: "INITIAL";
+	schemaVersion: 1;
+	preparingSessionId: string;
+	userId: string;
+	cert: Cert | string;
+	domainSelection: string;
+	mode: SessionMode;
+	createdAt: string;
+	updatedAt: string;
+	deleteAt: number;
 };
 
 export type AttemptItem = {

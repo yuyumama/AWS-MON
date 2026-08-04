@@ -23,12 +23,24 @@ export type SessionDto = {
 	mode: SessionMode;
 	stats: SessionStatsDto;
 	version: number;
+	preparing?: {
+		state: "QUEUED" | "FAILED";
+		jobId: string;
+		errorCode?: string;
+	};
 	current?: {
 		sequence: number;
 		state: CurrentQuestionState;
 		selectedAnswers?: string[];
 		answeredAt?: string;
 		question: QuestionDto;
+	};
+	prefetch?: {
+		sequence: number;
+		state: PrefetchState;
+		jobId?: string;
+		domain?: string;
+		errorCode?: string;
 	};
 };
 
