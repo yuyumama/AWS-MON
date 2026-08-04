@@ -866,6 +866,7 @@ def test_content_violation_regenerates_once_after_gate(
     monkeypatch.setattr(agent_module, "gate_enabled", lambda: True)
     monkeypatch.setattr(agent_module, "gate_retries", lambda: 1)
     monkeypatch.setenv("AGENT_CONTENT_RETRIES", "1")
+    events: list[tuple[str, dict[str, int]]] = []
 
     def pass_gate(**kwargs: Any) -> GateResult:
         gate_calls.append(kwargs)
@@ -873,13 +874,18 @@ def test_content_violation_regenerates_once_after_gate(
 
     monkeypatch.setattr(agent_module, "check_grounding", pass_gate)
 
-    result = agent_module._generate_quiz_with_docs_and_gate("問題生成プロンプト")
+    result = agent_module._generate_quiz_with_docs_and_gate(
+        "問題生成プロンプト",
+        on_phase=lambda phase, detail: events.append((phase, detail)),
+    )
 
     assert result.item.question.question == "再生成した設問"
     assert len(gate_calls) == 1
     assert FakeAgent.instances[0].structured_count == 2
     assert "保存前の内容検証" in FakeAgent.instances[0].structured_prompts[1]
     assert "question.question" in FakeAgent.instances[0].structured_prompts[1]
+    assert ("regeneration", {"attempt": 2, "totalAttempts": 2}) in events
+    assert events[-1][0] == "complete"
 
 
 def test_content_violation_fails_closed_after_retry(
@@ -973,3 +979,48 @@ def test_generate_quiz_with_docs_and_gate_logs_passed_result(
         "cert": "aip",
         "detail": None,
     }
+
+
+def test_phase_events_follow_generation_and_gate_retry_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_research(monkeypatch)
+    FakeAgent.structured_results = [_quiz_item("初回"), _quiz_item("再生成")]
+    gates = iter([GateResult(status="failed"), GateResult(status="passed")])
+    monkeypatch.setattr(agent_module, "gate_enabled", lambda: True)
+    monkeypatch.setattr(agent_module, "gate_retries", lambda: 1)
+    monkeypatch.setattr(agent_module, "check_grounding", lambda **kwargs: next(gates))
+    events: list[tuple[str, dict[str, int]]] = []
+
+    agent_module._generate_quiz_with_docs_and_gate(
+        "問題生成プロンプト",
+        on_phase=lambda phase, detail: events.append((phase, detail)),
+    )
+
+    assert [phase for phase, _detail in events] == [
+        "mcp",
+        "research",
+        "research",
+        "generation",
+        "guardrail",
+        "regeneration",
+        "guardrail",
+        "complete",
+    ]
+    assert events[5][1] == {"attempt": 2, "totalAttempts": 2}
+
+
+def test_phase_callback_error_does_not_stop_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(agent_module, "_docs_mcp_enabled", lambda: False)
+    monkeypatch.setattr(agent_module, "_generate", lambda *args, **kwargs: _quiz_item())
+
+    result = agent_module.generate_quiz(
+        "saa",
+        on_phase=lambda _phase, _detail: (_ for _ in ()).throw(
+            RuntimeError("通知失敗")
+        ),
+    )
+
+    assert result.item.question.question == "設問"

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import io
+import json
 from http import HTTPStatus
 from typing import Any
 
@@ -75,6 +77,28 @@ def test_build_generate_response_includes_summary(
     response = server_module.build_generate_response({}, started=0)
 
     assert response["quiz"]["summary"] == item.summary
+
+
+class _StreamFakeHandler:
+    """SSE応答のヘッダと本体を記録する代役。"""
+
+    path = "/invocations"
+    _send_stream = runtime_module.RuntimeHandler._send_stream
+
+    def __init__(self) -> None:
+        self.status: int | None = None
+        self.headers: dict[str, str] = {}
+        self.wfile = io.BytesIO()
+        self.close_connection = False
+
+    def send_response(self, status: int) -> None:
+        self.status = status
+
+    def send_header(self, name: str, value: str) -> None:
+        self.headers[name.lower()] = value
+
+    def end_headers(self) -> None:
+        return None
 
 
 def test_error_response_includes_code_when_provided() -> None:
@@ -201,7 +225,7 @@ def test_generate_response_excludes_internal_grounding_claim(
     monkeypatch.setattr(
         server_module,
         "_generate_quiz",
-        lambda cert, domain: (item, GateResult(status="not_run")),
+        lambda cert, domain, on_phase=None: (item, GateResult(status="not_run")),
     )
 
     response = server_module.build_generate_response({}, started=0.0)
@@ -228,3 +252,98 @@ def test_runtime_do_post_returns_http_200_with_rate_limited_code(
     # AgentCore は非200を例外扱いするため、エラーもHTTP 200で返す
     assert status == HTTPStatus.OK
     assert body["code"] == "rate_limited"
+
+
+def test_sse_data_builds_single_data_frame() -> None:
+    frame = runtime_module._sse_data(
+        {"type": "phase", "phase": "research", "attempt": 1, "totalAttempts": 3}
+    )
+
+    assert frame.startswith(b"data: ")
+    assert frame.endswith(b"\n\n")
+    assert json.loads(frame.removeprefix(b"data: ").strip()) == {
+        "type": "phase",
+        "phase": "research",
+        "attempt": 1,
+        "totalAttempts": 3,
+    }
+
+
+def test_runtime_stream_true_returns_phase_and_result_events(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def build_response(
+        body: dict[str, Any], *, on_phase: Any, **kwargs: Any
+    ) -> dict[str, Any]:
+        on_phase("generation", {"attempt": 1, "totalAttempts": 1})
+        return {"status": "ok", "quiz": {"question": "generated"}}
+
+    monkeypatch.setattr(runtime_module, "_parse_body", lambda handler: {"stream": True})
+    monkeypatch.setattr(runtime_module, "build_generate_response", build_response)
+    handler = _StreamFakeHandler()
+
+    runtime_module.RuntimeHandler.do_POST(handler)
+
+    assert handler.status == HTTPStatus.OK
+    assert handler.headers["content-type"].startswith("text/event-stream")
+    assert handler.headers["cache-control"] == "no-cache"
+    assert handler.close_connection is True
+    frames = [
+        json.loads(line.removeprefix("data: "))
+        for line in handler.wfile.getvalue().decode().splitlines()
+        if line.startswith("data: ")
+    ]
+    assert frames == [
+        {
+            "type": "phase",
+            "phase": "generation",
+            "attempt": 1,
+            "totalAttempts": 1,
+        },
+        {
+            "type": "result",
+            "status": "ok",
+            "quiz": {"question": "generated"},
+        },
+    ]
+
+
+def test_runtime_without_stream_flag_keeps_json_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(runtime_module, "_parse_body", lambda handler: {})
+    monkeypatch.setattr(
+        runtime_module,
+        "build_generate_response",
+        lambda *args, **kwargs: {"status": "ok", "quiz": {}},
+    )
+    handler = _FakeHandler()
+    handler.path = "/invocations"
+
+    runtime_module.RuntimeHandler.do_POST(handler)
+
+    assert handler.sent == (HTTPStatus.OK, {"status": "ok", "quiz": {}})
+
+
+def test_runtime_stream_error_stays_http_200_and_ends_with_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(runtime_module, "_parse_body", lambda handler: {"stream": True})
+    monkeypatch.setattr(
+        runtime_module,
+        "build_generate_response",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("生成失敗")),
+    )
+    handler = _StreamFakeHandler()
+
+    runtime_module.RuntimeHandler.do_POST(handler)
+
+    frames = [
+        json.loads(line.removeprefix("data: "))
+        for line in handler.wfile.getvalue().decode().splitlines()
+        if line.startswith("data: ")
+    ]
+    assert handler.status == HTTPStatus.OK
+    assert frames[-1]["type"] == "result"
+    assert frames[-1]["status"] == "error"
+    assert frames[-1]["message"] == "生成失敗"

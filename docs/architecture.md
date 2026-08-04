@@ -167,7 +167,9 @@ sequenceDiagram
     API-->>U: 202 session(preparing=QUEUED)
 
     W->>J: claimJob (QUEUED/RETRY_WAIT、期限切れRUNNING → RUNNING)
-    W->>Agent: POST /generate または InvokeAgentRuntime
+    W->>Agent: POST /generate または InvokeAgentRuntime(stream=true)
+    Agent-->>W: SSE phase（調査・作成・検証・再生成）
+    W->>S: jobId/sequence一致を条件にMETA.progress更新
     Agent->>LLM: 構造化出力で問題+解説を生成
     LLM-->>Agent: QuizItem{question, explanation}
     Agent-->>W: QuizItem + generation metadata
@@ -177,11 +179,13 @@ sequenceDiagram
 
     loop 生成完了まで
         U->>API: GET /sessions/:id
-        API-->>U: preparing=QUEUED（完了後は current=Q1）
+        API-->>U: preparing=QUEUED + progress（完了後は current=Q1）
     end
 ```
 
-ローカルでは `python3 -m quiz_agent.server` が `POST /generate` を提供し、`AGENT_BASE_URL` 経由で呼び出す（`AGENT_MODE=http`、既定）。本番は `AGENT_MODE=agentcore` で同じリクエスト/レスポンスJSONを AgentCore Runtime の `InvokeAgentRuntime` に載せ替える（`quiz_agent/runtime.py` が `/invocations` で受ける。[ADR 0008](adr/0008-prod-deployment-shape.md)）。
+ローカルでは `python3 -m quiz_agent.server` が `POST /generate` を提供し、`AGENT_BASE_URL` 経由で呼び出す（`AGENT_MODE=http`、既定）。ローカルHTTP境界は従来どおりJSON応答のままとする。本番は `AGENT_MODE=agentcore` で AgentCore Runtime の `InvokeAgentRuntime` を呼び、payload の `stream=true` により `quiz_agent/runtime.py` の `/invocations` がSSEを返す（[ADR 0008](adr/0008-prod-deployment-shape.md)）。旧Runtimeがフラグを無視してJSONを返した場合は `contentType` で判別して従来のJSON処理へ戻るため、APIとagentのデプロイ順序には依存しない。
+
+SSEは `phase` イベントと、成功・失敗を格納した最後の `result` イベントからなる。無イベント区間は20秒ごとのコメント行で接続を維持する。workerは内部フェーズを利用者向けの `researching` / `drafting` / `verifying` / `regenerating` に変換し、`SessionMeta.initial.progress` または `prefetch.progress` へ条件付きUpdateで保存する。同じフェーズ・試行番号は重複排除し、書き込み間隔は最短5秒とする。進捗更新では楽観ロック用の `version` を進めない。Webは既存の3秒ポーリングでこのフィールドを読み、「調査 → 作成 → 検証」の現在工程を表示する。
 
 agent は Guardrails のグラウンディングゲート後、保存前の生成境界で利用者向けフィールドが日本語のプレーンテキストかを検証する。違反時は構造化出力だけを再生成し、解消しなければ fail-closed で worker へエラーを返す。
 
@@ -262,7 +266,7 @@ job の失敗時は `errorCode` ごとの試行上限とbackoffを使う（[ADR 
 |---|---|---|
 | JWT検証ミドルウェア | 実装済み（`apps/api/src/auth.ts`、`AUTH_MODE=cognito`）。実ユーザーでのログインE2E（prod CloudFront経由でログイン→`/me` 200）も確認済み（2026-07-06） | [ADR 0006](adr/0006-auth-cognito-cloud-only.md) |
 | 生成権限チェック | 実装済み。`BANK` は登録済みユーザー可、`GENERATE` / `MIXED` は生成グループ必須（権限なしは403）。stale 再生成は job 種別ごと未実装で、実装時に権限確認を入れる | [ADR 0006](adr/0006-auth-cognito-cloud-only.md) |
-| agent ⇄ API の生成連携 | 実装済み。`AGENT_MODE=http`（local HTTP）/ `agentcore`（AgentCore Runtime `InvokeAgentRuntime`）の切替。境界のJSON形は共通。タイムアウトは `AGENT_REQUEST_TIMEOUT_MS` | [ADR 0008](adr/0008-prod-deployment-shape.md)、[ADR 0013](adr/0013-async-initial-generation.md) |
+| agent ⇄ API の生成連携 | 実装済み。`AGENT_MODE=http`（local HTTPのJSON）/ `agentcore`（AgentCore RuntimeのSSE、旧JSON応答にも後方互換）の切替。SSEの工程をsessionへ反映し、Webの既存ポーリングで表示する。タイムアウトは `AGENT_REQUEST_TIMEOUT_MS` | [ADR 0008](adr/0008-prod-deployment-shape.md)、[ADR 0013](adr/0013-async-initial-generation.md)、issue #83 |
 | 初回問題生成の非同期job化 | 実装済み（`kind=INITIAL` job + `POST /sessions` 202 + Webポーリング）。同期120秒タイマーによる本番障害の解消 | [ADR 0013](adr/0013-async-initial-generation.md)、issue #80 |
 | 座礁jobの回収 | 実装済み（`lockedUntil` 超過の RUNNING job を再claim。worker は残り時間で claim を打ち切る） | [ADR 0013](adr/0013-async-initial-generation.md) |
 | spaced repetition（復習期限） | 未実装。`GSI2_DueList` の属性予約のみ（復習マーク/一覧のAP-06/07は実装済み: `/reviews`） | `docs/data-model.md` |

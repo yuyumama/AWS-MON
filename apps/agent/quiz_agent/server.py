@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from collections.abc import Callable
 from contextlib import contextmanager
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -81,13 +82,20 @@ def _stub_quiz(cert: str, domain: str | None) -> QuizItem:
     )
 
 
-def _generate_quiz(cert: str, domain: str | None) -> tuple[QuizItem, GateResult]:
+def _generate_quiz(
+    cert: str,
+    domain: str | None,
+    *,
+    on_phase: Callable[[str, dict[str, int]], None] | None = None,
+) -> tuple[QuizItem, GateResult]:
     if os.environ.get("AGENT_STUB") == "1":
+        if on_phase is not None:
+            on_phase("generation", {"attempt": 1, "totalAttempts": 1})
         return _stub_quiz(cert, domain), GateResult(status="not_run", detail="stub")
 
     from .agent import generate_quiz
 
-    result = generate_quiz(cert=cert, domain=domain)
+    result = generate_quiz(cert=cert, domain=domain, on_phase=on_phase)
     return result.item, result.gate
 
 
@@ -160,13 +168,16 @@ def build_generate_response(
     *,
     started: float,
     agent_version: str = AGENT_VERSION,
+    on_phase: Callable[[str, dict[str, int]], None] | None = None,
 ) -> dict[str, Any]:
     cert = _str_value(body.get("cert"), "aip")
     domain = _str_value(body.get("domain"))
     domain_selection = _str_value(body.get("domainSelection"), domain)
     session_id = _str_value(body.get("sessionId"))
     with _otel_session(session_id):
-        item, gate = _generate_quiz(cert=cert or "aip", domain=domain)
+        item, gate = _generate_quiz(
+            cert=cert or "aip", domain=domain, on_phase=on_phase
+        )
     generated_at = _now_iso()
     latency_ms = int((time.perf_counter() - started) * 1000)
     source = item.explanation.source

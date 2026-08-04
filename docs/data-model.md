@@ -332,6 +332,26 @@ Projection: `KEYS_ONLY`。
 
 ### `META` item
 
+生成中の工程は次の公開用の型で保持する。agent内部の `mcp` / `guardrail` / `grounding` はAPI境界で変換し、DTOには出さない。
+
+```ts
+type GenerationProgress = {
+  phase: "researching" | "drafting" | "verifying" | "regenerating";
+  attempt?: number;
+  totalAttempts?: number;
+  updatedAt: string;
+};
+```
+
+| agent内部の工程 | 保存・DTOの `phase` | 利用者向け表示 |
+|---|---|---|
+| `mcp`, `research` | `researching` | 調査 |
+| `generation` | `drafting` | 作成 |
+| `guardrail`, `grounding` | `verifying` | 検証 |
+| `regeneration` | `regenerating` | 作り直し（作成段階を点灯） |
+
+`attempt` はその工程の試行番号、`totalAttempts` は最大試行数である。割合には換算しない。
+
 ```ts
 type SessionMetaItem = {
   sessionId: string;
@@ -351,6 +371,7 @@ type SessionMetaItem = {
     state: "QUEUED" | "FAILED";
     jobId: string;
     errorCode?: string;
+    progress?: GenerationProgress;
     updatedAt: string;
   };
 
@@ -371,6 +392,7 @@ type SessionMetaItem = {
     questionId?: string;
     domain?: string;
     errorCode?: string;
+    progress?: GenerationProgress;
     updatedAt?: string;
   };
 
@@ -643,6 +665,7 @@ type GenerationJobItem = {
 
   errorCode?: string;
   errorMessage?: string;
+  progress?: GenerationProgress;
 
   runPk?: string;
   runSk?: string;
@@ -667,6 +690,8 @@ worker は session を更新するとき、必ず次を condition に入れる�
 - `status = ACTIVE`
 
 これにより、古い job が完了しても新しい current/prefetch を上書きしない。
+
+工程進捗の更新も同じ排他規則に従う。`INITIAL` は `initial.jobId = :jobId`、`PREFETCH` は `prefetch.jobId = :jobId AND prefetch.sequence = :targetSequence` を条件にする。ロックを失ったworkerの `ConditionalCheckFailedException` は無視し、進捗だけのUpdateではセッションの楽観ロック用 `version` とセッション活動時刻 `updatedAt` を変更しない。同一工程・試行番号の重複は除外し、DynamoDBへの書き込み間隔は最短5秒とする。
 
 ## Sparse GSI の状態遷移規律
 

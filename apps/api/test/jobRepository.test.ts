@@ -755,4 +755,121 @@ describe("runRunnableJobs", () => {
 			sequence: 2,
 		});
 	});
+
+	it("writes debounced INITIAL progress without incrementing session version", async () => {
+		const question = questionFixture("q_progress");
+		jobMocks.generateAndSaveQuestion.mockImplementation(async (input) => {
+			await input.onPhase?.("mcp", { attempt: 1, totalAttempts: 1 });
+			await input.onPhase?.("research", { attempt: 1, totalAttempts: 3 });
+			await input.onPhase?.("research", { attempt: 1, totalAttempts: 3 });
+			await input.onPhase?.("generation", { attempt: 1, totalAttempts: 1 });
+			await input.onPhase?.("guardrail", { attempt: 1, totalAttempts: 2 });
+			await vi.advanceTimersByTimeAsync(5_000);
+			return question;
+		});
+		const runAfter = new Date(baseTime).toISOString();
+		const job = generationJobFixture({
+			jobId: "j_progress",
+			kind: "INITIAL",
+			userId: "user-test",
+			sessionId: "s_progress",
+			targetSequence: 1,
+			...jobRunKeys({ jobId: "j_progress", state: "QUEUED", runAfter }),
+		});
+		let firstProgress = true;
+		jobMocks.dynamoSend.mockImplementation(async (command: unknown) => {
+			if (command instanceof QueryCommand) return { Items: [job] };
+			if (command instanceof UpdateCommand && isClaim(command)) {
+				return { Attributes: claimedJob(job, command) };
+			}
+			if (
+				command instanceof UpdateCommand &&
+				command.input.UpdateExpression?.includes("progress")
+			) {
+				if (firstProgress) {
+					firstProgress = false;
+					throw conditionalCheckFailed();
+				}
+				return {};
+			}
+			if (command instanceof TransactWriteCommand) return {};
+			throw new Error(`unexpected command: ${String(command)}`);
+		});
+
+		const summary = await runRunnableJobs(1);
+
+		expect(summary).toMatchObject({ processed: 1, succeeded: 1 });
+		const progressWrites = jobMocks.dynamoSend.mock.calls
+			.map(([command]) => command)
+			.filter(
+				(command): command is UpdateCommand =>
+					command instanceof UpdateCommand &&
+					(command.input.UpdateExpression?.includes("progress") ?? false),
+			);
+		expect(progressWrites).toHaveLength(2);
+		expect(progressWrites[0]?.input).toMatchObject({
+			ConditionExpression: "#initial.jobId = :jobId",
+			UpdateExpression: "SET #initial.progress = :progress",
+		});
+		expect(progressWrites[0]?.input.UpdateExpression).not.toContain("version");
+		expect(
+			progressWrites[1]?.input.ExpressionAttributeValues?.[":progress"],
+		).toMatchObject({ phase: "verifying", attempt: 1, totalAttempts: 2 });
+	});
+
+	it("guards PREFETCH progress with job ID and sequence", async () => {
+		jobMocks.generateAndSaveQuestion.mockImplementation(async (input) => {
+			await input.onPhase?.("regeneration", {
+				attempt: 2,
+				totalAttempts: 2,
+			});
+			return questionFixture("q_prefetch_progress");
+		});
+		const runAfter = new Date(baseTime).toISOString();
+		const job = generationJobFixture({
+			jobId: "j_prefetch_progress",
+			kind: "PREFETCH",
+			sessionId: "s_progress",
+			targetSequence: 2,
+			...jobRunKeys({
+				jobId: "j_prefetch_progress",
+				state: "QUEUED",
+				runAfter,
+			}),
+		});
+		jobMocks.dynamoSend.mockImplementation(async (command: unknown) => {
+			if (command instanceof QueryCommand) return { Items: [job] };
+			if (command instanceof UpdateCommand && isClaim(command)) {
+				return { Attributes: claimedJob(job, command) };
+			}
+			if (command instanceof UpdateCommand) return {};
+			if (command instanceof TransactWriteCommand) return {};
+			throw new Error(`unexpected command: ${String(command)}`);
+		});
+
+		await runRunnableJobs(1);
+
+		const progressWrite = jobMocks.dynamoSend.mock.calls
+			.map(([command]) => command)
+			.find(
+				(command): command is UpdateCommand =>
+					command instanceof UpdateCommand &&
+					(command.input.UpdateExpression?.includes("progress") ?? false),
+			);
+		expect(progressWrite?.input).toMatchObject({
+			ConditionExpression:
+				"prefetch.jobId = :jobId AND prefetch.#sequence = :seq",
+			UpdateExpression: "SET prefetch.progress = :progress",
+			ExpressionAttributeNames: { "#sequence": "sequence" },
+			ExpressionAttributeValues: expect.objectContaining({
+				":jobId": "j_prefetch_progress",
+				":seq": 2,
+				":progress": expect.objectContaining({
+					phase: "regenerating",
+					attempt: 2,
+				}),
+			}),
+		});
+		expect(progressWrite?.input.UpdateExpression).not.toContain("version");
+	});
 });

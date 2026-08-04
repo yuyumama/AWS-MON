@@ -30,6 +30,18 @@ export type JobState =
 	| "CANCELLED"
 	| "RETRY_WAIT";
 export type Visibility = "answering" | "answered";
+export type GenerationProgressPhase =
+	| "researching"
+	| "drafting"
+	| "verifying"
+	| "regenerating";
+
+export type GenerationProgress = {
+	phase: GenerationProgressPhase;
+	attempt?: number;
+	totalAttempts?: number;
+	updatedAt: string;
+};
 
 export type Option = {
 	label: string;
@@ -133,6 +145,7 @@ export type SessionMetaItem = {
 		state: "QUEUED" | "FAILED";
 		jobId: string;
 		errorCode?: string;
+		progress?: GenerationProgress;
 		updatedAt: string;
 	};
 	current?: {
@@ -151,6 +164,7 @@ export type SessionMetaItem = {
 		questionId?: string;
 		domain?: string;
 		errorCode?: string;
+		progress?: GenerationProgress;
 		updatedAt?: string;
 	};
 	answeredCount: number;
@@ -265,6 +279,7 @@ export type GenerationJobItem = {
 	lockedUntil?: string;
 	errorCode?: string;
 	errorMessage?: string;
+	progress?: GenerationProgress;
 	runPk?: string;
 	runSk?: string;
 	createdAt: string;

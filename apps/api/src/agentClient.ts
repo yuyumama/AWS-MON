@@ -32,6 +32,11 @@ type AgentErrorResponse = {
 
 type AgentMode = "http" | "agentcore";
 
+type AgentPhaseDetail = {
+	attempt?: number;
+	totalAttempts?: number;
+};
+
 // クライアントは接続・認証情報キャッシュを持つためプロセスで1つだけ作る。
 let agentCoreClient: BedrockAgentCoreClient | undefined;
 
@@ -122,12 +127,14 @@ function agentGeneratePayload(input: GenerateAndSaveQuestionInput): {
 	domain: string;
 	domainSelection: string;
 	sessionId?: string;
+	stream: true;
 } {
 	return {
 		cert: input.cert,
 		domain: input.domain,
 		domainSelection: input.domainSelection,
 		sessionId: input.sessionId,
+		stream: true,
 	};
 }
 
@@ -143,7 +150,63 @@ export type GenerateAndSaveQuestionInput = {
 	jobId?: string;
 	// agent側でOTel baggage(session.id)に載せ、トレースをセッション単位に束ねる
 	sessionId?: string;
+	onPhase?: (phase: string, detail: AgentPhaseDetail) => void | Promise<void>;
 };
+
+async function parseSseResponse(
+	response: AsyncIterable<Uint8Array>,
+	onPhase?: GenerateAndSaveQuestionInput["onPhase"],
+): Promise<unknown> {
+	const decoder = new TextDecoder();
+	let buffered = "";
+	let result: unknown;
+
+	const parseLine = async (rawLine: string): Promise<void> => {
+		const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+		if (!line.startsWith("data: ")) return;
+		try {
+			const event = JSON.parse(line.slice(6)) as unknown;
+			if (typeof event !== "object" || event === null) return;
+			if ((event as { type?: unknown }).type === "result") {
+				const { type: _type, ...body } = event as Record<string, unknown>;
+				result = body;
+				return;
+			}
+			if (
+				(event as { type?: unknown }).type === "phase" &&
+				typeof (event as { phase?: unknown }).phase === "string"
+			) {
+				try {
+					await onPhase?.((event as { phase: string }).phase, {
+						attempt:
+							typeof (event as { attempt?: unknown }).attempt === "number"
+								? (event as { attempt: number }).attempt
+								: undefined,
+						totalAttempts:
+							typeof (event as { totalAttempts?: unknown }).totalAttempts ===
+							"number"
+								? (event as { totalAttempts: number }).totalAttempts
+								: undefined,
+					});
+				} catch {
+					// 進捗保存の失敗は最終的な問題生成結果より優先しない。
+				}
+			}
+		} catch {
+			// 壊れた進捗イベントは無視し、終端resultを待つ。
+		}
+	};
+
+	for await (const chunk of response) {
+		buffered += decoder.decode(chunk, { stream: true });
+		const lines = buffered.split("\n");
+		buffered = lines.pop() ?? "";
+		for (const line of lines) await parseLine(line);
+	}
+	buffered += decoder.decode();
+	if (buffered) await parseLine(buffered);
+	return result;
+}
 
 export async function generateAndSaveQuestion(
 	input: GenerateAndSaveQuestionInput,
@@ -216,15 +279,23 @@ async function generateAndSaveQuestionWithAgentCore(
 				agentRuntimeArn: agentRuntimeArn(),
 				runtimeSessionId: runtimeSessionId(input.sessionId),
 				contentType: "application/json",
-				accept: "application/json",
+				accept: "text/event-stream",
 				payload: new TextEncoder().encode(
 					JSON.stringify(agentGeneratePayload(input)),
 				),
 			}),
 			{ abortSignal: controller.signal },
 		);
-		const text = (await output.response?.transformToString()) ?? "";
-		body = JSON.parse(text) as unknown;
+		if (output.contentType?.includes("text/event-stream") && output.response) {
+			body = await parseSseResponse(
+				output.response as unknown as AsyncIterable<Uint8Array>,
+				input.onPhase,
+			);
+		} else {
+			// 旧Runtimeはstreamフラグを無視してJSONを返すため後方互換を維持する。
+			const text = (await output.response?.transformToString()) ?? "";
+			body = JSON.parse(text) as unknown;
+		}
 	} catch (error) {
 		if (error instanceof ApiError) throw error;
 		if (isAgentRequestTimeout(error)) throw generationTimeoutError();

@@ -1,3 +1,4 @@
+import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generateAndSaveQuestion } from "../src/agentClient.js";
 import { ApiError } from "../src/errors.js";
@@ -198,5 +199,42 @@ describe("generateAndSaveQuestion", () => {
 			}),
 		);
 		expect(JSON.stringify(result)).not.toContain("Request aborted");
+	});
+
+	it("parses chunked SSE phases and uses only the last result event", async () => {
+		vi.stubEnv("AGENT_MODE", "agentcore");
+		const item = questionFixture();
+		const onPhase = vi.fn();
+		agentClientMocks.bedrockSend.mockResolvedValue({
+			contentType: "text/event-stream; charset=utf-8",
+			response: Readable.from([
+				Buffer.from(': keepalive\n\ndata: {"type":"phase","phase":"rese'),
+				Buffer.from(
+					'arch","attempt":1,"totalAttempts":3}\n\ndata: invalid\n\ndata: {"type":"result","status":"error","message":"old"}\n\n',
+				),
+				Buffer.from(
+					'data: {"type":"result","status":"ok","quiz":{"question":"generated"},"generation":{"modelId":"test-model"}}\n\n',
+				),
+			]),
+		});
+		agentClientMocks.saveGeneratedQuestion.mockResolvedValue({ item });
+
+		const result = await generateAndSaveQuestion({ ...input, onPhase });
+
+		expect(result).toBe(item);
+		expect(onPhase).toHaveBeenCalledWith("research", {
+			attempt: 1,
+			totalAttempts: 3,
+		});
+		expect(agentClientMocks.saveGeneratedQuestion).toHaveBeenCalledWith(
+			expect.objectContaining({ quiz: { question: "generated" } }),
+		);
+		const command = agentClientMocks.bedrockSend.mock.calls[0]?.[0] as {
+			input: { accept?: string; payload?: Uint8Array };
+		};
+		expect(command.input.accept).toBe("text/event-stream");
+		expect(
+			JSON.parse(new TextDecoder().decode(command.input.payload)),
+		).toMatchObject({ stream: true });
 	});
 });

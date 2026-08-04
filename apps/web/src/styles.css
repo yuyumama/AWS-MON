@@ -615,6 +615,59 @@ a {
 	border-top: 1px solid var(--line);
 }
 
+.generation-stages ol {
+	display: grid;
+	grid-template-columns: repeat(3, 1fr);
+	gap: 8px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.generation-stages li {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	font-size: 12px;
+	font-weight: 700;
+	color: var(--ink-soft);
+}
+
+.generation-stage-mark {
+	display: grid;
+	place-items: center;
+	width: 24px;
+	height: 24px;
+	flex: none;
+	border: 1px solid var(--line-strong);
+	border-radius: 50%;
+	background: var(--panel);
+	font-family: var(--font-mono);
+	font-size: 11px;
+}
+
+.generation-stages li[data-state="done"] {
+	color: var(--accent-deep);
+}
+
+.generation-stages li[data-state="current"] {
+	color: var(--ink);
+}
+
+.generation-stages li[data-state="current"] .generation-stage-mark {
+	border-color: var(--accent);
+	background: var(--accent);
+	color: white;
+	box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.generation-stages > strong {
+	display: block;
+	margin-top: 10px;
+	font-size: 12px;
+	color: var(--accent-deep);
+}
+
 @keyframes generation-progress {
 	from {
 		transform: translateX(-4%);
@@ -1150,7 +1203,6 @@ button.option:hover:not(:disabled) {
 	padding: 0;
 }
 
-/* biome-ignore lint/style/noDescendingSpecificity: session-list とは別コンテナの子要素を指定している */
 .option-reasons li {
 	display: flex;
 	gap: 10px;
