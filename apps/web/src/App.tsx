@@ -1,5 +1,15 @@
 import type { SessionDto } from "@aws-mon/shared";
+import {
+	AnimatePresence,
+	domAnimation,
+	LazyMotion,
+	m,
+	useIsPresent,
+	useReducedMotion,
+} from "motion/react";
+import type { ReactNode } from "react";
 import { useCallback, useEffect, useState } from "react";
+import { AuthSkeleton } from "./components/Loading";
 import { errorMessage, getMe } from "./lib/api";
 import { authMode, displayName, initAuth, logout } from "./lib/auth";
 import { HomeView } from "./views/HomeView";
@@ -27,9 +37,35 @@ type AuthState =
 	| { phase: "login"; error?: string }
 	| { phase: "ready"; canGenerate: boolean };
 
+function ViewTransition({
+	children,
+	reducedMotion,
+}: {
+	children: ReactNode;
+	reducedMotion: boolean | null;
+}) {
+	const isPresent = useIsPresent();
+
+	return (
+		<m.div
+			initial={reducedMotion ? false : { opacity: 0, y: 8 }}
+			animate={reducedMotion ? undefined : { opacity: 1, y: 0 }}
+			exit={reducedMotion ? undefined : { opacity: 0, y: -6 }}
+			transition={
+				reducedMotion ? { duration: 0 } : { duration: 0.18, ease: "easeOut" }
+			}
+			inert={isPresent ? undefined : true}
+			style={isPresent ? undefined : { pointerEvents: "none" }}
+		>
+			{children}
+		</m.div>
+	);
+}
+
 export function App() {
 	const [route, setRoute] = useState<Route>(parseRoute);
 	const [auth, setAuth] = useState<AuthState>({ phase: "loading" });
+	const reducedMotion = useReducedMotion();
 	// セッション開始直後のDTOを再フェッチせずQuizViewへ渡すための引き継ぎ。
 	// リロード時は null になり、QuizView が GET /sessions/:id で復元する。
 	const [handoff, setHandoff] = useState<SessionDto | null>(null);
@@ -78,85 +114,102 @@ export function App() {
 		window.location.hash = `/session/${sessionId}`;
 	};
 
+	const viewKey =
+		auth.phase === "login"
+			? "login"
+			: route.view === "session"
+				? `session-${route.sessionId}`
+				: route.view;
+
 	return (
-		<div className="frame">
-			<header className="masthead">
-				<div>
-					<p className="masthead-kicker">AWS Certification Drill</p>
-					<a className="masthead-title-link" href="#/">
-						<h1 className="masthead-title">AWS資格問題集</h1>
-					</a>
-				</div>
-				{auth.phase === "ready" && (
-					<dl className="masthead-meta">
-						<div>
-							<dt>user</dt>
-							<dd>{displayName()}</dd>
-						</div>
-						{authMode === "cognito" && (
+		<LazyMotion features={domAnimation}>
+			<div className="frame">
+				<header className="masthead">
+					<div>
+						<p className="masthead-kicker">AWS Certification Drill</p>
+						<a className="masthead-title-link" href="#/">
+							<h1 className="masthead-title">AWS資格問題集</h1>
+						</a>
+					</div>
+					{auth.phase === "ready" && (
+						<dl className="masthead-meta">
 							<div>
-								<dt>auth</dt>
-								<dd>
-									<button
-										type="button"
-										className="link-button"
-										onClick={() => {
-											logout();
-											window.location.hash = "";
-											setAuth({ phase: "login" });
-										}}
-									>
-										ログアウト
-									</button>
-								</dd>
+								<dt>user</dt>
+								<dd>{displayName()}</dd>
 							</div>
-						)}
-					</dl>
+							{authMode === "cognito" && (
+								<div>
+									<dt>auth</dt>
+									<dd>
+										<button
+											type="button"
+											className="link-button"
+											onClick={() => {
+												logout();
+												window.location.hash = "";
+												setAuth({ phase: "login" });
+											}}
+										>
+											ログアウト
+										</button>
+									</dd>
+								</div>
+							)}
+						</dl>
+					)}
+				</header>
+
+				{auth.phase === "ready" && (
+					<nav className="nav" aria-label="メイン">
+						<a href="#/" data-current={route.view === "home"}>
+							演習
+						</a>
+						<a href="#/review" data-current={route.view === "review"}>
+							復習リスト
+						</a>
+					</nav>
 				)}
-			</header>
 
-			{auth.phase === "ready" && (
-				<nav className="nav" aria-label="メイン">
-					<a href="#/" data-current={route.view === "home"}>
-						演習
-					</a>
-					<a href="#/review" data-current={route.view === "review"}>
-						復習リスト
-					</a>
-				</nav>
-			)}
+				<main>
+					{auth.phase === "loading" ? (
+						<AuthSkeleton />
+					) : (
+						<AnimatePresence mode="wait" initial={false}>
+							<ViewTransition key={viewKey} reducedMotion={reducedMotion}>
+								{auth.phase === "login" ? (
+									<>
+										{auth.error && (
+											<p className="notice notice-error">{auth.error}</p>
+										)}
+										<LoginView onAuthenticated={() => void loadMe()} />
+									</>
+								) : route.view === "home" ? (
+									<HomeView
+										canGenerate={auth.canGenerate}
+										onOpenSession={openSession}
+										onResume={resumeSession}
+									/>
+								) : route.view === "review" ? (
+									<ReviewView />
+								) : (
+									<QuizView
+										key={route.sessionId}
+										sessionId={route.sessionId}
+										initialSession={
+											handoff?.sessionId === route.sessionId ? handoff : null
+										}
+										onExit={() => {
+											window.location.hash = "";
+										}}
+									/>
+								)}
+							</ViewTransition>
+						</AnimatePresence>
+					)}
+				</main>
 
-			<main>
-				{auth.phase === "loading" ? (
-					<p className="notice">認証情報を確認しています…</p>
-				) : auth.phase === "login" ? (
-					<>
-						{auth.error && <p className="notice notice-error">{auth.error}</p>}
-						<LoginView onAuthenticated={() => void loadMe()} />
-					</>
-				) : route.view === "home" ? (
-					<HomeView
-						canGenerate={auth.canGenerate}
-						onOpenSession={openSession}
-						onResume={resumeSession}
-					/>
-				) : route.view === "review" ? (
-					<ReviewView />
-				) : (
-					<QuizView
-						key={route.sessionId}
-						sessionId={route.sessionId}
-						initialSession={
-							handoff?.sessionId === route.sessionId ? handoff : null
-						}
-						onExit={() => {
-							window.location.hash = "";
-						}}
-					/>
-				)}
-			</main>
-
-			<footer className="colophon">© 2026 Gorillaburg Inc.</footer>
-		</div>
+				<footer className="colophon">© 2026 Gorillaburg Inc.</footer>
+			</div>
+		</LazyMotion>
 	);
 }

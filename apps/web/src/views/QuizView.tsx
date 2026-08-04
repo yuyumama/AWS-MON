@@ -1,5 +1,16 @@
 import type { AnsweredQuestionDto, SessionDto } from "@aws-mon/shared";
+import {
+	AnimatePresence,
+	m,
+	useIsPresent,
+	useReducedMotion,
+} from "motion/react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+	ButtonSpinner,
+	GenerationWaitingPanel,
+	QuizSkeleton,
+} from "../components/Loading";
 import {
 	errorMessage,
 	getReviewState,
@@ -21,6 +32,7 @@ type Props = {
 
 const pollIntervalMs = 3_000;
 const pollTimeoutMs = 10 * 60 * 1_000;
+const prefetchPollIntervalMs = 5_000;
 
 function generationFailureMessage(
 	errorCode?: string,
@@ -44,7 +56,30 @@ function sameAnswers(a: string[], b: string[]): boolean {
 	return left.length === right.length && left.every((v, i) => v === right[i]);
 }
 
+type PrefetchState = NonNullable<SessionDto["prefetch"]>["state"];
+
+function PrefetchStatus({ state }: { state: PrefetchState }) {
+	const message =
+		state === "READY"
+			? "次の問題の準備ができました"
+			: state === "FAILED"
+				? "次の問題を事前に準備できませんでした。次へ進む際に再試行できます。"
+				: state === "QUEUED"
+					? "次の問題を準備中…"
+					: "次の問題の準備状況を確認中…";
+
+	return (
+		<p className="prefetch-status" data-state={state} role="status">
+			<span className="prefetch-status-mark" aria-hidden="true" />
+			{message}
+		</p>
+	);
+}
+
 export function QuizView({ sessionId, initialSession, onExit }: Props) {
+	const isPresent = useIsPresent();
+	const isPresentRef = useRef(isPresent);
+	isPresentRef.current = isPresent;
 	const [session, setSession] = useState<SessionDto | null>(initialSession);
 	const [loadError, setLoadError] = useState<string | null>(null);
 	const [selected, setSelected] = useState<string[]>([]);
@@ -53,6 +88,7 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 	const [conflicted, setConflicted] = useState(false);
 	const [initialPollError, setInitialPollError] = useState<string | null>(null);
 	const [nextWaiting, setNextWaiting] = useState(false);
+	const reducedMotion = useReducedMotion();
 	// 出題からの経過時間(elapsedMs)計測用
 	const shownAtRef = useRef(Date.now());
 	const initialWaitStartedAtRef = useRef<number | null>(null);
@@ -94,7 +130,7 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 	}, []);
 
 	useEffect(() => {
-		if (!initialPreparing) return;
+		if (!isPresent || !initialPreparing) return;
 		if (initialWaitStartedAtRef.current === null) {
 			initialWaitStartedAtRef.current = Date.now();
 		}
@@ -103,6 +139,7 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 		let timer: number | undefined;
 
 		const poll = async () => {
+			if (cancelled || !isPresentRef.current) return;
 			const startedAt = initialWaitStartedAtRef.current ?? Date.now();
 			if (Date.now() - startedAt >= pollTimeoutMs) {
 				setInitialPollError(generationFailureMessage("generation_timeout"));
@@ -143,12 +180,72 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 			cancelled = true;
 			if (timer !== undefined) window.clearTimeout(timer);
 		};
-	}, [initialPreparing, sessionId]);
+	}, [initialPreparing, isPresent, sessionId]);
 
 	const current = session?.current;
 	const question = current?.question;
 	const answered =
 		current?.state === "ANSWERED" && question?.visibility === "answered";
+	const prefetchState = session?.prefetch?.state ?? "IDLE";
+
+	// 出題中・解説表示中は先読み状態だけを軽量に再取得する。ここから nextQuestion を呼ぶと、
+	// FAILED 時に生成jobが積み上がるため GET 以外は絶対に行わない。
+	useEffect(() => {
+		if (
+			!isPresent ||
+			!current ||
+			!question ||
+			session?.mode === "BANK" ||
+			pending !== null ||
+			prefetchState === "READY" ||
+			prefetchState === "FAILED"
+		) {
+			return;
+		}
+
+		let cancelled = false;
+		let timer: number | undefined;
+
+		const refreshPrefetch = async () => {
+			if (cancelled || !isPresentRef.current) return;
+			try {
+				const fresh = await getSession(sessionId);
+				if (cancelled) return;
+				setSession(fresh);
+				if (
+					fresh.prefetch?.state === "READY" ||
+					fresh.prefetch?.state === "FAILED"
+				) {
+					return;
+				}
+			} catch {
+				// 一時的な取得失敗は回答フローを止めず、次の5秒後に再確認する。
+			}
+			if (!cancelled) {
+				timer = window.setTimeout(
+					() => void refreshPrefetch(),
+					prefetchPollIntervalMs,
+				);
+			}
+		};
+
+		timer = window.setTimeout(
+			() => void refreshPrefetch(),
+			prefetchPollIntervalMs,
+		);
+		return () => {
+			cancelled = true;
+			if (timer !== undefined) window.clearTimeout(timer);
+		};
+	}, [
+		current,
+		isPresent,
+		pending,
+		prefetchState,
+		question,
+		session?.mode,
+		sessionId,
+	]);
 
 	// 復習マーク状態(null = 未取得)。回答済み問題が表示されたら取得する
 	const [reviewMarked, setReviewMarked] = useState<boolean | null>(null);
@@ -173,7 +270,14 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 	}, [answeredQuestionId]);
 
 	const toggleReview = async () => {
-		if (!answeredQuestionId || reviewMarked === null || reviewPending) return;
+		if (
+			!isPresent ||
+			!answeredQuestionId ||
+			reviewMarked === null ||
+			reviewPending
+		) {
+			return;
+		}
 		setReviewPending(true);
 		try {
 			const state = await setReviewMark(answeredQuestionId, !reviewMarked);
@@ -186,7 +290,7 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 	};
 
 	const toggleOption = (label: string) => {
-		if (!question || answered || pending) return;
+		if (!isPresent || !question || answered || pending) return;
 		if (question.type === "single") {
 			setSelected([label]);
 			return;
@@ -197,7 +301,7 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 	};
 
 	const submit = async () => {
-		if (!session || !current || selected.length === 0) return;
+		if (!isPresent || !session || !current || selected.length === 0) return;
 		setPending("answer");
 		setActionError(null);
 		try {
@@ -217,7 +321,7 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 	};
 
 	const goNext = async () => {
-		if (!session || !current) return;
+		if (!isPresent || !session || !current) return;
 		setPending("next");
 		setActionError(null);
 		setConflicted(false);
@@ -245,7 +349,7 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 	};
 
 	useEffect(() => {
-		if (!nextWaiting) return;
+		if (!isPresent || !nextWaiting) return;
 		let cancelled = false;
 		let timer: number | undefined;
 
@@ -259,6 +363,7 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 		};
 
 		const poll = async () => {
+			if (cancelled || !isPresentRef.current) return;
 			const startedAt = nextWaitStartedAtRef.current ?? Date.now();
 			if (Date.now() - startedAt >= pollTimeoutMs) {
 				stopWithError(
@@ -302,6 +407,7 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 				}
 
 				if (fresh.prefetch?.state !== "QUEUED") {
+					if (cancelled || !isPresentRef.current) return;
 					const result = await nextQuestion(fresh.sessionId, fresh.version);
 					if (cancelled) return;
 					setSession(result.session);
@@ -335,7 +441,7 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 			cancelled = true;
 			if (timer !== undefined) window.clearTimeout(timer);
 		};
-	}, [nextWaiting, sessionId]);
+	}, [isPresent, nextWaiting, sessionId]);
 
 	if (loadError) {
 		return (
@@ -374,7 +480,10 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 						<span className="sheet-no">準備エラー</span>
 						問題を準備できませんでした
 					</h2>
-					<p className="notice notice-error">{preparingFailure}</p>
+					<div className="notice notice-error generation-error" role="alert">
+						<strong>生成を続けられません</strong>
+						<span>{preparingFailure}</span>
+					</div>
 					<div className="actions">
 						<button
 							type="button"
@@ -405,27 +514,17 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 					</span>
 				</div>
 				<article className="sheet">
-					<h2 className="sheet-heading">
-						<span className="sheet-no">準備中</span>
-						最初の問題を生成しています
-					</h2>
-					<p className="notice" role="status">
-						経過 {initialElapsed}秒
-					</p>
-					<p className="hint">
-						問題の生成には数分かかることがあります。しばらくお待ちください。
-					</p>
+					<GenerationWaitingPanel
+						title="最初の問題を生成しています"
+						elapsedSeconds={initialElapsed}
+					/>
 				</article>
 			</div>
 		);
 	}
 
 	if (!session || !current || !question) {
-		return (
-			<div className="sheet">
-				<p className="notice">セッションを読み込んでいます…</p>
-			</div>
-		);
+		return <QuizSkeleton />;
 	}
 
 	const answeredQuestion = answered ? (question as AnsweredQuestionDto) : null;
@@ -494,6 +593,8 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 					</div>
 				</header>
 
+				{session.mode !== "BANK" && <PrefetchStatus state={prefetchState} />}
+
 				<p className="question-text">{question.question}</p>
 
 				<ul className="options">
@@ -534,8 +635,8 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 				</ul>
 
 				{actionError && (
-					<p className="notice notice-error">
-						{actionError}
+					<div className="notice notice-error action-error" role="alert">
+						<span>{actionError}</span>
 						{conflicted && (
 							<button
 								type="button"
@@ -545,7 +646,7 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 								セッションを読み直す
 							</button>
 						)}
-					</p>
+					</div>
 				)}
 
 				{!answered && (
@@ -556,6 +657,7 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 							disabled={selected.length === 0 || pending !== null}
 							onClick={() => void submit()}
 						>
+							{pending === "answer" && <ButtonSpinner />}
 							{pending === "answer" ? "採点中…" : "回答する"}
 						</button>
 						{question.type === "multiple" && (
@@ -565,98 +667,119 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 				)}
 			</article>
 
-			{answeredQuestion && (
-				<section className="sheet result-sheet" data-correct={isCorrect}>
-					<div className="result-stamp" aria-hidden="true">
-						{isCorrect ? "○" : "✕"}
-					</div>
-					<div className="result-body">
-						<h3 className="result-heading">
-							{isCorrect ? "正解" : "不正解"}
-							<span className="result-answer">
-								正答: {normalizeAnswers(answeredQuestion.correct).join("・")}
-							</span>
-						</h3>
-
-						<dl className="explanation">
-							<dt>概要</dt>
-							<dd>{answeredQuestion.explanation.overview}</dd>
-							<dt>正解の理由</dt>
-							<dd>{answeredQuestion.explanation.correct_reason}</dd>
-							<dt>各選択肢</dt>
-							<dd>
-								<ul className="option-reasons">
-									{answeredQuestion.explanation.option_reasons.map((reason) => (
-										<li key={reason.label}>
-											<span
-												className="option-label"
-												data-ok={correctSet.has(reason.label.toUpperCase())}
-											>
-												{reason.label}
-											</span>
-											<span>{reason.reason}</span>
-										</li>
-									))}
-								</ul>
-							</dd>
-							<dt>出典</dt>
-							<dd>
-								{/^https?:\/\//.test(answeredQuestion.explanation.source) ? (
-									<a
-										href={answeredQuestion.explanation.source}
-										target="_blank"
-										rel="noreferrer"
-									>
-										{answeredQuestion.explanation.source}
-									</a>
-								) : (
-									answeredQuestion.explanation.source
-								)}
-							</dd>
-						</dl>
-
-						{nextWaiting && (
-							<p className="notice" role="status">
-								次の問題を準備しています。生成には数分かかることがあります。
-								しばらくお待ちください。(経過 {nextElapsed}秒)
-							</p>
-						)}
-
-						<div className="actions">
-							<button
-								type="button"
-								className="button button-primary"
-								disabled={pending !== null}
-								onClick={() => void goNext()}
-							>
-								{pending === "next"
-									? session.mode === "BANK"
-										? "次の問題を取得中…"
-										: `次の問題を準備中… ${nextElapsed}秒`
-									: "次の問題へ →"}
-							</button>
-							<button
-								type="button"
-								className="button button-review"
-								data-marked={reviewMarked === true}
-								disabled={reviewMarked === null || reviewPending}
-								onClick={() => void toggleReview()}
-							>
-								{reviewMarked === null
-									? "☆ 復習リスト…"
-									: reviewPending
-										? "更新中…"
-										: reviewMarked
-											? "★ 復習リストに追加済み"
-											: "☆ 復習リストに追加"}
-							</button>
-							{!isCorrect && (
-								<span className="hint">間違えた問題は自動で追加されます</span>
-							)}
+			<AnimatePresence initial={false}>
+				{answeredQuestion && (
+					<m.section
+						key={`explanation-${current.sequence}`}
+						className="sheet result-sheet"
+						data-correct={isCorrect}
+						initial={reducedMotion ? false : { opacity: 0, y: 10 }}
+						animate={reducedMotion ? undefined : { opacity: 1, y: 0 }}
+						exit={reducedMotion ? undefined : { opacity: 0, y: -6 }}
+						transition={
+							reducedMotion
+								? { duration: 0 }
+								: { duration: 0.2, ease: "easeOut" }
+						}
+					>
+						<div className="result-stamp" aria-hidden="true">
+							{isCorrect ? "○" : "✕"}
 						</div>
-					</div>
-				</section>
-			)}
+						<div className="result-body">
+							<h3 className="result-heading">
+								{isCorrect ? "正解" : "不正解"}
+								<span className="result-answer">
+									正答: {normalizeAnswers(answeredQuestion.correct).join("・")}
+								</span>
+							</h3>
+
+							<dl className="explanation">
+								<dt>概要</dt>
+								<dd>{answeredQuestion.explanation.overview}</dd>
+								<dt>正解の理由</dt>
+								<dd>{answeredQuestion.explanation.correct_reason}</dd>
+								<dt>各選択肢</dt>
+								<dd>
+									<ul className="option-reasons">
+										{answeredQuestion.explanation.option_reasons.map(
+											(reason) => (
+												<li key={reason.label}>
+													<span
+														className="option-label"
+														data-ok={correctSet.has(reason.label.toUpperCase())}
+													>
+														{reason.label}
+													</span>
+													<span>{reason.reason}</span>
+												</li>
+											),
+										)}
+									</ul>
+								</dd>
+								<dt>出典</dt>
+								<dd>
+									{/^https?:\/\//.test(answeredQuestion.explanation.source) ? (
+										<a
+											href={answeredQuestion.explanation.source}
+											target="_blank"
+											rel="noreferrer"
+										>
+											{answeredQuestion.explanation.source}
+										</a>
+									) : (
+										answeredQuestion.explanation.source
+									)}
+								</dd>
+							</dl>
+
+							{nextWaiting && (
+								<GenerationWaitingPanel
+									title="次の問題を生成しています"
+									elapsedSeconds={nextElapsed}
+									compact
+								/>
+							)}
+
+							<div className="actions">
+								<button
+									type="button"
+									className="button button-primary"
+									disabled={pending !== null}
+									onClick={() => void goNext()}
+								>
+									{pending === "next" && session.mode === "BANK" && (
+										<ButtonSpinner />
+									)}
+									{pending === "next"
+										? session.mode === "BANK"
+											? "次の問題を取得中…"
+											: "次の問題を準備中…"
+										: "次の問題へ →"}
+								</button>
+								<button
+									type="button"
+									className="button button-review"
+									data-marked={reviewMarked === true}
+									disabled={reviewMarked === null || reviewPending}
+									onClick={() => void toggleReview()}
+								>
+									{reviewPending && <ButtonSpinner />}
+									{reviewMarked === null
+										? "☆ 復習リスト…"
+										: reviewPending
+											? "更新中…"
+											: reviewMarked
+												? "★ 復習リストに追加済み"
+												: "☆ 復習リストに追加"}
+								</button>
+								{!isCorrect && (
+									<span className="hint">間違えた問題は自動で追加されます</span>
+								)}
+							</div>
+						</div>
+					</m.section>
+				)}
+			</AnimatePresence>
 		</div>
 	);
 }
