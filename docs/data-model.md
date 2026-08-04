@@ -24,13 +24,13 @@ DynamoDB は **単一テーブルではなく、責務別の4テーブル**で�
 
 ## 設計原則
 
-- Cognito の `sub` を `userId` として使う。メール等のユーザー本体情報は原則 DynamoDB に持たない。
+- Cognito の `sub` を `userId` として使う。メールなどのユーザー本体情報は、原則として DynamoDB に持たない。
 - `BANK` モードは登録済みユーザーであれば利用できる。`GENERATE` / `MIXED` / stale 再生成など LLM 呼び出しに到達し得る処理は、追加の生成権限を必須にする。
 - API は問題取得時に `correct` をクライアントへ返さない。回答後にだけ正解・解説を返す。
 - セッションには問題本文を埋め込まず、`questionId` 参照を保持する。問題の source of truth は `AwsMonQuestions`。
 - 問題と解説は `QuizItem{question, explanation}` として **1回の生成で同時に作る**。DynamoDB には問題だけ・解説未完了の部分状態を持たない。
-- 回答履歴は append-only の `ATTEMPT` item として保存し、セッション統計や復習状態は同時更新の materialized view として持つ。
-- 問題の陳腐化は TTL 削除ではなく、`status` と `validUntil` による **論理無効化**で制御する。TTL は job や失敗データの掃除だけに使う。
+- 回答履歴は append-only の `ATTEMPT` item として保存する。セッション統計や復習状態は、同時更新する materialized view として持つ。
+- 問題の陳腐化は TTL 削除ではなく、`status` と `validUntil` による **論理無効化**で制御する。TTL は job や失敗データの削除だけに使う。
 - 先読みは `Session.prefetch` に実体を埋め込まず、`GenerationJob` と `questionId` 参照で表現する。
 - 全テーブルに `schemaVersion`, `createdAt`, `updatedAt` を持たせる。
 
@@ -89,7 +89,7 @@ GSI は必要属性だけを投影する。特に `correct` と `explanation` �
 ### ID
 
 - `sessionId`, `jobId`: ULID 推奨。時系列ソートとログ追跡がしやすい。
-- `questionId`: `q_` + ULID 推奨。生成内容の完全重複検知用に別途 `contentHash` を持つ。
+- `questionId`: `q_` + ULID 推奨。生成内容の完全重複を検知するため、別途 `contentHash` を持つ。
 - `attemptId`: セッション内 sequence から `ATTEMPT#000001` のように作る。多重送信防止に `ConditionExpression attribute_not_exists` を使う。
 
 ### バケットと乱数キー
@@ -111,7 +111,7 @@ DynamoDB item を API レスポンスへ直接返してはいけない。問題�
 
 ## `AwsMonQuestions`
 
-生成済み問題の source of truth。ユーザーに依存しないグローバルな問題バンク。
+生成済み問題の source of truth であり、ユーザーに依存しないグローバルな問題バンクである。
 
 ### Key
 
@@ -123,7 +123,7 @@ DynamoDB item を API レスポンスへ直接返してはいけない。問題�
 
 #### `GSI1_BankRandom`
 
-生成済み問題から出題するためのランダム取得用 index。
+生成済み問題から出題する際に使用する、ランダム取得用 index である。
 
 | Key | 値 |
 |---|---|
@@ -155,7 +155,7 @@ stale 化 worker は全 `staleBucket` を走査し、`staleSk <= now` を Query 
 
 #### `GSI3_ContentHash`
 
-生成済み問題の重複候補を検出するための index。厳密な一意制約ではなく、Phase 1 では生成直後の重複検知・再利用判断のための best-effort check とする。
+生成済み問題の重複候補を検出するための index である。厳密な一意制約ではなく、Phase 1 では生成直後の重複検知と再利用判断のための best-effort check とする。
 
 | Key | 値 |
 |---|---|
@@ -274,7 +274,7 @@ type QuestionItem = {
 | status | 意味 | 出題対象 |
 |---|---|---|
 | `ACTIVE` | 問題・正解・解説が揃い、構造的に利用可能 | 可 |
-| `REJECTED` | 生成失敗、品質ゲート失敗、重複等で使わない | 不可 |
+| `REJECTED` | 生成失敗、品質ゲート失敗、重複などで使わない | 不可 |
 | `STALE` | `validUntil` を過ぎた、またはドキュメント更新で陳腐化 | 不可。復習履歴には残す |
 | `ARCHIVED` | 手動で退避した過去データ | 不可 |
 
@@ -315,7 +315,7 @@ type QuestionItem = {
 
 Projection: `INCLUDE`。
 
-`userStatusSk` に `updatedAt` を入れるのは、最近アクティブなセッション順で一覧するため。回答や次問遷移のたびに GSI 上は delete+insert になるが、個人用途の書込量では許容する。
+`userStatusSk` に `updatedAt` を入れるのは、最近アクティブなセッション順で一覧するためである。回答や次問遷移のたびに GSI 上では delete+insert になるが、個人用途の書込量では許容する。
 
 #### `GSI2_AbandonDue`
 
@@ -477,7 +477,7 @@ type AttemptItem = {
 
 ### 回答記録の整合性
 
-回答 API は次の条件を満たす `TransactWriteItems` にする。
+回答 API では、次の条件を満たす `TransactWriteItems` を使用する。
 
 - `ATTEMPT#<sequence>` を `attribute_not_exists` で Put し、多重クリック/再送信を防ぐ。
 - `META.userId = :sub`、`META.version = :expectedVersion`、`current.sequence = :sequence` が一致する場合だけ Update する。`sessionId` を知っているだけでは他ユーザーのセッションを更新できないようにする。
@@ -503,7 +503,7 @@ type AttemptItem = {
 - `UserDomainStatItem`（苦手集計）
 - `AwsMonQuestions`（全ユーザー共有の問題バンク）
 
-これらはセッション単位の所有物ではなく、別の materialized view または共有データであるため、セッション削除による巻き戻しを行わない。`ATTEMPT` は通常 append-only だが、利用者による AP-14 の物理削除だけを例外とする。
+これらはセッション単位の所有物ではなく、別の materialized view または共有データである。そのため、セッション削除による巻き戻しは行わない。`ATTEMPT` は通常 append-only だが、利用者による AP-14 の物理削除だけを例外とする。
 
 論理削除（`status=DELETED`）を採らないのは、1セッションの partition が `META` と回答数ぶんの `ATTEMPT` のみで件数が数十件に収まり、Query + BatchWrite で消し切れるためである。論理削除では一覧 Query、GSI key の除去、TTL 管理が増える一方、保持価値のある復習状態・苦手集計・共有問題は別 item として残るため、複雑さに見合う監査価値がない。
 
@@ -511,7 +511,7 @@ type AttemptItem = {
 
 ## `AwsMonUserActivity`
 
-復習機能と将来の苦手ドメイン分析の土台。append-only の真実は `ATTEMPT`、このテーブルは画面表示・集計用の projection。
+復習機能と将来の苦手ドメイン分析の土台である。append-only の真実は `ATTEMPT` であり、このテーブルは画面表示・集計用の projection である。
 
 ### Key
 
@@ -537,7 +537,7 @@ Projection: `INCLUDE`。
 
 #### `GSI2_DueList`
 
-将来の spaced repetition / 復習期限用。Phase 1 では未使用でも属性名だけ予約する。
+将来の spaced repetition / 復習期限用である。Phase 1 では未使用でも、属性名だけ予約する。
 
 | Key | 値 |
 |---|---|
@@ -607,7 +607,7 @@ type UserDomainStatItem = {
 
 ## `AwsMonGenerationJobs`
 
-先読み・初回生成・stale 再生成の状態を保存する。Lambda のレスポンス後に非同期処理が必ず続くとは限らないため、job を durable にする。
+先読み・初回生成・stale 再生成の状態を保存する。Lambda のレスポンス後に非同期処理が必ず続くとは限らないため、job を durable に保つ。
 
 ### Key
 
@@ -619,7 +619,7 @@ type UserDomainStatItem = {
 
 #### `GSI1_Runnable`
 
-ローカル worker / 簡易 worker が実行対象を拾うための index。将来 SQS を導入しても、job 状態の source of truth として残す。
+ローカル worker / 簡易 worker が実行対象を取得するための index である。将来 SQS を導入しても、job 状態の source of truth として残す。
 
 | Key | 値 |
 |---|---|
@@ -682,14 +682,14 @@ type GenerationJobItem = {
 
 ### prefetch job の反映ルール
 
-worker は session を更新するとき、必ず次を condition に入れる。
+worker は session を更新するとき、必ず次の条件を condition に含める。
 
 - `prefetch.jobId = :jobId`
 - `prefetch.sequence = :targetSequence`
 - `userId = :jobUserId`（job に `userId` がある場合）
 - `status = ACTIVE`
 
-これにより、古い job が完了しても新しい current/prefetch を上書きしない。
+これにより、古い job が完了しても、新しい current/prefetch を上書きしない。
 
 工程進捗の更新も同じ排他規則に従う。`INITIAL` は `initial.jobId = :jobId`、`PREFETCH` は `prefetch.jobId = :jobId AND prefetch.sequence = :targetSequence` を条件にする。ロックを失ったworkerの `ConditionalCheckFailedException` は無視し、進捗だけのUpdateではセッションの楽観ロック用 `version` とセッション活動時刻 `updatedAt` を変更しない。同一工程・試行番号の重複は除外し、DynamoDBへの書き込み間隔は最短5秒とする。
 
@@ -725,9 +725,9 @@ worker は session を更新するとき、必ず次を condition に入れる�
 2. Cognito JWT 検証済みの `sub` を `userId` とする。`mode=BANK` は登録済みユーザーなら許可する。`mode=GENERATE` / `mode=MIXED` は LLM 課金に到達し得るため、追加の生成権限 `canGenerateQuestions` を確認する。
 3. `domainSelection="all"` の場合、アプリ側で具体 `domain` を重み付き抽選する。
 4. `mode=BANK` / `mode=MIXED` は `AwsMonQuestions.GSI1_BankRandom` から候補を探す。未回答表示に必要な属性は GSI projection で足りる。`mode=GENERATE` はバンクを見ない。
-5. 候補が取れた場合は `META` item を Put して `current.questionId` を設定し、`lastSeenQuestionIds` を最大50件で初期化する。次 sequence の `GenerationJob(kind=PREFETCH)` を作り `META.prefetch` に `jobId` を保存して、201 で返す。
+5. 候補を取得できた場合は、`META` item を Put して `current.questionId` を設定し、`lastSeenQuestionIds` を最大50件で初期化する。次 sequence の `GenerationJob(kind=PREFETCH)` を作成して `META.prefetch` に `jobId` を保存し、201 で返す。
 6. 候補がなく、かつ `mode=GENERATE` または `mode=MIXED` の場合は **`GenerationJob(kind=INITIAL)` を作って 202 を返す**（同期生成はしない。[ADR 0013](adr/0013-async-initial-generation.md)）。`META` item は `current` を持たず `initial={state:"QUEUED", jobId}` を持つ状態で Put し、**job と同一 `TransactWrite`** で書いて孤立を防ぐ。`mode=BANK` では新規生成にフォールバックせず、候補なしとして返す。
-7. 6 の `TransactWrite` には `INITIAL` guard item の `attribute_not_exists` 条件付き Put を含める（二重送信・二重クリック・多重タブの冪等化）。条件で落ちた場合はガードを**ベーステーブルから強整合 Get** して、既に存在する生成中セッションを返す。`GSI1_UserStatus` の Query では代用できない（GSI は強整合読み取りができないため、同時リクエストが両方とも「既存なし」と判定する）。
+7. 6 の `TransactWrite` には `INITIAL` guard item の `attribute_not_exists` 条件付き Put を含める（二重送信・二重クリック・多重タブの冪等化）。条件で失敗した場合は、ガードを**ベーステーブルから強整合 Get** し、既に存在する生成中セッションを返す。`GSI1_UserStatus` の Query では代用できない（GSI は強整合読み取りができないため、同時リクエストが両方とも「既存なし」と判定する）。
 8. worker が INITIAL job を実行し、**job の終端遷移とセッション反映を同一 `TransactWrite`** で行う。成功なら `initial.jobId` 一致を条件に `current`（sequence 1）へ昇格させ、`initial` を削除し、seq2 の `PREFETCH` job を作り、ガードを削除する。終端失敗なら `initial.state="FAILED"` と `errorCode` を書いてガードを削除する。分けて書くと、終端遷移で `runPk`/`runSk` が外れた後に反映が失敗した場合に job が二度と拾われず、セッションが永久に生成中のまま残る。
 9. 新規生成時は `contentHash` を計算し、`GSI3_ContentHash` で重複候補を確認してから `ACTIVE` な question として保存する。
 10. `GENERATE` / `MIXED` の prefetch は生成権限を持つセッションに限って作成・実行する。
@@ -735,7 +735,7 @@ worker は session を更新するとき、必ず次を condition に入れる�
 ### セッション再開
 
 1. `sessionId` で `META` を Get。
-2. `userId` が JWT の Cognito `sub` と一致することを確認。
+2. `userId` が JWT の Cognito `sub` と一致することを確認する。
 3. `current.questionId` と `prefetch.questionId` を `BatchGetItem`。
 4. `current.state` が `ANSWERED` なら正解・解説を返す。`ANSWERING` なら `correct` を返さない。
 
@@ -814,8 +814,8 @@ GENERATION_JOBS_TABLE=aws-mon-local-generation-jobs
 2. ~~seed 後に `DescribeTable` 相当で GSI projection を検証する。~~ 完了
 3. ~~`apps/api` に DynamoDB repository 層と DTO 変換層を作る。~~ 完了
 4. ~~セッション開始/再開/回答記録を、生成 agent なしで固定 seed question に対して通す。~~ 完了
-5. ~~`AwsMonQuestions` の保存・bank random 取得・contentHash 重複候補検出を実装する。~~ 完了(`apps/api/src/questionRepository.ts`, `questionBankRepository.ts`)
-6. ~~`AwsMonGenerationJobs` を使って先読み状態を保存する。最初は API 内同期/疑似 worker でよい。~~ 完了(`apps/api/src/jobRepository.ts`。`mode=BANK`はinline実行、`GENERATE/MIXED`は`/dev/jobs/run`で処理)
-7. ~~agent 連携後、生成された `QuizItem{question, explanation}` を `ACTIVE` な `QuestionItem` として保存する。~~ 完了。`apps/agent`にローカルHTTPサーバ(`quiz_agent/server.py`, `/generate`)を追加し、`apps/api/src/agentClient.ts`経由でHTTP呼び出し→`saveGeneratedQuestion`で保存する。本番では同じ境界をAgentCore Runtime呼び出しに差し替える想定。
+5. ~~`AwsMonQuestions` の保存・bank random 取得・contentHash 重複候補検出を実装する。~~ 完了（`apps/api/src/questionRepository.ts`, `questionBankRepository.ts`）
+6. ~~`AwsMonGenerationJobs` を使って先読み状態を保存する。最初は API 内同期/疑似 worker でよい。~~ 完了（`apps/api/src/jobRepository.ts`。`mode=BANK`はinline実行、`GENERATE/MIXED`は`/dev/jobs/run`で処理）
+7. ~~agent 連携後、生成された `QuizItem{question, explanation}` を `ACTIVE` な `QuestionItem` として保存する。~~ 完了。`apps/agent`にローカルHTTPサーバ（`quiz_agent/server.py`, `/generate`）を追加し、`apps/api/src/agentClient.ts`経由でHTTP呼び出し→`saveGeneratedQuestion`で保存する。本番では同じ境界をAgentCore Runtime呼び出しに差し替える想定。
 8. stale 化 job、abandoned 化 job、復習一覧を追加する。
 9. sparse GSI の SET/REMOVE 規律を結合テストで検証する。

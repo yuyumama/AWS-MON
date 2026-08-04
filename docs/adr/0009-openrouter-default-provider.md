@@ -5,7 +5,7 @@
 
 ## 背景
 
-prodアカウント（147856894803）は Bedrock の日次トークンクォータが実効 0 に張り付いており（2026-07-05以降 全スロットリング、引き上げサポートケース対応中）、Bedrockモデルでは問題生成が実行できない状態が続いていた。
+prodアカウント（147856894803）では、Bedrock の日次トークンクォータが実効 0 に張り付いており（2026-07-05以降 全スロットリング、引き上げサポートケース対応中）、Bedrockモデルで問題を生成できない状態が続いていた。
 
 一方 issue #39 / PR #46 で quiz-agent は `AGENT_MODEL_PROVIDER` による OpenRouter 切り替えに対応済みだった。本ADRはその後続として、**クォータ解消を待たずに prod の GENERATE を動かす**ため、OpenRouter を既定の生成モデルプロバイダに昇格させる意思決定を記録する。
 
@@ -22,7 +22,7 @@ prodアカウント（147856894803）は Bedrock の日次トークンクォー�
 - キーはオーナーが `/app/aws-mon/prod/openrouter-api-key`（SecureString）へ手動登録する（ADR 0008 の「アカウント固有値は SSM」運用に揃える）。
 - 環境変数には**パラメータ名だけ**を渡し（`OPENROUTER_API_KEY_PARAM`）、アプリが OpenRouter モデル初期化時に `ssm:GetParameter`（WithDecryption）で取得する（`agent.py`）。`OPENROUTER_API_KEY`（環境変数）が設定されていればそちらを優先（ローカルは `.env`）。
 - tfstate と AgentCore コンソールのランタイム設定に入るのは**パラメータ名のみ**。IAM は対象パラメータ ARN 限定の `ssm:GetParameter` を付与（SecureString は AWS マネージドキーのため追加の `kms:Decrypt` は不要）。
-- 両方未設定・取得失敗は**明確な `RuntimeError` で生成失敗させる**（fail-open にしない。モデル生成の失敗は「調査失敗」扱いにせず即エラー）。
+- 両方が未設定の場合や取得に失敗した場合は、**明確な `RuntimeError` で生成を失敗させる**（fail-open にしない。モデル生成の失敗は「調査失敗」扱いにせず即エラー）。
 
 ### 3. 切り戻し手段は Terraform 変数（イメージ再デプロイ不要） — ADR 0012 で撤回
 
@@ -31,10 +31,10 @@ prodアカウント（147856894803）は Bedrock の日次トークンクォー�
 
 ### 4. OpenRouter 経路での呼び出し回数削減（無料枠 50 req/日 対策・issue #47 追加スコープ）
 
-1問生成で通常 4〜5 リクエスト消費するため、失敗パスの増幅を抑える（実装当時の無料枠は 50 リクエスト/日と厳しかった。本アカウントは現在 $10 クレジット購入済で 1000 リクエスト/日）。
+1問の生成で通常 4〜5 リクエストを消費するため、失敗パスによる増加を抑える（実装当時の無料枠は 50 リクエスト/日と厳しかった。本アカウントは現在 $10 クレジット購入済で 1000 リクエスト/日）。
 
 - **A. ゲート失敗リトライで調査結果を再利用**: グラウンディングゲートでブロックされた際、MCP 調査ループを丸ごと再実行せず、調査済みの同一 `Agent`（会話履歴に根拠ドキュメント原文あり）に対して `structured_output` だけをやり直す（ゲート失敗1回あたり 約4〜5 → 1 リクエスト）。`grounding_source` は初回調査原文を再利用。
-- **B. structured_output 失敗を同一履歴でリトライ**: モデルがツール呼び出しを返さない等の構造化出力失敗は同一履歴で最大2回リトライする。ドキュメントなし生成へのフォールバックは `DocsResearchError`（MCP 起動・調査自体の失敗）に限定し、調査に使ったリクエストを破棄しない。
+- **B. structured_output 失敗を同一履歴でリトライ**: モデルがツール呼び出しを返さないなどの構造化出力失敗は、同一履歴で最大2回リトライする。ドキュメントなし生成へのフォールバックは `DocsResearchError`（MCP 起動・調査自体の失敗）に限定し、調査に使ったリクエストを破棄しない。
 
 ### 5. グラウンディングゲートは生成プロバイダに依らず Bedrock Guardrails を使い続ける
 
@@ -55,7 +55,7 @@ prodアカウント（147856894803）は Bedrock の日次トークンクォー�
 
 ## 本番検証メモ（2026-08-02）
 
-デプロイ後、AgentCore Runtime を直接 `invoke-agent-runtime`（管理者 IAM、アプリの Cognito 認証を経由しない・DynamoDB 書き込みなし）で叩き、agent の E2E フルパスを検証した。
+デプロイ後、管理者 IAM で AgentCore Runtime の `invoke-agent-runtime` を直接呼び出し、agent の E2E フルパスを検証した。アプリの Cognito 認証は経由せず、DynamoDB への書き込みも行っていない。
 
 - Runtime `READY`（更新 02:56Z）、稼働イメージ = origin/main `3bc23e6`（PR #57 マージコミット）と一致。
 - Runtime 環境変数: `AGENT_MODEL_PROVIDER=openrouter` / `OPENROUTER_API_KEY_PARAM=/app/aws-mon/prod/openrouter-api-key`（平文キーの露出なし）。

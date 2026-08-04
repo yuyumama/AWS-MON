@@ -2,7 +2,7 @@
 
 最終更新: 2026-08-04
 
-`README.md` が概要、`docs/data-model.md` がDynamoDB設計の詳細。本書は **コンポーネント間の関係** と **代表的なリクエストフロー** を図で示す完全版。個々の決定の背景は `docs/adr/` を参照。
+`README.md` は概要、`docs/data-model.md` はDynamoDB設計の詳細を示す。本書は **コンポーネント間の関係** と **代表的なリクエストフロー** を図で示す完全版である。個々の決定の背景は `docs/adr/` を参照。
 
 ## 全体構成図
 
@@ -65,9 +65,9 @@ flowchart TB
 
 | コンポーネント | 技術 | 実行/配信場所 | 状態 |
 |---|---|---|---|
-| `apps/web` | Vite + React + TS | S3 + CloudFront | 主要画面(資格選択/出題/解説/セッション再開・削除/問題リスト/復習リスト)を実装済み。セッション削除はキーボード操作可能な確認ダイアログを挟む。問題リストは資格・AIPドメインをURL queryに保持し、一覧から詳細を遅延取得する。Cognitoログインは自前フォーム+SRP(`amazon-cognito-identity-js`、`VITE_AUTH_MODE=cognito`)。ローカルは vite dev server(:5173) が `/api` を api(:8080) にプロキシ |
-| `apps/api` | Hono + Lambda Web Adapter (TS) | Lambda | セッション開始・取得・一覧・削除（`DELETE /sessions/:id`）、回答、次問、問題一覧（`GET /questions`）、dev用endpoint、agent HTTP連携、認証・生成権限(`src/auth.ts`)を実装済み |
-| `apps/agent` | Strands Agents + OpenRouter / Bedrock (Python) | AgentCore Runtime | CLI + local HTTP server (`/health`, `/generate`) を実装済み。AWSドキュメントMCPで調査してから生成(調査失敗時のみ調査なしへフォールバック)。既定はOpenRouter（`nvidia/nemotron-3-ultra-550b-a55b:free`）で、`AGENT_MODEL_PROVIDER=bedrock` によりBedrockへ切り替え可。オブザーバビリティ（OTel/ADOT計装・Guardrailsグラウンディングゲート）も実装・ライブ確認済み（[ADR 0007](adr/0007-observability-stack.md)。AgentCore Evaluationsオンライン評価は検証後に [ADR 0011](adr/0011-retire-online-evaluations.md) で廃止） |
+| `apps/web` | Vite + React + TS | S3 + CloudFront | 主要画面（資格選択/出題/解説/セッション再開・削除/問題リスト/復習リスト）を実装済み。セッション削除時は、キーボード操作可能な確認ダイアログを挟む。問題リストでは、資格・AIPドメインをURL queryに保持し、一覧から詳細を遅延取得する。Cognitoログインには自前フォーム+SRP（`amazon-cognito-identity-js`、`VITE_AUTH_MODE=cognito`）を使用。ローカルでは、vite dev server（:5173）が `/api` を api（:8080）にプロキシ |
+| `apps/api` | Hono + Lambda Web Adapter (TS) | Lambda | セッション開始・取得・一覧・削除（`DELETE /sessions/:id`）、回答、次問、問題一覧（`GET /questions`）、dev用endpoint、agent HTTP連携、認証・生成権限（`src/auth.ts`）を実装済み |
+| `apps/agent` | Strands Agents + OpenRouter / Bedrock (Python) | AgentCore Runtime | CLI + local HTTP server (`/health`, `/generate`) を実装済み。AWSドキュメントMCPで調査してから生成（調査失敗時のみ調査なしへフォールバック）。既定はOpenRouter（`nvidia/nemotron-3-ultra-550b-a55b:free`）で、`AGENT_MODEL_PROVIDER=bedrock` によりBedrockへ切り替え可。オブザーバビリティ（OTel/ADOT計装・Guardrailsグラウンディングゲート）も実装し、ライブ確認済み（[ADR 0007](adr/0007-observability-stack.md)。AgentCore Evaluationsオンライン評価は検証後に [ADR 0011](adr/0011-retire-online-evaluations.md) で廃止） |
 | `packages/shared` | TS型 + テーブル定義 | web/apiがimport | 実装済み |
 | DynamoDB | 4テーブル構成 | AWS / DynamoDB Local | テーブル定義確定。prod（`aws-mon-prod-*`）・localともTerraform適用済み |
 | 認証/認可 | 既存 Cognito User Pool + AWS-MON App Client | 別AWSアカウント / AWS | User Pool は共通。登録済みユーザーは `BANK` 出題可、LLM呼び出しに到達する `GENERATE` / `MIXED` / 再生成は生成権限で制限。ローカルは `x-dev-user-id` devシムで代替（[ADR 0006](adr/0006-auth-cognito-cloud-only.md)） |
@@ -87,9 +87,9 @@ flowchart TB
 | `GET /questions` | 生成済み問題の資格・ドメイン・状態別一覧（要約のみ、cursorページング） |
 | `GET /questions/:questionId` | 問題単体の回答済みビュー（問題本文・選択肢・正解・解説） |
 
-上記はすべて認証必須。問題リストと復習一覧は問題全文を含めず、項目を展開したときだけ問題単体を取得する。問題リストは全ユーザー共通の問題バンクだけを扱い、セッション・回答・復習状態を返さない。
+上記はすべて認証必須である。問題リストと復習一覧は問題全文を含めず、項目を展開したときだけ問題単体を取得する。問題リストは全ユーザー共通の問題バンクだけを扱い、セッション・回答・復習状態を返さない。
 
-**ローカルとクラウドの差はほぼ認証のみ**（[ADR 0004](adr/0004-local-first-dev.md)）。`apps/api` はLWA前提で書かれているため、ローカルでは普通のNode Webサーバとして起動し、DynamoDB LocalとLocalStack（`ssm,secretsmanager,s3`のみ、`cognito-idp`は含まない）に接続する。Cognito は別AWSアカウントの既存 User Pool を参照し、AWS-MON 側 Terraform では新規作成しない。OpenRouterは外部APIを直接呼び、Bedrock/AgentCore Runtimeはローカルで再現しない。ロジックはローカル、観測は実環境、と役割分担する。
+**ローカルとクラウドの差はほぼ認証のみ**である（[ADR 0004](adr/0004-local-first-dev.md)）。`apps/api` はLWA前提で書かれているため、ローカルでは通常のNode Webサーバとして起動し、DynamoDB LocalとLocalStack（`ssm,secretsmanager,s3`のみ、`cognito-idp`は含まない）に接続する。Cognito は別AWSアカウントの既存 User Pool を参照し、AWS-MON 側 Terraform では新規作成しない。OpenRouterは外部APIを直接呼び、Bedrock/AgentCore Runtimeはローカルで再現しない。ロジックはローカル、観測は実環境と役割を分担する。
 
 ## リクエストフロー
 
@@ -142,14 +142,14 @@ sequenceDiagram
 ```
 
 - 回答判定は常にAPI側で行い、`correct`はクライアントへ返さない（answering DTO）。回答後のレスポンスのみ`correct`/`explanation`を含む（answered DTO）。
-- 不正解の回答は、同じTransactWrite内の`QUESTION#` Updateで自動的に復習リストへ入る（`reviewMarked=true` + `GSI1_ReviewList`キー設定。正解時は既存マークに触らない。解除は`PUT /reviews/:questionId`で手動）。
+- 不正解の回答は、同じTransactWrite内の`QUESTION#` Updateによって自動的に復習リストへ入る（`reviewMarked=true` + `GSI1_ReviewList`キー設定。正解時は既存マークに触らない。解除は`PUT /reviews/:questionId`で手動）。
 - `/sessions/:id/answers` と `/sessions/:id/next` はどちらも `version`（楽観ロック）と `userId` 一致をDynamoDBの`ConditionExpression`で強制する。
-- セッション開始時の INITIAL job 作成は `TransactWrite` で META と同時に書くため孤立しない。一方 `nextSessionQuestion` の PREFETCH job 作成とsession更新は非トランザクションのままで、楽観ロックが競合すると作成済みjobが孤立し得る。BANKモードは読み取り専用のため実害なしだが、GENERATE/MIXEDの孤立jobは worker にいずれ拾われて実行されるため、誰も使わない問題のためにLLM呼び出しが発生し得る（`apps/api/src/jobRepository.ts`のコメント参照）。
+- セッション開始時の INITIAL job は、`TransactWrite` で META と同時に作成するため孤立しない。一方、`nextSessionQuestion` の PREFETCH job 作成とsession更新は非トランザクションのままであり、楽観ロックが競合すると作成済みjobが孤立し得る。BANKモードは読み取り専用のため実害はない。ただし、GENERATE/MIXEDの孤立jobは worker にいずれ拾われて実行されるため、誰も使わない問題へのLLM呼び出しが発生し得る（`apps/api/src/jobRepository.ts`のコメント参照）。
 - `GENERATE`/`MIXED` で先読みが未完了のとき、`next` は**同期生成にフォールバックしない**（[ADR 0013](adr/0013-async-initial-generation.md) 決定5）。以前はフォールバックと先読みjobが並行生成し、1問あたり2回生成していた。
 
 ### 2. 問題生成（worker -> agent。非同期job）
 
-生成は中央値190秒・p90 284秒かかるため、HTTPリクエストの中では待たない。API はjobを作って即座に返し、実際の生成は worker が行う（[ADR 0013](adr/0013-async-initial-generation.md)）。
+生成には中央値190秒・p90 284秒かかるため、HTTPリクエストの中では待たない。API はjobを作成して即座に返し、実際の生成は worker が担う（[ADR 0013](adr/0013-async-initial-generation.md)）。
 
 ```mermaid
 sequenceDiagram
@@ -185,7 +185,7 @@ sequenceDiagram
 
 ローカルでは `python3 -m quiz_agent.server` が `POST /generate` を提供し、`AGENT_BASE_URL` 経由で呼び出す（`AGENT_MODE=http`、既定）。ローカルHTTP境界は従来どおりJSON応答のままとする。本番は `AGENT_MODE=agentcore` で AgentCore Runtime の `InvokeAgentRuntime` を呼び、payload の `stream=true` により `quiz_agent/runtime.py` の `/invocations` がSSEを返す（[ADR 0008](adr/0008-prod-deployment-shape.md)）。旧Runtimeがフラグを無視してJSONを返した場合は `contentType` で判別して従来のJSON処理へ戻るため、APIとagentのデプロイ順序には依存しない。
 
-SSEは `phase` イベントと、成功・失敗を格納した最後の `result` イベントからなる。無イベント区間は20秒ごとのコメント行で接続を維持する。workerは内部フェーズを利用者向けの `researching` / `drafting` / `verifying` / `regenerating` に変換し、`SessionMeta.initial.progress` または `prefetch.progress` へ条件付きUpdateで保存する。同じフェーズ・試行番号は重複排除し、書き込み間隔は最短5秒とする。進捗更新では楽観ロック用の `version` を進めない。Webは既存の3秒ポーリングでこのフィールドを読み、「調査 → 作成 → 検証」の現在工程を表示する。
+SSEは `phase` イベントと、成功・失敗を格納した最後の `result` イベントからなる。無イベント区間では、20秒ごとのコメント行で接続を維持する。workerは内部フェーズを利用者向けの `researching` / `drafting` / `verifying` / `regenerating` に変換し、`SessionMeta.initial.progress` または `prefetch.progress` へ条件付きUpdateで保存する。同じフェーズ・試行番号は重複排除し、書き込み間隔は最短5秒とする。進捗更新では楽観ロック用の `version` を進めない。Webは既存の3秒ポーリングでこのフィールドを読み、「調査 → 作成 → 検証」の現在工程を表示する。
 
 agent は Guardrails のグラウンディングゲート後、保存前の生成境界で利用者向けフィールドが日本語のプレーンテキストかを検証する。違反時は構造化出力だけを再生成し、解消しなければ fail-closed で worker へエラーを返す。
 
@@ -232,14 +232,14 @@ sequenceDiagram
     API-->>Dev: {processed, succeeded, retried, failed}
 ```
 
-`BANK` のPREFETCH jobは同一リクエスト内でinline実行される。`GENERATE/MIXED` は不要なLLM呼び出しを避けるためQUEUEDのまま保存し、ローカルでは`/dev/jobs/run`で明示的に実行する。本番は EventBridge Scheduler（rate 1分）が worker Lambda（`apps/api/src/worker.ts`、同じ `runRunnableJobs`）を起動する（[ADR 0008](adr/0008-prod-deployment-shape.md)。`/dev/*` は本番では404）。
+`BANK` のPREFETCH jobは同一リクエスト内でinline実行される。`GENERATE/MIXED` は不要なLLM呼び出しを避けるため、QUEUEDのまま保存し、ローカルでは`/dev/jobs/run`で明示的に実行する。本番では EventBridge Scheduler（rate 1分）が worker Lambda（`apps/api/src/worker.ts`、同じ `runRunnableJobs`）を起動する（[ADR 0008](adr/0008-prod-deployment-shape.md)。`/dev/*` は本番では404）。
 
 job の排他と回収は次のとおり（[ADR 0013](adr/0013-async-initial-generation.md) 決定6・7）。
 
 - **排他は claim の条件付きUpdate**で成立する。`lockedUntil` は排他そのものではなく「落ちた worker が掴んだままの RUNNING job を回収してよくなる期限」を表す。
 - RUNNING の job も `runPk`/`runSk` を保持し、`runSk` に `lockedUntil` を入れる。実行可能job検索は `runSk <= 現在時刻` で引くため、**期限内のロックはヒットせず横取りされない**。
 - job の完了（SUCCEEDED / RETRY_WAIT / FAILED）は `lockedBy` 一致を条件にする。ロックを失っていた worker は結果を書かずに降りる。
-- worker は Lambda の残り時間から算出したデッドラインを持ち、残りが1件分の予算（`AGENT_REQUEST_TIMEOUT_MS` + 30秒）を切ったら次の job を claim しない。Lambda timeout で生成中に殺されて job を RUNNING のまま座礁させないため。
+- worker は Lambda の残り時間から算出したデッドラインを持つ。残り時間が1件分の予算（`AGENT_REQUEST_TIMEOUT_MS` + 30秒）を切ったら、次の job を claim しない。Lambda timeout によって生成中に終了し、job を RUNNING のまま座礁させないためである。
 
 job の失敗時は `errorCode` ごとの試行上限とbackoffを使う（[ADR 0014](adr/0014-generation-retry-policy.md)）。`research_incomplete` は3回・5秒、`grounding_blocked` は2回・5秒、`generation_timeout` / `research_failed` / 未分類失敗は3回・30秒、`rate_limited` は1回で即FAILEDとする。登録時の `maxAttempts=3` も上限として残し、種別上限との小さい方を使う。次の `runAfter` が `createdAt` から10分の締切を超える場合は再試行せず、元の `errorCode` を維持してFAILEDにする。
 
@@ -249,7 +249,7 @@ job の失敗時は `errorCode` ごとの試行上限とbackoffを使う（[ADR 
 
 ホーム画面の進行中セッション一覧から確認ダイアログを経て `DELETE /sessions/:id` を呼ぶ。API は認証コンテキストの `userId` と DynamoDB の condition の両方で所有者を確認し、他ユーザーのセッションと存在しないセッションをともに 404、成功を 204 で返す。
 
-削除は `META` の条件付き物理削除を起点とし、対象を指す `INITIAL` guard と `QUEUED` / `RETRY_WAIT` job の `CANCELLED` 更新を同じ TransactWrite で確定した後、対象 partition の `ATTEMPT#*` を BatchWrite で削除する。`RUNNING` job は中断しない。完了後の worker は `initial.jobId` / `prefetch.jobId` など既存属性を条件に session へ反映するため、削除済み `META` を復活させない。復習状態、苦手集計、共通問題バンクはセッション外のデータとして保持する。詳細は `docs/data-model.md` AP-14 を参照。
+削除は `META` の条件付き物理削除を起点とする。対象を指す `INITIAL` guard と `QUEUED` / `RETRY_WAIT` job の `CANCELLED` 更新を同じ TransactWrite で確定した後、対象 partition の `ATTEMPT#*` を BatchWrite で削除する。`RUNNING` job は中断しない。完了後の worker は `initial.jobId` / `prefetch.jobId` など既存属性を条件に session へ反映するため、削除済み `META` を復活させない。復習状態、苦手集計、共通問題バンクはセッション外のデータとして保持する。詳細は `docs/data-model.md` AP-14 を参照。
 
 ## データフローの原則（実装との対応）
 
@@ -258,7 +258,7 @@ job の失敗時は `errorCode` ごとの試行上限とbackoffを使う（[ADR 
 - 復習一覧（`GET /reviews`）は要約と集計だけの軽量DTOを返し、問題全文は`GET /questions/:questionId`で必要時に回答済みビューとして取得する。
 - 問題リスト（`GET /questions`）は`GSI4_QuestionList`を資格単位でQueryし、ドメイン・状態のFilterExpressionを内部ページ補充しながら適用する。一覧DTOにはユーザー固有情報を混ぜない。
 - 先読みは`Session.prefetch`に問題本体を埋め込まず、`GenerationJob`と`questionId`参照で表現する（`apps/api/src/jobRepository.ts`の`reflectJobOnSession`）。
-- 認証・認可は `apps/api/src/auth.ts` に実装。`AUTH_MODE=dev`（既定）は `x-dev-user-id` devシム（無ければ `dev-user`）、`AUTH_MODE=cognito` は別AWSアカウントの既存 Cognito User Pool の access token を `aws-jwt-verify` で検証（issuer / client_id / token_use / 署名）して `sub` を `userId` にする。生成権限 `canGenerateQuestions` は `cognito:groups` に `COGNITO_GENERATE_GROUP` が含まれるかで判定し、`GENERATE` / `MIXED`（セッション開始・`next` の生成フォールバック・prefetch job 作成）は権限が無いと403。**クラウド配備は `AUTH_MODE=cognito` を必須とし、devシムは信用しない**（[ADR 0006](adr/0006-auth-cognito-cloud-only.md)）。
+- 認証・認可は `apps/api/src/auth.ts` に実装。`AUTH_MODE=dev`（既定）は `x-dev-user-id` devシム（なければ `dev-user`）、`AUTH_MODE=cognito` は別AWSアカウントの既存 Cognito User Pool の access token を `aws-jwt-verify` で検証（issuer / client_id / token_use / 署名）して `sub` を `userId` にする。生成権限 `canGenerateQuestions` は `cognito:groups` に `COGNITO_GENERATE_GROUP` が含まれるかで判定し、`GENERATE` / `MIXED`（セッション開始・`next` の生成フォールバック・prefetch job 作成）は権限がないと403。**クラウド配備は `AUTH_MODE=cognito` を必須とし、devシムは信用しない**（[ADR 0006](adr/0006-auth-cognito-cloud-only.md)）。
 
 ## 未実装・今後の接続ポイント
 

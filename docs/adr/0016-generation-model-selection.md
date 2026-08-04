@@ -5,20 +5,20 @@
 
 ## 背景
 
-[ADR 0010](0010-grounding-gate-thresholds.md) までで、ゲート入力の整形と閾値の再チューニングは出し尽くしていたが、初回グラウンディング通過率は目安の80%に届いていなかった。
+[ADR 0010](0010-grounding-gate-thresholds.md) までに、ゲート入力の整形と閾値の再チューニングは実施済みだったが、初回グラウンディング通過率は目安の80%に届いていなかった。
 
 | 計測 | 初回通過率（grounding 0.6換算） |
 |---|---|
 | ADR 0010 実測（2026-08-03, n=30） | 60.9%（23件中14件） |
 | issue #77 再サンプリング（2026-08-03, n=30） | 53.8%（26件中14件） |
 
-残る主要因は生成モデル（`nvidia/nemotron-3-ultra-550b-a55b:free`）の生成品質と見て、モデルのA/B比較を行う。
+残る主要因を生成モデル（`nvidia/nemotron-3-ultra-550b-a55b:free`）の生成品質と見なし、モデルのA/B比較を行う。
 
 ## 計測
 
 `apps/agent/scripts/sample_gate_scores.py` で、`AGENT_GUARDRAIL_RETRIES=0`（初回通過率を測る）、`AGENT_RESEARCH_RETRIES=2`、`cert=aip`、各 n=30。判定は [ADR 0010](0010-grounding-gate-thresholds.md) の grounding 0.6。
 
-候補は事前に1問だけ流すスモークテストで絞り込んだ。次の3モデルは構造化出力または可用性の時点で脱落している。
+候補は、事前に1問だけ生成するスモークテストで絞り込んだ。次の3モデルは、構造化出力または可用性の時点で脱落している。
 
 | モデル | 脱落理由 |
 |---|---|
@@ -45,11 +45,11 @@
 根拠:
 
 1. **初回通過率が目安の80%に到達した**（82.1%）。ADR 0010 実測の 60.9%、issue #77 の 53.8% から大幅に改善している。
-2. **1問あたりの所要時間が中央値 151s → 54s と約3分の1**になる。[ADR 0013](0013-async-initial-generation.md) で可視化された利用者の待ち時間に直接効く。
+2. **1問あたりの所要時間が中央値 151s → 54s と約3分の1**になる。[ADR 0013](0013-async-initial-generation.md) で可視化された利用者の待ち時間短縮に直接寄与する。
 3. **無料枠のまま**であり、[ADR 0012](0012-openrouter-only-inference.md) の前提（コストを掛けずに運用する）を崩さない。
 4. 有料の少額モデル（qwen3-30b）は速いが通過率 24.1% と大きく劣り、費用を払う理由がない。
 
-適用は Terraform 変数 `agent_model_id`（`infra/envs/prod/variables.tf`）で `AGENT_MODEL_ID` として AgentCore Runtime に注入する。コード側の既定（`apps/agent/quiz_agent/model_config.py` の `DEFAULT_OPENROUTER_MODEL_ID`）も揃えて変更する。
+Terraform 変数 `agent_model_id`（`infra/envs/prod/variables.tf`）を `AGENT_MODEL_ID` として AgentCore Runtime に注入する。コード側の既定（`apps/agent/quiz_agent/model_config.py` の `DEFAULT_OPENROUTER_MODEL_ID`）も同じ値に変更する。
 
 ### 切り戻し手順
 
@@ -70,4 +70,4 @@
 - `reasoningContent is not supported in multi-turn conversations with the Chat Completions API` の警告は ling-3.0-flash でも出る。この警告自体は issue #70 で重複抑制済みで、生成は成立している。**警告を出さないモデルを選ぶ制約を優先すると、通過率で劣るモデルを選ぶことになるため優先しない**（issue #81 の2つ目の項目に対する結論）。
 - 無料モデルは上流の混雑で 429 になることがある。[ADR 0014](0014-generation-retry-policy.md) の `rate_limited` は即 FAILED で、リトライしない方針のまま変えない。
 - 本ADRの計測は [ADR 0015](0015-display-and-grounding-data-separation.md) 適用後のコードを前提としている。プロンプトや `guard_content` の構成を変える場合は再計測が必要。
-- 生成が速くなったことで、[ADR 0014](0014-generation-retry-policy.md) の10分締切と種別ごとのリトライ回数には余裕が生まれる。締切の再チューニングは prod 実績が溜まってから判断する。
+- 生成が速くなったことで、[ADR 0014](0014-generation-retry-policy.md) の10分締切と種別ごとのリトライ回数には余裕が生まれる。締切の再チューニングは、prod 実績が蓄積されてから判断する。

@@ -19,14 +19,14 @@ prod の Web から `GENERATE` モードで問題生成を開始すると、約1
 
 基準測定はゲート再生成を含まないため、prod 既定（再生成1回）ではさらに長くなる場合がある。
 
-つまり**この生成パイプラインは、そもそも同期HTTPリクエストで待てる長さではない**。タイムアウト値の調整では解決しない。
+つまり、**この生成パイプラインは同期HTTPリクエストで待てる長さではない**。タイムアウト値の調整では解決しない。
 
 あわせて issue #80 のコード調査で、同じ同期生成に起因する問題が他にもあることが分かった。
 
 - `POST /sessions/:id/next` も、先読みが READY でなければ同期生成にフォールバックしていた。先読みjobは worker（rate 1分）待ちのため、利用者が生成所要時間より速く回答するたびに同じタイムアウトに当たる。
 - その同期生成は、同じ `targetSequence` の先読みjobと**並行して生成していた**。job側が後で成功しても、セッションの `prefetch.jobId` が既に次のjobで上書きされていて条件付き更新に失敗し、黙って捨てられる。`GENERATE` は実質1問あたり2回生成していた。
-- job を RUNNING で掴んだまま worker が落ちると、回収する経路がなかった。`claimJob` が `runPk`/`runSk` を削除し、実行可能job検索が QUEUED/RETRY_WAIT しか引かないため、jobは永久に RUNNING、セッションの先読みも永久に QUEUED のまま残る。`lockedUntil` は書かれるだけで読まれていなかった。
-- worker は `WORKER_JOBS_LIMIT=5` を逐次実行する。実測 p90 284秒 × 5 = 約1420秒で、worker Lambda の900秒を超える。**タイムアウト上限を上げるだけだと worker 自体が落ち、上記の座礁を量産する。**
+- worker が job を RUNNING でclaimしたまま停止すると、回収する経路がなかった。`claimJob` が `runPk`/`runSk` を削除し、実行可能job検索が QUEUED/RETRY_WAIT しか引かないため、jobは永久に RUNNING、セッションの先読みも永久に QUEUED のまま残る。`lockedUntil` は書かれるだけで読まれていなかった。
+- worker は `WORKER_JOBS_LIMIT=5` を逐次実行する。実測 p90 284秒 × 5 = 約1420秒で、worker Lambda の900秒を超える。**タイムアウト上限を上げるだけでは worker 自体が停止し、上記の座礁が多発する。**
 
 ## 決定
 
@@ -37,7 +37,7 @@ prod の Web から `GENERATE` モードで問題生成を開始すると、約1
 - `mode=BANK`、および `mode=MIXED` で問題バンクにヒットした場合は、従来どおり同期でセッションを返す（バンク取得は高速で、非同期化する理由がない）
 - `mode=GENERATE`、および `mode=MIXED` でバンクに候補がない場合は、セッションMETA（`current` なし）と `kind=INITIAL` のjobを作って **202** を返す
 
-`JobKind` の `"INITIAL"` と、`docs/data-model.md` の「候補がなく生成モードの場合だけ `GenerationJob(kind=INITIAL)` を作る」という記述は以前から存在しており、本決定はその未実装部分を実装するもの。**新しいテーブルもGSIも増やさない。**
+`JobKind` の `"INITIAL"` と、`docs/data-model.md` の「候補がなく生成モードの場合だけ `GenerationJob(kind=INITIAL)` を作る」という記述は以前から存在しており、本決定はその未実装部分を実装するものである。**新しいテーブルもGSIも増やさない。**
 
 ### 2. 「生成中セッション」は `SessionStatus` ではなく専用フィールドで表す
 
@@ -51,11 +51,11 @@ INITIAL job の成功時に `current`（sequence 1）を確定させ、`initial`
 
 ### 3. セッションMETAと INITIAL job は1トランザクションで作る
 
-別テーブルだが `TransactWriteCommand` で1回にまとめる。片方だけ残る孤立（セッションはあるがjobがない＝永久に生成中、jobはあるがセッションがない＝誰も使わない問題のためにLLMを呼ぶ）を作らない。
+別テーブルだが、`TransactWriteCommand` で1回にまとめる。片方だけが残る孤立状態（セッションはあるがjobがない＝永久に生成中、jobはあるがセッションがない＝誰も使わない問題のためにLLMを呼ぶ）を作らない。
 
 ### 4. 二重生成の防止は、決定的キーのガード item による条件付き書き込みで行う
 
-`userId`/`cert`/`domainSelection`/`mode` から決定的に導出したキーを持つ**ガード item**（`docs/data-model.md` の `INITIAL` guard item）を、決定3の `TransactWrite` に `attribute_not_exists` 条件付きで含める。条件で落ちた側はガードを**ベーステーブルから強整合 Get** して既存の生成中セッションを返す（200）。Webの再送、二重クリック、多重タブ、リロードがそのまま余分な生成コストにならない。
+`userId`/`cert`/`domainSelection`/`mode` から決定的に導出したキーを持つ**ガード item**（`docs/data-model.md` の `INITIAL` guard item）を、決定3の `TransactWrite` に `attribute_not_exists` 条件付きで含める。条件に失敗した側は、ガードを**ベーステーブルから強整合 Get** し、既存の生成中セッションを返す（200）。Webの再送、二重クリック、多重タブ、リロードが、そのまま余分な生成コストにならない。
 
 ガードは INITIAL job の終端反映（決定6）と同一トランザクションで削除し、取りこぼしに備えて TTL（24時間）を持たせる。
 
@@ -73,7 +73,7 @@ INITIAL job の成功時に `current`（sequence 1）を確定させ、`initial`
 - 実行可能job検索の対象stateに RUNNING を加える。`runSk <= cutoff` で引くので**期限内のjobは引っかからず、排他は保たれる**
 - claim の条件に「RUNNING かつ `lockedUntil` 超過」を加える
 - `lockedUntil` は60秒固定をやめ、生成タイムアウト＋マージンにする（実測最大429秒に対し60秒では常に期限切れ扱いになる）
-- job の完了（SUCCEEDED / RETRY_WAIT / FAILED）は `lockedBy` 一致を条件にする。ロックを失った worker は結果を書かずに黙って降りる。`state` だけを条件にすると、期限切れ後に掴み直した別 worker の claim を元の worker が上書きし、負けた側の条件エラーが worker 呼び出し全体を落とす
+- job の完了（SUCCEEDED / RETRY_WAIT / FAILED）は `lockedBy` 一致を条件にする。ロックを失った worker は結果を書かずに処理を終了する。`state` だけを条件にすると、期限切れ後にclaimし直した別 worker の claim を元の worker が上書きし、失敗した側の条件エラーが worker 呼び出し全体を停止させる
 
 **さらに、job の終端遷移とセッションへの反映は同一 `TransactWrite` で行う。** 分けてはならない。
 
@@ -88,7 +88,7 @@ job を終端にすると `runPk`/`runSk` が外れて実行可能job検索か�
 
 ### 7. worker は1呼び出しの残り時間を見てjobのclaimを打ち切る
 
-worker Lambda handler が `context.getRemainingTimeInMillis()` から算出したデッドラインを実行ループへ渡し、残り時間が1件分の予算を下回ったら次のjobを掴まない。Lambda timeout で生成中に殺されて決定6の座礁を起こすことを防ぐ。
+worker Lambda handler が `context.getRemainingTimeInMillis()` から算出したデッドラインを実行ループへ渡し、残り時間が1件分の予算を下回ったら次のjobをclaimしない。Lambda timeout によって生成中に強制終了し、決定6の座礁が起きることを防ぐ。
 
 ### 8. タイムアウトを機械判定可能なエラーとして返す
 
