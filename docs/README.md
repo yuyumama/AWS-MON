@@ -23,6 +23,7 @@
   - [0010](adr/0010-grounding-gate-thresholds.md) グラウンディングゲートの閾値を実測分布に基づき grounding 0.6 へ引き下げる
   - [0011](adr/0011-retire-online-evaluations.md) AgentCore Evaluations オンライン評価の廃止（費用実測に基づく）
   - [0012](adr/0012-openrouter-only-inference.md) 生成モデルの推論は OpenRouter に一本化し Bedrock 推論経路を撤去する
+  - [0013](adr/0013-async-initial-generation.md) 初回問題生成を非同期job化し、生成経路の時間予算を明示する
 - [`research/`](research/) — 調査メモ
   - [genai-observability-vs-xray](research/genai-observability-vs-xray.md) X-Ray / CloudWatch生成AIオブザーバビリティ / Evaluations の整理（Evaluations は検証後に廃止）
 

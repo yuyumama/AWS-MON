@@ -309,6 +309,16 @@ type SessionMetaItem = {
   domainSelection: string;
   mode: "GENERATE" | "BANK" | "MIXED";
 
+  // 最初の問題を非同期生成している間だけ存在する(ADR 0013)。
+  // current が無く initial がある = 生成中。成功時に current へ昇格して削除される。
+  // status は ACTIVE のまま扱う(GSI1_UserStatus のキー設計に影響させないため)。
+  initial?: {
+    state: "QUEUED" | "FAILED";
+    jobId: string;
+    errorCode?: string;
+    updatedAt: string;
+  };
+
   current?: {
     sequence: number;
     questionId: string;
@@ -346,6 +356,39 @@ type SessionMetaItem = {
   deleteAt?: number;
 };
 ```
+
+### `INITIAL` guard item（生成中セッションの冪等キー）
+
+初回問題を非同期生成するセッションの**二重作成を防ぐためのガード**（[ADR 0013](adr/0013-async-initial-generation.md) 決定4）。
+
+```ts
+type InitialSessionGuardItem = {
+  sessionId: string;  // GUARD#USER#<userId>#CERT#<cert>#DOMAIN#<domainSelection>#MODE#<mode>
+  itemKey: "INITIAL";
+  schemaVersion: 1;
+
+  preparingSessionId: string;  // このガードが指す生成中セッション
+  userId: string;
+  cert: string;
+  domainSelection: string;
+  mode: "GENERATE" | "BANK" | "MIXED";
+
+  createdAt: string;
+  updatedAt: string;
+  deleteAt: number;  // TTL。24時間
+};
+```
+
+- キーは `userId`/`cert`/`domainSelection`/`mode` から**決定的に**導出する。
+- `POST /sessions` の生成経路では、`META` Put・`INITIAL` job Put・このガードの
+  `attribute_not_exists` 条件付き Put を**同一 `TransactWrite`** で書く。
+  条件で落ちた側はガードを**ベーステーブルから強整合 Get** して既存の生成中セッションを返す。
+- **`GSI1_UserStatus` では代用できない**。GSI は強整合読み取りができず、同時リクエストが
+  どちらも「既存なし」と判定して二重に生成してしまうため。
+- ガードは `userStatusPk`/`userStatusSk` を持たないので `GSI1_UserStatus`（セッション一覧）に載らない。
+  `itemKey` も `"META"` ではないため、`META` item として誤って解釈されることもない。
+- ガードは INITIAL job の終端反映（成功・失敗とも）と同一トランザクションで削除する。
+  取りこぼした場合も TTL（`deleteAt`）で自動的に消える。
 
 ### `ATTEMPT` item
 
@@ -506,7 +549,13 @@ type UserDomainStatItem = {
 
 Projection: `INCLUDE`。
 
-`runPk/runSk` は `QUEUED` と `RETRY_WAIT` の item だけに設定する。worker が job を取得して `RUNNING` に遷移させるときは `runPk/runSk` を削除し、GSI から外す。
+`runPk/runSk` は `QUEUED` / `RETRY_WAIT` / `RUNNING` の item に設定する（[ADR 0013](adr/0013-async-initial-generation.md) 決定6）。
+
+- `QUEUED` / `RETRY_WAIT` … `runSk` の `runAfter` は「実行可能になる時刻」。
+- `RUNNING` … `runAfter` に `lockedUntil` を入れる。実行可能job検索は `runSk <= 現在時刻` で引くため、**ロック期限内の RUNNING はヒットせず、期限切れ（＝worker が落ちて座礁した）ものだけが回収対象になる**。
+- 終了状態（`SUCCEEDED` / `FAILED`）では `runPk/runSk` を削除し、GSI から外す。
+
+排他は claim の条件付き Update（`state` 遷移 + `lockedBy` 設定）で成立する。`lockedUntil` は排他そのものではなく回収の期限であり、job の完了は `lockedBy` 一致を条件にすることで、ロックを失った worker が後から結果を上書きしないようにする。
 
 ### 主な属性
 
@@ -587,12 +636,13 @@ worker は session を更新するとき、必ず次を condition に入れる�
 1. API が `cert` と `domainSelection` を受け取る。
 2. Cognito JWT 検証済みの `sub` を `userId` とする。`mode=BANK` は登録済みユーザーなら許可する。`mode=GENERATE` / `mode=MIXED` は LLM 課金に到達し得るため、追加の生成権限 `canGenerateQuestions` を確認する。
 3. `domainSelection="all"` の場合、アプリ側で具体 `domain` を重み付き抽選する。
-4. `mode` に応じて `AwsMonQuestions.GSI1_BankRandom` から候補を探す。未回答表示に必要な属性は GSI projection で足りる。
-5. 候補がなく、かつ `mode=GENERATE` または `mode=MIXED` の場合だけ `GenerationJob(kind=INITIAL)` を作り、同期または worker で問題＋解説を同時生成する。`mode=BANK` では新規生成にフォールバックせず、候補なしとして返す。
-6. 新規生成時は `contentHash` を計算し、`GSI3_ContentHash` で重複候補を確認してから `ACTIVE` な question として保存する。
-7. `AwsMonSessions` に `META` item を Put し、`current.questionId` を設定する。
-8. `lastSeenQuestionIds` は current の `questionId` を含め、最大50件で初期化する。
-9. 次 sequence の `GenerationJob(kind=PREFETCH)` を作り、`META.prefetch` に `jobId` を保存する。`GENERATE` / `MIXED` の prefetch は生成権限を持つセッションに限って作成・実行する。
+4. `mode=BANK` / `mode=MIXED` は `AwsMonQuestions.GSI1_BankRandom` から候補を探す。未回答表示に必要な属性は GSI projection で足りる。`mode=GENERATE` はバンクを見ない。
+5. 候補が取れた場合は `META` item を Put して `current.questionId` を設定し、`lastSeenQuestionIds` を最大50件で初期化する。次 sequence の `GenerationJob(kind=PREFETCH)` を作り `META.prefetch` に `jobId` を保存して、201 で返す。
+6. 候補がなく、かつ `mode=GENERATE` または `mode=MIXED` の場合は **`GenerationJob(kind=INITIAL)` を作って 202 を返す**（同期生成はしない。[ADR 0013](adr/0013-async-initial-generation.md)）。`META` item は `current` を持たず `initial={state:"QUEUED", jobId}` を持つ状態で Put し、**job と同一 `TransactWrite`** で書いて孤立を防ぐ。`mode=BANK` では新規生成にフォールバックせず、候補なしとして返す。
+7. 6 の `TransactWrite` には `INITIAL` guard item の `attribute_not_exists` 条件付き Put を含める（二重送信・二重クリック・多重タブの冪等化）。条件で落ちた場合はガードを**ベーステーブルから強整合 Get** して、既に存在する生成中セッションを返す。`GSI1_UserStatus` の Query では代用できない（GSI は強整合読み取りができないため、同時リクエストが両方とも「既存なし」と判定する）。
+8. worker が INITIAL job を実行し、**job の終端遷移とセッション反映を同一 `TransactWrite`** で行う。成功なら `initial.jobId` 一致を条件に `current`（sequence 1）へ昇格させ、`initial` を削除し、seq2 の `PREFETCH` job を作り、ガードを削除する。終端失敗なら `initial.state="FAILED"` と `errorCode` を書いてガードを削除する。分けて書くと、終端遷移で `runPk`/`runSk` が外れた後に反映が失敗した場合に job が二度と拾われず、セッションが永久に生成中のまま残る。
+9. 新規生成時は `contentHash` を計算し、`GSI3_ContentHash` で重複候補を確認してから `ACTIVE` な question として保存する。
+10. `GENERATE` / `MIXED` の prefetch は生成権限を持つセッションに限って作成・実行する。
 
 ### セッション再開
 
