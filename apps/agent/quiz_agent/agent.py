@@ -23,6 +23,7 @@ from strands import Agent
 from strands.models.model import Model
 from strands.tools.mcp import MCPClient
 
+from .content_policy import ContentPolicyViolationError, validate_quiz_content
 from .gate_metrics import emit_gate_metrics
 from .guardrail import (
     GateResult,
@@ -37,6 +38,7 @@ from .prompts import (
     QUIZ_FROM_RESEARCH_PROMPT,
     QUIZ_REGENERATE_FEEDBACK_PROMPT,
     QUIZ_SYSTEM_PROMPT,
+    build_content_regenerate_feedback_prompt,
     build_docs_research_prompt,
     build_quiz_prompt,
 )
@@ -196,7 +198,13 @@ def _generate(
     for attempt in range(retries + 1):
         try:
             agent = Agent(model=_model(), system_prompt=system_prompt)
-            return agent.structured_output(output_model, prompt)
+            result = agent.structured_output(output_model, prompt)
+            if isinstance(result, QuizItem):
+                result = _ensure_valid_content(agent, result)
+            return result
+        except ContentPolicyViolationError:
+            # 内容検証固有の再生成回数を使い切った結果なので、通常生成の再試行に戻さない。
+            raise
         except Exception as e:  # noqa: BLE001 - ネットワーク/検証失敗をまとめて扱う
             if _is_rate_limit(e):
                 # 日次枠切れはリトライしても回復しないので即座に失敗させる
@@ -471,11 +479,38 @@ def _structured_quiz_with_retries(
     raise RuntimeError(f"QuizItem の構造化出力に失敗しました: {last_err}") from last_err
 
 
+def _content_retries() -> int:
+    return max(0, int(os.environ.get("AGENT_CONTENT_RETRIES", "1")))
+
+
+def _ensure_valid_content(agent: Agent, item: QuizItem) -> QuizItem:
+    """内容違反時だけ、同じAgentで構造化出力を再生成する。"""
+    retries = _content_retries()
+    for attempt in range(retries + 1):
+        try:
+            validate_quiz_content(item)
+            return item
+        except ContentPolicyViolationError as exc:
+            if attempt >= retries:
+                raise
+            logger.warning(
+                "生成内容がポリシーに違反したため再生成します (%d/%d回目, %s)",
+                attempt + 1,
+                retries,
+                exc,
+            )
+            item = _structured_quiz_with_retries(
+                agent,
+                prompt=build_content_regenerate_feedback_prompt(str(exc)),
+            )
+    raise AssertionError("内容検証の試行回数が不正です")
+
+
 def _generate_quiz_with_docs(quiz_prompt: str) -> tuple[QuizItem, list[str]]:
     """MCP調査つき生成。生成結果と、調査で得たドキュメント原文を返す。"""
     with _researched_agent(quiz_prompt) as (agent, source_texts):
         item = _structured_quiz_with_retries(agent)
-        return item, source_texts
+        return _ensure_valid_content(agent, item), source_texts
 
 
 @dataclass
@@ -499,7 +534,7 @@ def _gate_include_overview() -> bool:
 
 
 def _gate_guard_content(item: QuizItem) -> str:
-    """ゲート対象のテキスト = 正解の選択肢本文 + 正解の根拠(correct_reason)。
+    """ゲート対象のテキスト = 正解の選択肢本文 + 評価専用の英語主張。
 
     「正解: A, D」のようなラベル行はドキュメント原文に存在しえず常に減点要因になるため
     含めない。overview は既定では含めず、AGENT_GATE_INCLUDE_OVERVIEW=1 のときだけ
@@ -511,7 +546,7 @@ def _gate_guard_content(item: QuizItem) -> str:
     ]
     if _gate_include_overview():
         lines.append(item.explanation.overview)
-    lines.append(item.explanation.correct_reason)
+    lines.append(item.explanation.grounding_claim_en)
     return "\n".join(lines)
 
 
@@ -573,12 +608,14 @@ def _generate_quiz_with_docs_and_gate(
                     f"ドキュメント調査が不完全なため生成を中止しました ({missing_detail})"
                 )
             item = _structured_quiz_with_retries(agent)
+            item = _ensure_valid_content(agent, item)
             return GenerationResult(item=item, gate=gate)
 
         item = _structured_quiz_with_retries(agent)
         if not gate_is_enabled:
             gate = GateResult(status="not_run", detail="gate_disabled")
             _log_gate_result(gate, attempt=1, attempts=1, cert=cert)
+            item = _ensure_valid_content(agent, item)
             return GenerationResult(item=item, gate=gate)
 
         for attempt in range(attempts):
@@ -589,6 +626,7 @@ def _generate_quiz_with_docs_and_gate(
             )
             _log_gate_result(gate, attempt=attempt + 1, attempts=attempts, cert=cert)
             if gate.status != "failed":
+                item = _ensure_valid_content(agent, item)
                 return GenerationResult(item=item, gate=gate)
 
             last = GenerationResult(item=item, gate=gate)
@@ -603,13 +641,13 @@ def _generate_quiz_with_docs_and_gate(
                 item = _structured_quiz_with_retries(
                     agent, prompt=QUIZ_REGENERATE_FEEDBACK_PROMPT
                 )
-
-    assert last is not None
-    if gate_enforced():
-        raise GroundingBlockedError(
-            f"グラウンディングチェックを{attempts}回通過できませんでした ({last.gate.detail})"
-        )
-    return last
+        assert last is not None
+        if gate_enforced():
+            raise GroundingBlockedError(
+                f"グラウンディングチェックを{attempts}回通過できませんでした ({last.gate.detail})"
+            )
+        last.item = _ensure_valid_content(agent, last.item)
+        return last
 
 
 def generate_quiz(cert: str, domain: str | None = None) -> GenerationResult:
@@ -656,9 +694,9 @@ def generate_quiz(cert: str, domain: str | None = None) -> GenerationResult:
             item = _generate(QUIZ_SYSTEM_PROMPT, QuizItem, quiz_prompt, retries=retries)
             return GenerationResult(item=item, gate=gate)
 
-    item = _generate(QUIZ_SYSTEM_PROMPT, QuizItem, quiz_prompt, retries=retries)
     gate = GateResult(status="not_run", detail="docs_mcp_disabled")
     _log_gate_result(gate, attempt=1, attempts=1, cert=cert)
+    item = _generate(QUIZ_SYSTEM_PROMPT, QuizItem, quiz_prompt, retries=retries)
     return GenerationResult(item=item, gate=gate)
 
 

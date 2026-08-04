@@ -12,6 +12,7 @@ from quiz_agent.agent import (
     ResearchFailedError,
     ResearchIncompleteError,
 )
+from quiz_agent.content_policy import ContentPolicyViolationError
 from quiz_agent.guardrail import GateResult
 from quiz_agent.schema import QuizItem
 
@@ -53,6 +54,10 @@ def test_build_generate_response_includes_summary(
             "explanation": {
                 "overview": "概要",
                 "correct_reason": "正解の理由",
+                "grounding_claim_en": (
+                    "The correct option matches the documented AWS behavior. "
+                    "It applies the capability described in the source."
+                ),
                 "option_reasons": [
                     {"label": "A", "reason": "正しい"},
                     {"label": "B", "reason": "誤り"},
@@ -89,6 +94,10 @@ def test_error_response_omits_code_by_default() -> None:
 @pytest.mark.parametrize(
     ("exc", "code"),
     [
+        (
+            ContentPolicyViolationError([("question.question", "HTMLタグを含む")]),
+            "content_invalid",
+        ),
         (ResearchIncompleteError("incomplete"), "research_incomplete"),
         (ResearchFailedError("failed"), "research_failed"),
     ],
@@ -161,6 +170,44 @@ def test_server_do_post_maps_research_errors(
     status, body = handler.sent
     assert status == expected_status
     assert body["code"] == expected_code
+
+
+def test_server_do_post_returns_422_for_content_violation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    error = ContentPolicyViolationError(
+        [("explanation.correct_reason", "Markdown強調を含む")]
+    )
+
+    def raise_content_error(*args: Any, **kwargs: Any) -> None:
+        raise error
+
+    monkeypatch.setattr(server_module, "_parse_body", lambda handler: {})
+    monkeypatch.setattr(server_module, "build_generate_response", raise_content_error)
+
+    handler = _FakeHandler()
+    server_module.Handler.do_POST(handler)
+
+    assert handler.sent is not None
+    status, body = handler.sent
+    assert status == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert body["code"] == "content_invalid"
+
+
+def test_generate_response_excludes_internal_grounding_claim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    item = server_module._stub_quiz("aip", None)
+    monkeypatch.setattr(
+        server_module,
+        "_generate_quiz",
+        lambda cert, domain: (item, GateResult(status="not_run")),
+    )
+
+    response = server_module.build_generate_response({}, started=0.0)
+
+    assert "grounding_claim_en" not in response["quiz"]["explanation"]
+    assert response["quiz"]["explanation"]["correct_reason"]
 
 
 def test_runtime_do_post_returns_http_200_with_rate_limited_code(

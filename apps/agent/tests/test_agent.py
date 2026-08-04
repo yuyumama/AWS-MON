@@ -35,6 +35,10 @@ def _quiz_item(question: str = "設問") -> QuizItem:
             "explanation": {
                 "overview": "概要",
                 "correct_reason": "正解の理由",
+                "grounding_claim_en": (
+                    "The correct option accurately reflects the documented AWS service "
+                    "behavior. It applies the capability described in the source."
+                ),
                 "option_reasons": [
                     {"label": label, "reason": "理由"} for label in ("A", "B", "C", "D")
                 ],
@@ -480,7 +484,7 @@ def test_gate_guard_content_excludes_correct_label_line() -> None:
     assert "正解: " not in content
 
 
-def test_gate_guard_content_includes_correct_option_and_reason(
+def test_gate_guard_content_uses_grounding_claim_instead_of_correct_reason(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("AGENT_GATE_INCLUDE_OVERVIEW", raising=False)
@@ -489,7 +493,8 @@ def test_gate_guard_content_includes_correct_option_and_reason(
     content = agent_module._gate_guard_content(item)
 
     assert "A: 正解" in content
-    assert "正解の理由" in content
+    assert item.explanation.grounding_claim_en in content
+    assert item.explanation.correct_reason not in content
     assert "概要" not in content
 
 
@@ -845,6 +850,86 @@ def test_gate_retry_uses_feedback_prompt(monkeypatch: pytest.MonkeyPatch) -> Non
         agent_module.QUIZ_FROM_RESEARCH_PROMPT,
         agent_module.QUIZ_REGENERATE_FEEDBACK_PROMPT,
     ]
+
+
+# --- 内容ポリシー違反後の再生成 ----------------------------------------------
+
+
+def test_content_violation_regenerates_once_after_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_research(monkeypatch)
+    invalid = _quiz_item("設問<br>混入")
+    FakeAgent.structured_results = [invalid, _quiz_item("再生成した設問")]
+    gate_calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(agent_module, "gate_enabled", lambda: True)
+    monkeypatch.setattr(agent_module, "gate_retries", lambda: 1)
+    monkeypatch.setenv("AGENT_CONTENT_RETRIES", "1")
+
+    def pass_gate(**kwargs: Any) -> GateResult:
+        gate_calls.append(kwargs)
+        return GateResult(status="passed")
+
+    monkeypatch.setattr(agent_module, "check_grounding", pass_gate)
+
+    result = agent_module._generate_quiz_with_docs_and_gate("問題生成プロンプト")
+
+    assert result.item.question.question == "再生成した設問"
+    assert len(gate_calls) == 1
+    assert FakeAgent.instances[0].structured_count == 2
+    assert "保存前の内容検証" in FakeAgent.instances[0].structured_prompts[1]
+    assert "question.question" in FakeAgent.instances[0].structured_prompts[1]
+
+
+def test_content_violation_fails_closed_after_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_research(monkeypatch)
+    FakeAgent.structured_results = [
+        _quiz_item("設問<br>混入"),
+        _quiz_item("再生成しても<strong>違反</strong>"),
+    ]
+    gate_calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(agent_module, "gate_enabled", lambda: True)
+    monkeypatch.setattr(agent_module, "gate_retries", lambda: 1)
+    monkeypatch.setenv("AGENT_CONTENT_RETRIES", "1")
+
+    def pass_gate(**kwargs: Any) -> GateResult:
+        gate_calls.append(kwargs)
+        return GateResult(status="passed")
+
+    monkeypatch.setattr(agent_module, "check_grounding", pass_gate)
+
+    with pytest.raises(
+        agent_module.ContentPolicyViolationError,
+        match=r"question\.question: HTMLタグを含む",
+    ):
+        agent_module._generate_quiz_with_docs_and_gate("問題生成プロンプト")
+
+    assert len(gate_calls) == 1
+    assert FakeAgent.instances[0].structured_count == 2
+
+
+def test_content_retry_without_docs_reuses_same_agent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    FakeAgent.structured_results = [
+        _quiz_item("設問<br>混入"),
+        _quiz_item("再生成した設問"),
+    ]
+    monkeypatch.setattr(agent_module, "Agent", FakeAgent)
+    monkeypatch.setattr(agent_module, "_model", lambda: object())
+    monkeypatch.setenv("AGENT_CONTENT_RETRIES", "1")
+
+    item = agent_module._generate(
+        agent_module.QUIZ_SYSTEM_PROMPT,
+        QuizItem,
+        "問題生成プロンプト",
+    )
+
+    assert item.question.question == "再生成した設問"
+    assert len(FakeAgent.instances) == 1
+    assert FakeAgent.instances[0].structured_count == 2
 
 
 # --- Phase 0-a: 構造化ログ ----------------------------------------------------

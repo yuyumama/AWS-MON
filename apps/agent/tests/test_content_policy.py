@@ -1,0 +1,118 @@
+from __future__ import annotations
+
+import pytest
+
+from quiz_agent.content_policy import (
+    ContentPolicyViolationError,
+    validate_quiz_content,
+)
+from quiz_agent.schema import QuizItem
+
+
+def _valid_item() -> QuizItem:
+    return QuizItem.model_validate(
+        {
+            "summary": "AWSサービスの用途の識別",
+            "question": {
+                "type": "single",
+                "question": "AWSサービスの正しい説明を選択してください。",
+                "options": [
+                    {"label": "A", "text": "正しい選択肢です。"},
+                    {"label": "B", "text": "誤った選択肢です。"},
+                    {"label": "C", "text": "別の誤った選択肢です。"},
+                    {"label": "D", "text": "対象外の選択肢です。"},
+                ],
+                "correct": ["A"],
+            },
+            "explanation": {
+                "overview": "この問題ではサービスの用途を確認します。",
+                "correct_reason": "公式ドキュメントの説明と一致するため正解です。",
+                "grounding_claim_en": (
+                    "This internal field may contain a longer English grounding claim "
+                    "because it is not shown to users."
+                ),
+                "option_reasons": [
+                    {"label": label, "reason": "日本語で記述した理由です。"}
+                    for label in ("A", "B", "C", "D")
+                ],
+                "source": "https://docs.aws.amazon.com/example",
+            },
+        }
+    )
+
+
+def test_accepts_normal_japanese_plain_text() -> None:
+    validate_quiz_content(_valid_item())
+
+
+@pytest.mark.parametrize(
+    ("value", "rule"),
+    [
+        ("説明です。<br>次の行です。", "HTMLタグを含む"),
+        ("これは**重要な説明**です。", "Markdown強調を含む"),
+        ("説明の間に&nbsp;空白があります。", "HTML実体参照を含む"),
+        ("Only English words", "日本語文字を含まない"),
+        (
+            "説明です。one two three four five six seven eight。",
+            "ASCII英単語が8語以上連続している",
+        ),
+    ],
+)
+def test_rejects_invalid_user_facing_content(value: str, rule: str) -> None:
+    item = _valid_item()
+    item.explanation.correct_reason = value
+
+    with pytest.raises(ContentPolicyViolationError) as exc_info:
+        validate_quiz_content(item)
+
+    assert exc_info.value.error_code == "content_invalid"
+    assert "explanation.correct_reason" in str(exc_info.value)
+    assert rule in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "詳細は https://docs.aws.amazon.com/bedrock/latest/userguide/knowledge-base.html を参照してください。",
+        "Amazon Bedrock Knowledge Bases を使う構成です。",
+        "候補 A B C D E F から正しいものを選択してください。",
+        "しきい値が x < 100 であることを確認します。",
+        "説明です。one two three four five six seven。",
+    ],
+)
+def test_accepts_allowed_ascii_content(value: str) -> None:
+    item = _valid_item()
+    item.question.question = value
+
+    validate_quiz_content(item)
+
+
+def test_does_not_validate_internal_grounding_claim_or_source() -> None:
+    item = _valid_item()
+    item.explanation.grounding_claim_en = (
+        "one two three four five six seven eight nine ten eleven twelve"
+    )
+    item.explanation.source = "https://example.com/a?escaped=&amp;"
+
+    validate_quiz_content(item)
+
+
+def test_rejects_html_in_summary() -> None:
+    """summary は一覧タイトルとして表示されるため検証対象に含める(#87 と #86 の統合)。"""
+    item = _valid_item()
+    item.summary = "Bedrock<br>の設計"
+
+    with pytest.raises(ContentPolicyViolationError) as excinfo:
+        validate_quiz_content(item)
+
+    assert "summary" in str(excinfo.value)
+
+
+def test_rejects_english_only_summary() -> None:
+    item = _valid_item()
+    item.summary = "Bedrock Knowledge Bases metadata filter design considerations here"
+
+    with pytest.raises(ContentPolicyViolationError) as excinfo:
+        validate_quiz_content(item)
+
+    assert "summary" in str(excinfo.value)
