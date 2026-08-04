@@ -1,5 +1,6 @@
 // apps/api のHTTPクライアント。レスポンスDTOの型は @aws-mon/shared と共有する。
 import type {
+	AnsweredQuestionDto,
 	AnswerResultDto,
 	ReviewItemDto,
 	ReviewStateDto,
@@ -182,6 +183,15 @@ export async function listReviews(cert?: string): Promise<ReviewItemDto[]> {
 	const query = cert ? `?cert=${encodeURIComponent(cert)}` : "";
 	const body = await request<{ items: ReviewItemDto[] }>(`/reviews${query}`);
 	return body.items;
+}
+
+export async function getQuestion(
+	questionId: string,
+): Promise<AnsweredQuestionDto> {
+	const body = await request<{ question: AnsweredQuestionDto }>(
+		`/questions/${encodeURIComponent(questionId)}`,
+	);
+	return body.question;
 }
 
 export async function getReviewState(

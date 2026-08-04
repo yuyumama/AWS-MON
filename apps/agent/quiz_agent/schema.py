@@ -46,6 +46,13 @@ class Explanation(BaseModel):
 class QuizItem(BaseModel):
     """問題と解説をまとめた1回の生成結果。"""
 
+    summary: str = Field(
+        description=(
+            "一覧表示用の短い日本語要約。問題の中心テーマ（対象サービス・シナリオ・"
+            "問われている判断軸）が分かること。問題文の冒頭をそのまま切り出さないこと。"
+            "20〜40文字程度。HTMLタグ・Markdown記法を使わないプレーンテキスト"
+        )
+    )
     question: Question = Field(description="設問・選択肢・正解")
     explanation: Explanation = Field(description="上記の問題に対する解説")
 

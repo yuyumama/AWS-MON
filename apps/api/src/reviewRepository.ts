@@ -1,4 +1,5 @@
 import {
+	deriveQuestionSummary,
 	gsiNames,
 	type QuestionItem,
 	questionStateKey,
@@ -6,7 +7,6 @@ import {
 	type ReviewStateDto,
 	resolveTableNames,
 	reviewKeys,
-	toQuestionDto,
 	type UserQuestionStateItem,
 } from "@aws-mon/shared";
 import {
@@ -182,6 +182,9 @@ export async function listReviewItems(input: {
 		const question = questions.get(state.questionId);
 		return {
 			questionId: state.questionId,
+			summary: question
+				? deriveQuestionSummary(question)
+				: "（問題が見つかりません）",
 			cert: String(state.cert),
 			domain: state.domain,
 			answerCount: state.answerCount,
@@ -189,8 +192,7 @@ export async function listReviewItems(input: {
 			lastCorrect: state.lastCorrect,
 			lastAnsweredAt: state.lastAnsweredAt,
 			reviewMarkedAt: state.reviewMarkedAt,
-			question: question ? toQuestionDto(question, "answered") : undefined,
-			questionStatus: question?.status,
+			...(question ? { questionStatus: question.status } : {}),
 		};
 	});
 }

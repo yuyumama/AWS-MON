@@ -1,6 +1,6 @@
 # data-model — DynamoDB データモデル（確定版）
 
-最終更新: 2026-07-02
+最終更新: 2026-08-04
 
 > **ステータス: 確定。** Phase 1 の次工程は、この設計に沿って `local/seed/` のテーブル作成スクリプトと `apps/api` の CRUD ルートを実装する。
 
@@ -43,13 +43,14 @@ DynamoDB は **単一テーブルではなく、責務別の4テーブル**で�
 | AP-03 | 回答を1件記録し、セッション統計と復習/苦手分析用集計を更新する | `TransactWrite`: `AwsMonSessions`, `AwsMonUserActivity` |
 | AP-04 | 資格×ドメインから出題候補の生成済み問題をランダムに取得する | `AwsMonQuestions.GSI1_BankRandom` |
 | AP-05 | 新規生成した問題＋解説を保存し、先読み状態を session に反映する | `AwsMonQuestions`, `AwsMonGenerationJobs`, `AwsMonSessions` |
-| AP-06 | 復習マーク済み問題を一覧する | `AwsMonUserActivity.GSI1_ReviewList` |
+| AP-06 | 復習マーク済み問題を軽量DTO（要約・集計・状態）で一覧する | `AwsMonUserActivity.GSI1_ReviewList` + `AwsMonQuestions.BatchGetItem` |
 | AP-07 | ユーザー×問題の復習状態を取得/更新する | `AwsMonUserActivity` primary key |
 | AP-08 | 期限切れになった active 問題を抽出して stale 化する | `AwsMonQuestions.GSI2_StaleDue` |
 | AP-09 | 実行可能な生成 job を取得する（ローカル/簡易 worker 用） | `AwsMonGenerationJobs.GSI1_Runnable` |
 | AP-10 | cert/domain 別の苦手傾向を表示する | `AwsMonUserActivity` の `STAT#...` item を Query |
 | AP-11 | 生成済み問題の重複候補を `contentHash` で検出する | `AwsMonQuestions.GSI3_ContentHash` |
 | AP-12 | 長期間更新されていない active セッションを abandoned 化する | `AwsMonSessions.GSI2_AbandonDue` |
+| AP-13 | `questionId` で問題単体の回答済みビュー（問題本文・選択肢・正解・解説）を取得する | `AwsMonQuestions` primary key |
 
 ## GSI projection 方針
 
@@ -100,7 +101,7 @@ GSI は必要属性だけを投影する。特に `correct` と `explanation` �
 
 DynamoDB item を API レスポンスへ直接返してはいけない。問題をクライアントへ返す経路は `toQuestionDto(item, visibility)` のような1本化した変換関数を必ず通す。
 
-- `visibility="answering"`: `questionId`, `cert`, `domain`, `type`, `question`, `options`, `validUntil` のみ返す。`correct` と `explanation` は返さない。
+- `visibility="answering"`: `questionId`, `cert`, `domain`, `type`, `question`, `summary`, `options`, `validUntil` のみ返す。`correct` と `explanation` は返さない。
 - `visibility="answered"`: 上記に加えて `correct` と `explanation` を返す。
 - `prefetch` と bank 取得のレスポンスは常に `answering` 扱い。
 - repository 層の戻り値をそのまま Hono の `c.json()` に渡す実装は禁止する。
@@ -176,6 +177,7 @@ type QuestionItem = {
 
   type: "single" | "multiple";
   question: string;
+  summary?: string; // 一覧表示用の短い日本語要約。既存データでは未設定の場合がある
   options: { label: string; text: string }[];
   correct: string[];
 
@@ -677,7 +679,9 @@ worker は session を更新するとき、必ず次を condition に入れる�
 2. マーク時は `reviewPk/reviewSk` を設定。
 3. 解除時は `reviewPk/reviewSk` を削除。
 4. **不正解の回答は自動でマークする**: 回答記録トランザクションの `QUESTION#` Update 内で、`isCorrect=false` のときだけ `reviewMarked=true` と `reviewPk/reviewSk` を設定する。正解時は既存のマーク状態に触らない。解除は常に手動。
-4. 問題が `STALE` でも復習 state は残す。表示時に stale 表示し、必要なら再生成導線を出す。
+5. 一覧取得（AP-06）は問題本体を BatchGet して `summary`（未設定なら解説概要・問題文から導出）と `questionStatus` を付けるが、問題本文・選択肢・正解・解説は返さない軽量DTOとする。
+6. ユーザーが「正解と解説を見る」を開いたときだけ、`GET /questions/:questionId`（AP-13）で回答済みビューを取得する。
+7. 問題が `STALE` でも復習 state は残す。表示時に stale 表示し、必要なら再生成導線を出す。問題本体が欠落している場合は一覧に日本語の代替要約を返し、詳細取得は行わない。
 
 ### stale 化
 

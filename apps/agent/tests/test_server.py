@@ -12,6 +12,8 @@ from quiz_agent.agent import (
     ResearchFailedError,
     ResearchIncompleteError,
 )
+from quiz_agent.guardrail import GateResult
+from quiz_agent.schema import QuizItem
 
 
 class _FakeHandler:
@@ -24,6 +26,50 @@ class _FakeHandler:
 
     def _send_json(self, status: int, body: object) -> None:
         self.sent = (status, body)
+
+
+def test_quiz_item_schema_includes_summary() -> None:
+    schema = QuizItem.model_json_schema()
+
+    assert "summary" in schema["properties"]
+    assert "summary" in schema["required"]
+
+
+def test_build_generate_response_includes_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    item = QuizItem.model_validate(
+        {
+            "summary": "クロスリージョン推論による可用性向上",
+            "question": {
+                "type": "single",
+                "question": "設問",
+                "options": [
+                    {"label": "A", "text": "正解"},
+                    {"label": "B", "text": "不正解"},
+                ],
+                "correct": ["A"],
+            },
+            "explanation": {
+                "overview": "概要",
+                "correct_reason": "正解の理由",
+                "option_reasons": [
+                    {"label": "A", "reason": "正しい"},
+                    {"label": "B", "reason": "誤り"},
+                ],
+                "source": "https://docs.aws.amazon.com/example",
+            },
+        }
+    )
+    monkeypatch.setattr(
+        server_module,
+        "_generate_quiz",
+        lambda **kwargs: (item, GateResult(status="not_run")),
+    )
+
+    response = server_module.build_generate_response({}, started=0)
+
+    assert response["quiz"]["summary"] == item.summary
 
 
 def test_error_response_includes_code_when_provided() -> None:

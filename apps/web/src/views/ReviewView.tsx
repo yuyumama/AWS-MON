@@ -1,6 +1,11 @@
-import type { ReviewItemDto } from "@aws-mon/shared";
+import type { AnsweredQuestionDto, ReviewItemDto } from "@aws-mon/shared";
 import { useEffect, useState } from "react";
-import { errorMessage, listReviews, setReviewMark } from "../lib/api";
+import {
+	errorMessage,
+	getQuestion,
+	listReviews,
+	setReviewMark,
+} from "../lib/api";
 import { certOptions, domainLabel } from "../lib/certs";
 
 function formatDate(iso?: string): string {
@@ -21,11 +26,19 @@ export function ReviewView() {
 	const [error, setError] = useState<string | null>(null);
 	const [expandedId, setExpandedId] = useState<string | null>(null);
 	const [unmarkingId, setUnmarkingId] = useState<string | null>(null);
+	const [details, setDetails] = useState<
+		Record<string, AnsweredQuestionDto | undefined>
+	>({});
+	const [detailErrors, setDetailErrors] = useState<
+		Record<string, string | undefined>
+	>({});
+	const [loadingIds, setLoadingIds] = useState<Set<string>>(new Set());
 
 	useEffect(() => {
 		let cancelled = false;
 		setItems(null);
 		setError(null);
+		setExpandedId(null);
 		listReviews(certFilter || undefined)
 			.then((result) => {
 				if (!cancelled) setItems(result);
@@ -50,6 +63,39 @@ export function ReviewView() {
 			setError(errorMessage(e));
 		} finally {
 			setUnmarkingId(null);
+		}
+	};
+
+	const toggleDetail = async (item: ReviewItemDto) => {
+		if (expandedId === item.questionId) {
+			setExpandedId(null);
+			return;
+		}
+		setExpandedId(item.questionId);
+		if (
+			item.questionStatus === undefined ||
+			details[item.questionId] ||
+			loadingIds.has(item.questionId)
+		) {
+			return;
+		}
+
+		setLoadingIds((prev) => new Set(prev).add(item.questionId));
+		setDetailErrors((prev) => ({ ...prev, [item.questionId]: undefined }));
+		try {
+			const question = await getQuestion(item.questionId);
+			setDetails((prev) => ({ ...prev, [item.questionId]: question }));
+		} catch (e) {
+			setDetailErrors((prev) => ({
+				...prev,
+				[item.questionId]: errorMessage(e),
+			}));
+		} finally {
+			setLoadingIds((prev) => {
+				const next = new Set(prev);
+				next.delete(item.questionId);
+				return next;
+			});
 		}
 	};
 
@@ -88,7 +134,10 @@ export function ReviewView() {
 				<ul className="review-list">
 					{items.map((item) => {
 						const expanded = expandedId === item.questionId;
-						const question = item.question;
+						const question = details[item.questionId];
+						const detailError = detailErrors[item.questionId];
+						const loading = loadingIds.has(item.questionId);
+						const hasQuestion = item.questionStatus !== undefined;
 						const correctSet = new Set(
 							question?.correct.map((c) => c.toUpperCase()) ?? [],
 						);
@@ -116,14 +165,27 @@ export function ReviewView() {
 									</span>
 								</div>
 
-								<p className="review-question" data-expanded={expanded}>
-									{question
-										? question.question
-										: "(問題データが見つかりません)"}
-								</p>
+								<p className="review-summary">{item.summary}</p>
 
+								{!hasQuestion && (
+									<p className="notice review-missing">
+										問題本体が削除済みのため、正解と解説は表示できません。
+									</p>
+								)}
+
+								{expanded && loading && (
+									<p className="notice" role="status">
+										正解と解説を読み込み中…
+									</p>
+								)}
+								{expanded && detailError && (
+									<p className="notice notice-error">{detailError}</p>
+								)}
 								{expanded && question && (
 									<div className="review-detail">
+										<p className="review-detail-question">
+											{question.question}
+										</p>
 										<ul className="options">
 											{question.options.map((option) => {
 												const isCorrect = correctSet.has(
@@ -173,13 +235,11 @@ export function ReviewView() {
 								)}
 
 								<div className="review-item-actions">
-									{question && (
+									{hasQuestion && (
 										<button
 											type="button"
 											className="button button-ghost"
-											onClick={() =>
-												setExpandedId(expanded ? null : item.questionId)
-											}
+											onClick={() => void toggleDetail(item)}
 										>
 											{expanded ? "閉じる" : "正解と解説を見る"}
 										</button>
