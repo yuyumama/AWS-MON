@@ -10,6 +10,17 @@ variable "agent_image_tag" {
   default     = ""
 }
 
+variable "agent_model_id" {
+  description = "OpenRouter model id used for question generation (ADR 0016). Roll back by setting nvidia/nemotron-3-ultra-550b-a55b:free."
+  type        = string
+  default     = "inclusionai/ling-3.0-flash:free"
+
+  validation {
+    condition     = length(trimspace(var.agent_model_id)) > 0
+    error_message = "agent_model_id must not be empty."
+  }
+}
+
 variable "agent_guardrail_version" {
   description = "Published Bedrock guardrail version used by the grounding gate. Roll back by setting a previous version (1 = grounding 0.7)."
   type        = string

@@ -74,6 +74,7 @@ locals {
 
   agent_environment = {
     OPENROUTER_API_KEY_PARAM        = "/app/aws-mon/prod/openrouter-api-key"
+    AGENT_MODEL_ID                  = var.agent_model_id
     AGENT_GUARDRAIL_ID              = data.aws_ssm_parameter.agent_guardrail_id.value
     AGENT_GUARDRAIL_VERSION         = var.agent_guardrail_version
     AGENT_OBSERVABILITY_ENABLED     = "true"
