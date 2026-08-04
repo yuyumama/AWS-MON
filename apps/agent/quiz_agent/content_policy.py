@@ -72,6 +72,8 @@ def _violations_for(field: str, value: str) -> list[tuple[str, str]]:
 def validate_quiz_content(item: QuizItem) -> None:
     """利用者向けフィールドを検証し、違反があればまとめて送出する。"""
     fields = [
+        # summary は復習リスト・問題リストのタイトルとして表示される(#87)ため検証対象。
+        ("summary", item.summary),
         ("question.question", item.question.question),
         *(
             (f"question.options[{index}].text", option.text)

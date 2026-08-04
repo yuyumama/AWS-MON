@@ -12,6 +12,7 @@ from quiz_agent.schema import QuizItem
 def _valid_item() -> QuizItem:
     return QuizItem.model_validate(
         {
+            "summary": "AWSサービスの用途の識別",
             "question": {
                 "type": "single",
                 "question": "AWSサービスの正しい説明を選択してください。",
@@ -94,3 +95,24 @@ def test_does_not_validate_internal_grounding_claim_or_source() -> None:
     item.explanation.source = "https://example.com/a?escaped=&amp;"
 
     validate_quiz_content(item)
+
+
+def test_rejects_html_in_summary() -> None:
+    """summary は一覧タイトルとして表示されるため検証対象に含める(#87 と #86 の統合)。"""
+    item = _valid_item()
+    item.summary = "Bedrock<br>の設計"
+
+    with pytest.raises(ContentPolicyViolationError) as excinfo:
+        validate_quiz_content(item)
+
+    assert "summary" in str(excinfo.value)
+
+
+def test_rejects_english_only_summary() -> None:
+    item = _valid_item()
+    item.summary = "Bedrock Knowledge Bases metadata filter design considerations here"
+
+    with pytest.raises(ContentPolicyViolationError) as excinfo:
+        validate_quiz_content(item)
+
+    assert "summary" in str(excinfo.value)

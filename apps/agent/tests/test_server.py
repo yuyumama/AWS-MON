@@ -54,6 +54,10 @@ def test_build_generate_response_includes_summary(
             "explanation": {
                 "overview": "概要",
                 "correct_reason": "正解の理由",
+                "grounding_claim_en": (
+                    "The correct option matches the documented AWS behavior. "
+                    "It applies the capability described in the source."
+                ),
                 "option_reasons": [
                     {"label": "A", "reason": "正しい"},
                     {"label": "B", "reason": "誤り"},
