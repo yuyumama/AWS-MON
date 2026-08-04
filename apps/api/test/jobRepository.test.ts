@@ -9,6 +9,7 @@ import {
 	UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ApiError } from "../src/errors.js";
 import { jobExecutionBudgetMs, runRunnableJobs } from "../src/jobRepository.js";
 import { generationJobFixture, questionFixture } from "./fixtures.js";
 
@@ -81,6 +82,67 @@ function claimedJob(
 
 function isClaim(command: UpdateCommand): boolean {
 	return command.input.UpdateExpression?.includes("ADD attemptCount") ?? false;
+}
+
+function runnableJob(
+	overrides: Partial<GenerationJobItem> = {},
+): GenerationJobItem {
+	const jobId = overrides.jobId ?? "j_failure";
+	const runAfter = new Date(baseTime).toISOString();
+	return generationJobFixture({
+		jobId,
+		...jobRunKeys({ jobId, state: "QUEUED", runAfter }),
+		...overrides,
+	});
+}
+
+function mockGenerationFailure(job: GenerationJobItem, error: unknown): void {
+	jobMocks.generateAndSaveQuestion.mockRejectedValue(error);
+	jobMocks.dynamoSend.mockImplementation(async (command: unknown) => {
+		if (command instanceof QueryCommand) {
+			return { Items: matchingJobs(command, [job]) };
+		}
+		if (command instanceof UpdateCommand && isClaim(command)) {
+			return { Attributes: claimedJob(job, command) };
+		}
+		if (command instanceof UpdateCommand) return {};
+		throw new Error(`unexpected command: ${String(command)}`);
+	});
+}
+
+function jobCompletionUpdate(): UpdateCommand | undefined {
+	return jobMocks.dynamoSend.mock.calls
+		.map(([command]) => command)
+		.find(
+			(command): command is UpdateCommand =>
+				command instanceof UpdateCommand && !isClaim(command),
+		);
+}
+
+function mockWorkerGenerationFailure(
+	job: GenerationJobItem,
+	error: unknown,
+): void {
+	jobMocks.generateAndSaveQuestion.mockRejectedValue(error);
+	jobMocks.dynamoSend.mockImplementation(async (command: unknown) => {
+		if (command instanceof QueryCommand) {
+			return { Items: matchingJobs(command, [job]) };
+		}
+		if (command instanceof UpdateCommand && isClaim(command)) {
+			return { Attributes: claimedJob(job, command) };
+		}
+		if (command instanceof TransactWriteCommand) return {};
+		throw new Error(`unexpected command: ${String(command)}`);
+	});
+}
+
+function terminalTransaction(): TransactWriteCommand | undefined {
+	return jobMocks.dynamoSend.mock.calls
+		.map(([command]) => command)
+		.find(
+			(command): command is TransactWriteCommand =>
+				command instanceof TransactWriteCommand,
+		);
 }
 
 describe("runRunnableJobs", () => {
@@ -248,6 +310,221 @@ describe("runRunnableJobs", () => {
 			),
 		).toHaveLength(1);
 	});
+
+	it.each([
+		{ code: "research_incomplete", previousAttempts: 2, maxAttempts: 3 },
+		{ code: "grounding_blocked", previousAttempts: 1, maxAttempts: 2 },
+		{ code: "rate_limited", previousAttempts: 0, maxAttempts: 1 },
+	] as const)(
+		"fails $code on attempt $maxAttempts",
+		async ({ code, previousAttempts }) => {
+			const job = runnableJob({
+				jobId: `j_${code}_exhausted`,
+				attemptCount: previousAttempts,
+			});
+			mockGenerationFailure(job, new ApiError(`${code} failed`, 502, code));
+
+			const summary = await runRunnableJobs(1);
+
+			expect(summary).toMatchObject({ processed: 1, retried: 0, failed: 1 });
+			expect(
+				jobCompletionUpdate()?.input.ExpressionAttributeValues,
+			).toMatchObject({
+				":failed": "FAILED",
+				":errorCode": code,
+			});
+		},
+	);
+
+	it("uses the smaller of the stored and error-specific attempt limits", async () => {
+		const job = runnableJob({
+			jobId: "j_stored_limit",
+			attemptCount: 0,
+			maxAttempts: 1,
+		});
+		mockGenerationFailure(
+			job,
+			new ApiError("research incomplete", 422, "research_incomplete"),
+		);
+
+		const summary = await runRunnableJobs(1);
+
+		expect(summary).toMatchObject({ processed: 1, retried: 0, failed: 1 });
+		expect(
+			jobCompletionUpdate()?.input.ExpressionAttributeValues,
+		).toMatchObject({
+			":failed": "FAILED",
+			":errorCode": "research_incomplete",
+		});
+	});
+
+	it.each([
+		{ code: "research_incomplete", error: undefined, backoffMs: 5_000 },
+		{ code: "grounding_blocked", error: undefined, backoffMs: 5_000 },
+		{ code: "generation_timeout", error: undefined, backoffMs: 30_000 },
+		{ code: "research_failed", error: undefined, backoffMs: 30_000 },
+		{ code: "content_invalid", error: undefined, backoffMs: 30_000 },
+		{
+			code: "no_bank_question",
+			error: new ApiError("missing", 404),
+			backoffMs: 30_000,
+		},
+		{
+			code: "generation_failed",
+			error: new Error("unknown"),
+			backoffMs: 30_000,
+		},
+		{
+			code: "generation_failed",
+			error: new ApiError("unknown code", 502, "future_error"),
+			backoffMs: 30_000,
+		},
+	] as const)(
+		"uses a $backoffMs ms backoff for $code",
+		async ({ code, error, backoffMs }) => {
+			const job = runnableJob({ jobId: `j_${code}_backoff` });
+			mockGenerationFailure(
+				job,
+				error ?? new ApiError(`${code} failed`, 502, code),
+			);
+
+			const summary = await runRunnableJobs(1);
+
+			expect(summary).toMatchObject({ processed: 1, retried: 1, failed: 0 });
+			expect(
+				jobCompletionUpdate()?.input.ExpressionAttributeValues,
+			).toMatchObject({
+				":retryWait": "RETRY_WAIT",
+				":runAfter": new Date(baseTime + backoffMs).toISOString(),
+				":errorCode": code,
+			});
+		},
+	);
+
+	it("fails without retrying when the next attempt would exceed the ten-minute job deadline", async () => {
+		const job = runnableJob({
+			jobId: "j_deadline",
+			createdAt: new Date(baseTime - 600_000).toISOString(),
+		});
+		mockGenerationFailure(
+			job,
+			new ApiError("research incomplete", 422, "research_incomplete"),
+		);
+
+		const summary = await runRunnableJobs(1);
+
+		expect(summary).toMatchObject({ processed: 1, retried: 0, failed: 1 });
+		expect(
+			jobCompletionUpdate()?.input.ExpressionAttributeValues,
+		).toMatchObject({
+			":failed": "FAILED",
+			":errorCode": "research_incomplete",
+		});
+		expect(
+			jobCompletionUpdate()?.input.ExpressionAttributeValues?.[":errorMessage"],
+		).toContain("ジョブ作成から10分の締切を超えるため");
+	});
+
+	describe.each([
+		{
+			scenario: "rate_limited",
+			errorCode: "rate_limited",
+			createdAt: new Date(baseTime).toISOString(),
+			error: new ApiError("rate limited", 429, "rate_limited"),
+			expectedErrorMessage: "rate limited",
+		},
+		{
+			scenario: "ten-minute deadline exceeded",
+			errorCode: "research_incomplete",
+			createdAt: new Date(baseTime - 600_001).toISOString(),
+			error: new ApiError("research incomplete", 422, "research_incomplete"),
+			expectedErrorMessage: "ジョブ作成から10分の締切を超えるため",
+		},
+	] as const)(
+		"$scenario terminal failure",
+		({ scenario, errorCode, createdAt, error, expectedErrorMessage }) => {
+			it.each([
+				{ kind: "INITIAL", targetSequence: 1 },
+				{ kind: "PREFETCH", targetSequence: 2 },
+			] as const)(
+				"atomically updates the $kind job and session",
+				async ({ kind, targetSequence }) => {
+					const job = runnableJob({
+						jobId: `j_${kind.toLowerCase()}_${scenario.replaceAll(" ", "_")}`,
+						kind,
+						userId: "user-test",
+						sessionId: "s_test",
+						targetSequence,
+						createdAt,
+					});
+					mockWorkerGenerationFailure(job, error);
+
+					const summary = await runRunnableJobs(1);
+
+					expect(summary).toMatchObject({
+						processed: 1,
+						retried: 0,
+						failed: 1,
+					});
+					const transaction = terminalTransaction();
+					expect(transaction).toBeDefined();
+					const [jobWrite, sessionWrite] =
+						transaction?.input.TransactItems ?? [];
+					expect(jobWrite?.Update).toMatchObject({
+						TableName: "aws-mon-test-generation-jobs",
+						Key: { jobId: job.jobId },
+						ConditionExpression: "#state = :running AND lockedBy = :lockedBy",
+					});
+					expect(jobWrite?.Update?.UpdateExpression).toContain(
+						"SET #state = :failed",
+					);
+					expect(jobWrite?.Update?.UpdateExpression).toContain(
+						"REMOVE runPk, runSk",
+					);
+					expect(jobWrite?.Update?.ExpressionAttributeValues).toMatchObject({
+						":running": "RUNNING",
+						":failed": "FAILED",
+						":errorCode": errorCode,
+					});
+					expect(
+						jobWrite?.Update?.ExpressionAttributeValues?.[":errorMessage"],
+					).toContain(expectedErrorMessage);
+
+					expect(sessionWrite?.Update).toMatchObject({
+						TableName: "aws-mon-test-sessions",
+						Key: { sessionId: job.sessionId, itemKey: "META" },
+					});
+					if (kind === "INITIAL") {
+						expect(transaction?.input.TransactItems).toHaveLength(3);
+						expect(sessionWrite?.Update?.UpdateExpression).toContain(
+							"SET #initial.#state = :failed",
+						);
+						expect(
+							sessionWrite?.Update?.ExpressionAttributeValues,
+						).toMatchObject({
+							":jobId": job.jobId,
+							":failed": "FAILED",
+							":errorCode": errorCode,
+						});
+					} else {
+						expect(transaction?.input.TransactItems).toHaveLength(2);
+						expect(sessionWrite?.Update?.UpdateExpression).toBe(
+							"SET prefetch = :prefetch",
+						);
+						expect(
+							sessionWrite?.Update?.ExpressionAttributeValues?.[":prefetch"],
+						).toMatchObject({
+							sequence: targetSequence,
+							state: "FAILED",
+							jobId: job.jobId,
+							domain: job.domain,
+							errorCode,
+						});
+					}
+				},
+			);
+		},
+	);
 
 	it("reflects a successful INITIAL job as sequence 1 and removes initial", async () => {
 		const question: QuestionItem = questionFixture("q_initial");

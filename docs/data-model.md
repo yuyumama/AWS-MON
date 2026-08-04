@@ -596,6 +596,10 @@ type GenerationJobItem = {
 };
 ```
 
+`errorCode` は `no_bank_question` / `generation_timeout` / `research_incomplete` / `research_failed` / `grounding_blocked` / `rate_limited` / `content_invalid` / `generation_failed` を記録する。未知のagentコードは `generation_failed` にフォールバックする。
+
+失敗時は登録時の `maxAttempts` と失敗種別の上限の小さい方まで試行する。`research_incomplete` は3回・5秒backoff、`grounding_blocked` は2回・5秒、`generation_timeout` / `research_failed` / `generation_failed` は3回・30秒、`rate_limited` は1回で即FAILEDとする。個別指定のない `no_bank_question` と `content_invalid` は現行既定の3回・30秒を使う。次の再試行時刻が `createdAt` から10分を超える場合は再試行せず、元の `errorCode` を維持してFAILEDにする（[ADR 0014](adr/0014-generation-retry-policy.md)）。
+
 ### prefetch job の反映ルール
 
 worker は session を更新するとき、必ず次を condition に入れる。
