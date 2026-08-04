@@ -12,7 +12,7 @@ import random
 import shlex
 import sys
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Literal, TypeVar
@@ -48,6 +48,26 @@ from .tool_limits import docs_tool_limiter
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
+PhaseCallback = Callable[[str, dict[str, int]], None]
+
+
+def _emit_phase(
+    on_phase: PhaseCallback | None,
+    phase: str,
+    *,
+    attempt: int,
+    total_attempts: int,
+) -> None:
+    """進捗通知をbest-effortで送る。通知失敗は問題生成へ波及させない。"""
+    if on_phase is None:
+        return
+    try:
+        on_phase(
+            phase,
+            {"attempt": attempt, "totalAttempts": total_attempts},
+        )
+    except Exception:  # noqa: BLE001 - 進捗通知は生成結果より優先しない
+        logger.warning("生成フェーズの通知に失敗しました", exc_info=True)
 
 
 class QuotaExhaustedError(RuntimeError):
@@ -187,7 +207,12 @@ def _model() -> Model:
 
 
 def _generate(
-    system_prompt: str, output_model: type[T], prompt: str, retries: int = 2
+    system_prompt: str,
+    output_model: type[T],
+    prompt: str,
+    retries: int = 2,
+    *,
+    on_phase: PhaseCallback | None = None,
 ) -> T:
     """構造化出力でスキーマ準拠のオブジェクトを生成する。失敗時はリトライ。
 
@@ -200,7 +225,7 @@ def _generate(
             agent = Agent(model=_model(), system_prompt=system_prompt)
             result = agent.structured_output(output_model, prompt)
             if isinstance(result, QuizItem):
-                result = _ensure_valid_content(agent, result)
+                result = _ensure_valid_content(agent, result, on_phase=on_phase)
             return result
         except ContentPolicyViolationError:
             # 内容検証固有の再生成回数を使い切った結果なので、通常生成の再試行に戻さない。
@@ -381,11 +406,14 @@ def _research_retry_kwargs() -> dict[str, Any]:
 
 
 @contextmanager
-def _researched_agent(quiz_prompt: str) -> Iterator[tuple[Agent, list[str]]]:
+def _researched_agent(
+    quiz_prompt: str, *, on_phase: PhaseCallback | None = None
+) -> Iterator[tuple[Agent, list[str]]]:
     """MCPクライアントを維持したまま、調査済みAgentと原文を提供する。"""
     # APIキー解決を含むモデル生成の失敗は調査失敗(フォールバック対象)にせず即エラーにする
     model = _model()
     phase = "mcp"
+    _emit_phase(on_phase, phase, attempt=1, total_attempts=1)
     research_attempts = 0
     successful_tool_calls = 0
     try:
@@ -398,7 +426,17 @@ def _researched_agent(quiz_prompt: str) -> Iterator[tuple[Agent, list[str]]]:
             research_retries = max(
                 0, int(os.environ.get("AGENT_RESEARCH_RETRIES", "2"))
             )
+            total_research_attempts = research_retries + 1
+            _emit_phase(
+                on_phase, phase, attempt=1, total_attempts=total_research_attempts
+            )
             for research_attempts in range(1, research_retries + 2):
+                _emit_phase(
+                    on_phase,
+                    phase,
+                    attempt=research_attempts,
+                    total_attempts=total_research_attempts,
+                )
                 # 失敗した会話履歴とツール呼び出し回数を次の試行へ持ち越さない。
                 agent = Agent(
                     model=model,
@@ -427,6 +465,12 @@ def _researched_agent(quiz_prompt: str) -> Iterator[tuple[Agent, list[str]]]:
                             research_attempts,
                             research_retries + 1,
                         )
+                        _emit_phase(
+                            on_phase,
+                            phase,
+                            attempt=research_attempts + 1,
+                            total_attempts=total_research_attempts,
+                        )
                         # 上流混雑は数秒〜数十秒持続する(実測で1〜2.5秒待ちでは連敗した)
                         # ため、試行ごとに待ちを線形に伸ばして同じ混雑への再突入を避ける
                         time.sleep(3.0 * research_attempts + random.uniform(0.0, 1.0))
@@ -440,6 +484,7 @@ def _researched_agent(quiz_prompt: str) -> Iterator[tuple[Agent, list[str]]]:
             successful_tool_calls += _successful_tool_call_count(agent.messages)
             source_texts = _tool_result_texts(agent.messages)
             phase = "generation"
+            _emit_phase(on_phase, phase, attempt=1, total_attempts=1)
             yield agent, source_texts
     except DocsResearchError:
         raise
@@ -483,7 +528,12 @@ def _content_retries() -> int:
     return max(0, int(os.environ.get("AGENT_CONTENT_RETRIES", "1")))
 
 
-def _ensure_valid_content(agent: Agent, item: QuizItem) -> QuizItem:
+def _ensure_valid_content(
+    agent: Agent,
+    item: QuizItem,
+    *,
+    on_phase: PhaseCallback | None = None,
+) -> QuizItem:
     """内容違反時だけ、同じAgentで構造化出力を再生成する。"""
     retries = _content_retries()
     for attempt in range(retries + 1):
@@ -499,6 +549,12 @@ def _ensure_valid_content(agent: Agent, item: QuizItem) -> QuizItem:
                 retries,
                 exc,
             )
+            _emit_phase(
+                on_phase,
+                "regeneration",
+                attempt=attempt + 2,
+                total_attempts=retries + 1,
+            )
             item = _structured_quiz_with_retries(
                 agent,
                 prompt=build_content_regenerate_feedback_prompt(str(exc)),
@@ -506,11 +562,18 @@ def _ensure_valid_content(agent: Agent, item: QuizItem) -> QuizItem:
     raise AssertionError("内容検証の試行回数が不正です")
 
 
-def _generate_quiz_with_docs(quiz_prompt: str) -> tuple[QuizItem, list[str]]:
+def _generate_quiz_with_docs(
+    quiz_prompt: str, *, on_phase: PhaseCallback | None = None
+) -> tuple[QuizItem, list[str]]:
     """MCP調査つき生成。生成結果と、調査で得たドキュメント原文を返す。"""
-    with _researched_agent(quiz_prompt) as (agent, source_texts):
+    researched = (
+        _researched_agent(quiz_prompt)
+        if on_phase is None
+        else _researched_agent(quiz_prompt, on_phase=on_phase)
+    )
+    with researched as (agent, source_texts):
         item = _structured_quiz_with_retries(agent)
-        return _ensure_valid_content(agent, item), source_texts
+        return _ensure_valid_content(agent, item, on_phase=on_phase), source_texts
 
 
 @dataclass
@@ -582,7 +645,10 @@ def _log_gate_result(
 
 
 def _generate_quiz_with_docs_and_gate(
-    quiz_prompt: str, cert: str | None = None
+    quiz_prompt: str,
+    cert: str | None = None,
+    *,
+    on_phase: PhaseCallback | None = None,
 ) -> GenerationResult:
     """MCP調査つき生成 + Guardrailsグラウンディングチェック(有効時)。
 
@@ -595,7 +661,12 @@ def _generate_quiz_with_docs_and_gate(
     attempts = (gate_retries() + 1) if gate_is_enabled else 1
     last: GenerationResult | None = None
 
-    with _researched_agent(quiz_prompt) as (agent, source_texts):
+    researched = (
+        _researched_agent(quiz_prompt)
+        if on_phase is None
+        else _researched_agent(quiz_prompt, on_phase=on_phase)
+    )
+    with researched as (agent, source_texts):
         # 構造化出力も同じAgentの履歴へtoolUseを追加しうるため、調査直後に分類する。
         missing_detail = (
             _missing_research_detail(agent.messages) if not source_texts else None
@@ -608,17 +679,25 @@ def _generate_quiz_with_docs_and_gate(
                     f"ドキュメント調査が不完全なため生成を中止しました ({missing_detail})"
                 )
             item = _structured_quiz_with_retries(agent)
-            item = _ensure_valid_content(agent, item)
+            item = _ensure_valid_content(agent, item, on_phase=on_phase)
+            _emit_phase(on_phase, "complete", attempt=1, total_attempts=1)
             return GenerationResult(item=item, gate=gate)
 
         item = _structured_quiz_with_retries(agent)
         if not gate_is_enabled:
             gate = GateResult(status="not_run", detail="gate_disabled")
             _log_gate_result(gate, attempt=1, attempts=1, cert=cert)
-            item = _ensure_valid_content(agent, item)
+            item = _ensure_valid_content(agent, item, on_phase=on_phase)
+            _emit_phase(on_phase, "complete", attempt=1, total_attempts=1)
             return GenerationResult(item=item, gate=gate)
 
         for attempt in range(attempts):
+            _emit_phase(
+                on_phase,
+                "guardrail",
+                attempt=attempt + 1,
+                total_attempts=attempts,
+            )
             gate = check_grounding(
                 grounding_source="\n\n".join(source_texts),
                 query=_gate_query(item),
@@ -626,7 +705,13 @@ def _generate_quiz_with_docs_and_gate(
             )
             _log_gate_result(gate, attempt=attempt + 1, attempts=attempts, cert=cert)
             if gate.status != "failed":
-                item = _ensure_valid_content(agent, item)
+                item = _ensure_valid_content(agent, item, on_phase=on_phase)
+                _emit_phase(
+                    on_phase,
+                    "complete",
+                    attempt=attempt + 1,
+                    total_attempts=attempts,
+                )
                 return GenerationResult(item=item, gate=gate)
 
             last = GenerationResult(item=item, gate=gate)
@@ -638,6 +723,12 @@ def _generate_quiz_with_docs_and_gate(
             )
             if attempt < attempts - 1:
                 # 調査済み会話履歴と原文を再利用し、フィードバック付きで構造化出力だけやり直す。
+                _emit_phase(
+                    on_phase,
+                    "regeneration",
+                    attempt=attempt + 2,
+                    total_attempts=attempts,
+                )
                 item = _structured_quiz_with_retries(
                     agent, prompt=QUIZ_REGENERATE_FEEDBACK_PROMPT
                 )
@@ -646,11 +737,17 @@ def _generate_quiz_with_docs_and_gate(
             raise GroundingBlockedError(
                 f"グラウンディングチェックを{attempts}回通過できませんでした ({last.gate.detail})"
             )
-        last.item = _ensure_valid_content(agent, last.item)
+        last.item = _ensure_valid_content(agent, last.item, on_phase=on_phase)
+        _emit_phase(on_phase, "complete", attempt=attempts, total_attempts=attempts)
         return last
 
 
-def generate_quiz(cert: str, domain: str | None = None) -> GenerationResult:
+def generate_quiz(
+    cert: str,
+    domain: str | None = None,
+    *,
+    on_phase: PhaseCallback | None = None,
+) -> GenerationResult:
     """問題と解説を1回の生成でまとめて作る。
 
     AGENT_DOCS_MCP が有効なら、AWSドキュメントMCPで最新情報を調査してから生成し、
@@ -662,7 +759,11 @@ def generate_quiz(cert: str, domain: str | None = None) -> GenerationResult:
 
     if _docs_mcp_enabled():
         try:
-            return _generate_quiz_with_docs_and_gate(quiz_prompt, cert=cert)
+            if on_phase is None:
+                return _generate_quiz_with_docs_and_gate(quiz_prompt, cert=cert)
+            return _generate_quiz_with_docs_and_gate(
+                quiz_prompt, cert=cert, on_phase=on_phase
+            )
         except GroundingBlockedError:
             raise
         except QuotaExhaustedError:
@@ -691,12 +792,28 @@ def generate_quiz(cert: str, domain: str | None = None) -> GenerationResult:
                     "ドキュメント調査の依存障害により生成を中止しました"
                 ) from e
 
-            item = _generate(QUIZ_SYSTEM_PROMPT, QuizItem, quiz_prompt, retries=retries)
+            _emit_phase(on_phase, "generation", attempt=1, total_attempts=1)
+            item = _generate(
+                QUIZ_SYSTEM_PROMPT,
+                QuizItem,
+                quiz_prompt,
+                retries=retries,
+                on_phase=on_phase,
+            )
+            _emit_phase(on_phase, "complete", attempt=1, total_attempts=1)
             return GenerationResult(item=item, gate=gate)
 
+    _emit_phase(on_phase, "generation", attempt=1, total_attempts=1)
+    item = _generate(
+        QUIZ_SYSTEM_PROMPT,
+        QuizItem,
+        quiz_prompt,
+        retries=retries,
+        on_phase=on_phase,
+    )
     gate = GateResult(status="not_run", detail="docs_mcp_disabled")
     _log_gate_result(gate, attempt=1, attempts=1, cert=cert)
-    item = _generate(QUIZ_SYSTEM_PROMPT, QuizItem, quiz_prompt, retries=retries)
+    _emit_phase(on_phase, "complete", attempt=1, total_attempts=1)
     return GenerationResult(item=item, gate=gate)
 
 

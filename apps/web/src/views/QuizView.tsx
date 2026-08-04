@@ -1,4 +1,8 @@
-import type { AnsweredQuestionDto, SessionDto } from "@aws-mon/shared";
+import type {
+	AnsweredQuestionDto,
+	GenerationProgress,
+	SessionDto,
+} from "@aws-mon/shared";
 import {
 	AnimatePresence,
 	m,
@@ -73,6 +77,51 @@ function PrefetchStatus({ state }: { state: PrefetchState }) {
 			<span className="prefetch-status-mark" aria-hidden="true" />
 			{message}
 		</p>
+	);
+}
+
+const generationStages = ["調査", "作成", "検証"] as const;
+
+function GenerationStages({ progress }: { progress?: GenerationProgress }) {
+	if (!progress) return null;
+	const currentIndex =
+		progress.phase === "researching"
+			? 0
+			: progress.phase === "verifying"
+				? 2
+				: 1;
+	const message =
+		progress.phase === "researching"
+			? "出題に必要な資料を調べています"
+			: progress.phase === "drafting"
+				? "調査結果から問題を作成しています"
+				: progress.phase === "verifying"
+					? "問題と解説の内容を確認しています"
+					: `作り直しています（${progress.attempt ?? 2}回目）`;
+
+	return (
+		<div className="generation-stages">
+			<ol aria-label="問題生成の工程">
+				{generationStages.map((stage, index) => (
+					<li
+						key={stage}
+						data-state={
+							index === currentIndex
+								? "current"
+								: index < currentIndex
+									? "done"
+									: "upcoming"
+						}
+					>
+						<span className="generation-stage-mark" aria-hidden="true">
+							{index < currentIndex ? "✓" : index + 1}
+						</span>
+						<span>{stage}</span>
+					</li>
+				))}
+			</ol>
+			<strong>{message}</strong>
+		</div>
 	);
 }
 
@@ -517,6 +566,7 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 					<GenerationWaitingPanel
 						title="最初の問題を生成しています"
 						elapsedSeconds={initialElapsed}
+						stages={<GenerationStages progress={session.preparing?.progress} />}
 					/>
 				</article>
 			</div>
@@ -736,6 +786,9 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 								<GenerationWaitingPanel
 									title="次の問題を生成しています"
 									elapsedSeconds={nextElapsed}
+									stages={
+										<GenerationStages progress={session.prefetch?.progress} />
+									}
 									compact
 								/>
 							)}

@@ -2,6 +2,7 @@
 // DynamoDB item 型(types.ts)はサーバ内部表現、こちらはHTTP境界の形。
 import type {
 	CurrentQuestionState,
+	GenerationProgress,
 	PrefetchState,
 	QuestionDto,
 	QuestionStatus,
@@ -26,6 +27,7 @@ export type SessionDto = {
 		state: "QUEUED" | "FAILED";
 		jobId: string;
 		errorCode?: string;
+		progress?: GenerationProgress;
 	};
 	current?: {
 		sequence: number;
@@ -40,6 +42,7 @@ export type SessionDto = {
 		jobId?: string;
 		domain?: string;
 		errorCode?: string;
+		progress?: GenerationProgress;
 	};
 };
 

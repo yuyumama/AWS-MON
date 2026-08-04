@@ -3,6 +3,7 @@ import {
 	abandonKeys,
 	bucketCounts,
 	type GenerationJobItem,
+	type GenerationProgress,
 	gsiNames,
 	initialSessionGuardKey,
 	type JobKind,
@@ -33,6 +34,7 @@ const tables = resolveTableNames();
 const maxJobAttempts = 3;
 const jobLockMarginMs = 30_000;
 const jobDeadlineMs = 600_000;
+const progressWriteIntervalMs = 5_000;
 
 type JobErrorCode =
 	| "no_bank_question"
@@ -165,6 +167,112 @@ function isTransactionCanceled(error: unknown): boolean {
 	return (
 		error instanceof Error && error.name === "TransactionCanceledException"
 	);
+}
+
+function publicProgressPhase(
+	phase: string,
+): GenerationProgress["phase"] | undefined {
+	switch (phase) {
+		case "mcp":
+		case "research":
+			return "researching";
+		case "generation":
+			return "drafting";
+		case "guardrail":
+		case "grounding":
+			return "verifying";
+		case "regeneration":
+			return "regenerating";
+		default:
+			return undefined;
+	}
+}
+
+function createProgressReporter(job: GenerationJobItem): {
+	onPhase: NonNullable<
+		Parameters<typeof generateAndSaveQuestion>[0]["onPhase"]
+	>;
+	dispose: () => void;
+} {
+	let lastEventKey: string | undefined;
+	let lastWrittenAt = 0;
+	let pending: GenerationProgress | undefined;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let disposed = false;
+
+	const write = async (progress: GenerationProgress): Promise<void> => {
+		lastWrittenAt = Date.now();
+		const initial = job.kind === "INITIAL";
+		try {
+			await dynamoDoc.send(
+				new UpdateCommand({
+					TableName: tables.sessions,
+					Key: { sessionId: job.sessionId, itemKey: "META" },
+					ConditionExpression: initial
+						? "#initial.jobId = :jobId"
+						: "prefetch.jobId = :jobId AND prefetch.#sequence = :seq",
+					UpdateExpression: initial
+						? "SET #initial.progress = :progress"
+						: "SET prefetch.progress = :progress",
+					ExpressionAttributeNames: initial
+						? { "#initial": "initial" }
+						: { "#sequence": "sequence" },
+					ExpressionAttributeValues: {
+						":jobId": job.jobId,
+						":progress": progress,
+						...(initial ? {} : { ":seq": job.targetSequence }),
+					},
+				}),
+			);
+		} catch (error) {
+			if (isConditionalCheckFailed(error)) return;
+			throw error;
+		}
+	};
+
+	const flushPending = async (): Promise<void> => {
+		timer = undefined;
+		if (disposed || !pending) return;
+		const progress = pending;
+		pending = undefined;
+		await write(progress);
+	};
+
+	return {
+		onPhase: async (phase, detail) => {
+			if (disposed || !job.sessionId) return;
+			const eventKey = `${phase}:${detail.attempt ?? ""}`;
+			if (eventKey === lastEventKey) return;
+			lastEventKey = eventKey;
+			const mapped = publicProgressPhase(phase);
+			if (!mapped) return;
+			pending = {
+				phase: mapped,
+				attempt: detail.attempt,
+				totalAttempts: detail.totalAttempts,
+				updatedAt: nowIso(),
+			};
+			const waitMs = progressWriteIntervalMs - (Date.now() - lastWrittenAt);
+			if (waitMs <= 0 && timer === undefined) {
+				await flushPending();
+				return;
+			}
+			if (timer === undefined) {
+				timer = setTimeout(
+					() => {
+						void flushPending().catch(() => undefined);
+					},
+					Math.max(0, waitMs),
+				);
+			}
+		},
+		dispose: () => {
+			disposed = true;
+			pending = undefined;
+			if (timer !== undefined) clearTimeout(timer);
+			timer = undefined;
+		},
+	};
 }
 
 // 完了はclaimした本人(lockedBy)だけが書ける。lockedUntil超過でRUNNINGを再claimする
@@ -349,41 +457,48 @@ async function attemptJob(
 				: [];
 
 	let question: QuestionItem;
+	const progressReporter = createProgressReporter(claimed);
 	try {
-		const domain = claimed.domain ?? claimed.domainSelection;
-		question =
-			claimed.mode === "GENERATE"
-				? await generateAndSaveQuestion({
-						cert: claimed.cert,
-						domain,
-						domainSelection: claimed.domainSelection,
-						jobId: claimed.jobId,
-						sessionId: claimed.sessionId,
-					})
-				: claimed.mode === "MIXED"
-					? await findBankQuestion({
+		try {
+			const domain = claimed.domain ?? claimed.domainSelection;
+			question =
+				claimed.mode === "GENERATE"
+					? await generateAndSaveQuestion({
 							cert: claimed.cert,
 							domain,
-							excludeQuestionIds: exclude,
-							allowExcludedFallback: false,
-						}).catch((error: unknown) => {
-							if (error instanceof ApiError && error.status === 404) {
-								return generateAndSaveQuestion({
-									cert: claimed.cert,
-									domain,
-									domainSelection: claimed.domainSelection,
-									jobId: claimed.jobId,
-									sessionId: claimed.sessionId,
-								});
-							}
-							throw error;
+							domainSelection: claimed.domainSelection,
+							jobId: claimed.jobId,
+							sessionId: claimed.sessionId,
+							onPhase: progressReporter.onPhase,
 						})
-					: await findBankQuestion({
-							cert: claimed.cert,
-							domain,
-							excludeQuestionIds: exclude,
-							allowExcludedFallback: false,
-						});
+					: claimed.mode === "MIXED"
+						? await findBankQuestion({
+								cert: claimed.cert,
+								domain,
+								excludeQuestionIds: exclude,
+								allowExcludedFallback: false,
+							}).catch((error: unknown) => {
+								if (error instanceof ApiError && error.status === 404) {
+									return generateAndSaveQuestion({
+										cert: claimed.cert,
+										domain,
+										domainSelection: claimed.domainSelection,
+										jobId: claimed.jobId,
+										sessionId: claimed.sessionId,
+										onPhase: progressReporter.onPhase,
+									});
+								}
+								throw error;
+							})
+						: await findBankQuestion({
+								cert: claimed.cert,
+								domain,
+								excludeQuestionIds: exclude,
+								allowExcludedFallback: false,
+							});
+		} finally {
+			progressReporter.dispose();
+		}
 	} catch (error) {
 		const message =
 			error instanceof Error ? error.message : "generation job failed";

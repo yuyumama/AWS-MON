@@ -196,6 +196,7 @@ function toSessionDto(
 			state: meta.initial.state,
 			jobId: meta.initial.jobId,
 			errorCode: meta.initial.errorCode,
+			progress: meta.initial.progress,
 		};
 	}
 
@@ -218,6 +219,7 @@ function toSessionDto(
 			jobId: meta.prefetch.jobId,
 			domain: meta.prefetch.domain,
 			errorCode: meta.prefetch.errorCode,
+			progress: meta.prefetch.progress,
 		};
 	}
 
