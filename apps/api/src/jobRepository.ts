@@ -1,16 +1,29 @@
 import { randomUUID } from "node:crypto";
 import {
+	abandonKeys,
 	bucketCounts,
 	type GenerationJobItem,
 	gsiNames,
+	initialSessionGuardKey,
 	type JobKind,
 	jobRunKeys,
+	policy,
+	type QuestionItem,
 	resolveTableNames,
 	type SessionMetaItem,
 	type SessionMode,
+	userStatusKeys,
 } from "@aws-mon/shared";
-import { PutCommand, QueryCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
-import { generateAndSaveQuestion } from "./agentClient.js";
+import {
+	PutCommand,
+	QueryCommand,
+	TransactWriteCommand,
+	UpdateCommand,
+} from "@aws-sdk/lib-dynamodb";
+import {
+	agentRequestTimeoutMs,
+	generateAndSaveQuestion,
+} from "./agentClient.js";
 import { dynamoDoc } from "./dynamo.js";
 import { ApiError } from "./errors.js";
 import { findBankQuestion } from "./questionBankRepository.js";
@@ -19,9 +32,20 @@ const tables = resolveTableNames();
 
 const maxJobAttempts = 3;
 const retryBackoffMs = 30_000;
+const jobLockMarginMs = 30_000;
 
 function nowIso(): string {
 	return new Date().toISOString();
+}
+
+function addDaysIso(baseIso: string, days: number): string {
+	const date = new Date(baseIso);
+	date.setUTCDate(date.getUTCDate() + days);
+	return date.toISOString();
+}
+
+export function jobExecutionBudgetMs(): number {
+	return agentRequestTimeoutMs() + jobLockMarginMs;
 }
 
 function newJobId(): string {
@@ -49,21 +73,32 @@ async function claimJob(
 	job: GenerationJobItem,
 ): Promise<GenerationJobItem | undefined> {
 	const now = nowIso();
+	const lockedUntil = new Date(
+		Date.now() + jobExecutionBudgetMs(),
+	).toISOString();
+	const runKeys = jobRunKeys({
+		jobId: job.jobId,
+		state: "RUNNING",
+		runAfter: lockedUntil,
+	});
 	try {
 		const out = await dynamoDoc.send(
 			new UpdateCommand({
 				TableName: tables.generationJobs,
 				Key: { jobId: job.jobId },
-				ConditionExpression: "#state = :queued OR #state = :retryWait",
+				ConditionExpression:
+					"#state = :queued OR #state = :retryWait OR (#state = :running AND lockedUntil < :now)",
 				UpdateExpression:
-					"SET #state = :running, lockedBy = :lockedBy, lockedUntil = :lockedUntil, updatedAt = :now ADD attemptCount :one REMOVE runPk, runSk",
+					"SET #state = :running, lockedBy = :lockedBy, lockedUntil = :lockedUntil, runPk = :runPk, runSk = :runSk, updatedAt = :now ADD attemptCount :one",
 				ExpressionAttributeNames: { "#state": "state" },
 				ExpressionAttributeValues: {
 					":queued": "QUEUED",
 					":retryWait": "RETRY_WAIT",
 					":running": "RUNNING",
 					":lockedBy": `api-worker-${randomUUID().slice(0, 8)}`,
-					":lockedUntil": new Date(Date.now() + 60_000).toISOString(),
+					":lockedUntil": lockedUntil,
+					":runPk": runKeys.runPk,
+					":runSk": runKeys.runSk,
 					":now": now,
 					":one": 1,
 				},
@@ -76,83 +111,117 @@ async function claimJob(
 	}
 }
 
+function isConditionalCheckFailed(error: unknown): boolean {
+	return (
+		error instanceof Error && error.name === "ConditionalCheckFailedException"
+	);
+}
+
+function isTransactionCanceled(error: unknown): boolean {
+	return (
+		error instanceof Error && error.name === "TransactionCanceledException"
+	);
+}
+
+// 完了はclaimした本人(lockedBy)だけが書ける。lockedUntil超過でRUNNINGを再claimする
+// 仕組みを入れたため、stateだけを条件にすると「元のworkerが、後から掴み直した別workerの
+// claimを自分の結果で上書きする」ことが起きる。条件が外れた場合は敗者として黙って降りる。
 async function completeJobSuccess(
 	job: GenerationJobItem,
 	questionId: string,
-): Promise<void> {
+): Promise<boolean> {
 	const now = nowIso();
-	await dynamoDoc.send(
-		new UpdateCommand({
-			TableName: tables.generationJobs,
-			Key: { jobId: job.jobId },
-			ConditionExpression: "#state = :running",
-			UpdateExpression:
-				"SET #state = :succeeded, questionId = :questionId, finishedAt = :now, updatedAt = :now REMOVE runPk, runSk",
-			ExpressionAttributeNames: { "#state": "state" },
-			ExpressionAttributeValues: {
-				":running": "RUNNING",
-				":succeeded": "SUCCEEDED",
-				":questionId": questionId,
-				":now": now,
-			},
-		}),
-	);
+	try {
+		await dynamoDoc.send(
+			new UpdateCommand({
+				TableName: tables.generationJobs,
+				Key: { jobId: job.jobId },
+				ConditionExpression: "#state = :running AND lockedBy = :lockedBy",
+				UpdateExpression:
+					"SET #state = :succeeded, questionId = :questionId, finishedAt = :now, updatedAt = :now REMOVE runPk, runSk",
+				ExpressionAttributeNames: { "#state": "state" },
+				ExpressionAttributeValues: {
+					":running": "RUNNING",
+					":lockedBy": job.lockedBy,
+					":succeeded": "SUCCEEDED",
+					":questionId": questionId,
+					":now": now,
+				},
+			}),
+		);
+		return true;
+	} catch (error) {
+		if (isConditionalCheckFailed(error)) return false;
+		throw error;
+	}
 }
 
 async function completeJobRetryOrFail(
 	job: GenerationJobItem,
 	errorCode: string,
 	errorMessage: string,
-): Promise<"RETRY_WAIT" | "FAILED"> {
+): Promise<"RETRY_WAIT" | "FAILED" | undefined> {
 	const now = nowIso();
 
-	if (job.attemptCount < maxJobAttempts) {
+	if (job.attemptCount < job.maxAttempts) {
 		const runAfter = new Date(Date.now() + retryBackoffMs).toISOString();
 		const runKeys = jobRunKeys({
 			jobId: job.jobId,
 			state: "RETRY_WAIT",
 			runAfter,
 		});
+		try {
+			await dynamoDoc.send(
+				new UpdateCommand({
+					TableName: tables.generationJobs,
+					Key: { jobId: job.jobId },
+					ConditionExpression: "#state = :running AND lockedBy = :lockedBy",
+					UpdateExpression:
+						"SET #state = :retryWait, runAfter = :runAfter, runPk = :runPk, runSk = :runSk, errorCode = :errorCode, errorMessage = :errorMessage, updatedAt = :now",
+					ExpressionAttributeNames: { "#state": "state" },
+					ExpressionAttributeValues: {
+						":running": "RUNNING",
+						":lockedBy": job.lockedBy,
+						":retryWait": "RETRY_WAIT",
+						":runAfter": runAfter,
+						":runPk": runKeys.runPk,
+						":runSk": runKeys.runSk,
+						":errorCode": errorCode,
+						":errorMessage": errorMessage,
+						":now": now,
+					},
+				}),
+			);
+		} catch (error) {
+			if (isConditionalCheckFailed(error)) return undefined;
+			throw error;
+		}
+		return "RETRY_WAIT";
+	}
+
+	try {
 		await dynamoDoc.send(
 			new UpdateCommand({
 				TableName: tables.generationJobs,
 				Key: { jobId: job.jobId },
-				ConditionExpression: "#state = :running",
+				ConditionExpression: "#state = :running AND lockedBy = :lockedBy",
 				UpdateExpression:
-					"SET #state = :retryWait, runAfter = :runAfter, runPk = :runPk, runSk = :runSk, errorCode = :errorCode, errorMessage = :errorMessage, updatedAt = :now",
+					"SET #state = :failed, errorCode = :errorCode, errorMessage = :errorMessage, finishedAt = :now, updatedAt = :now REMOVE runPk, runSk",
 				ExpressionAttributeNames: { "#state": "state" },
 				ExpressionAttributeValues: {
 					":running": "RUNNING",
-					":retryWait": "RETRY_WAIT",
-					":runAfter": runAfter,
-					":runPk": runKeys.runPk,
-					":runSk": runKeys.runSk,
+					":lockedBy": job.lockedBy,
+					":failed": "FAILED",
 					":errorCode": errorCode,
 					":errorMessage": errorMessage,
 					":now": now,
 				},
 			}),
 		);
-		return "RETRY_WAIT";
+	} catch (error) {
+		if (isConditionalCheckFailed(error)) return undefined;
+		throw error;
 	}
-
-	await dynamoDoc.send(
-		new UpdateCommand({
-			TableName: tables.generationJobs,
-			Key: { jobId: job.jobId },
-			ConditionExpression: "#state = :running",
-			UpdateExpression:
-				"SET #state = :failed, errorCode = :errorCode, errorMessage = :errorMessage, finishedAt = :now, updatedAt = :now REMOVE runPk, runSk",
-			ExpressionAttributeNames: { "#state": "state" },
-			ExpressionAttributeValues: {
-				":running": "RUNNING",
-				":failed": "FAILED",
-				":errorCode": errorCode,
-				":errorMessage": errorMessage,
-				":now": now,
-			},
-		}),
-	);
 	return "FAILED";
 }
 
@@ -171,6 +240,7 @@ type AttemptOutcome = {
 async function attemptJob(
 	job: GenerationJobItem,
 	excludeQuestionIds: string[] = [],
+	reflectTerminalOnSession = false,
 ): Promise<AttemptOutcome | undefined> {
 	const claimed = await claimJob(job);
 	if (!claimed) {
@@ -184,9 +254,10 @@ async function attemptJob(
 				? [claimed.sourceQuestionId]
 				: [];
 
+	let question: QuestionItem;
 	try {
 		const domain = claimed.domain ?? claimed.domainSelection;
-		const question =
+		question =
 			claimed.mode === "GENERATE"
 				? await generateAndSaveQuestion({
 						cert: claimed.cert,
@@ -219,24 +290,40 @@ async function attemptJob(
 							excludeQuestionIds: exclude,
 							allowExcludedFallback: false,
 						});
-		await completeJobSuccess(claimed, question.questionId);
-		return {
-			job: { ...claimed, state: "SUCCEEDED", questionId: question.questionId },
-			state: "SUCCEEDED",
-		};
 	} catch (error) {
 		const message =
-			error instanceof Error ? error.message : "prefetch job failed";
+			error instanceof Error ? error.message : "generation job failed";
 		const errorCode =
 			error instanceof ApiError && error.status === 404
 				? "no_bank_question"
-				: "generation_failed";
-		const state = await completeJobRetryOrFail(claimed, errorCode, message);
+				: error instanceof ApiError && error.code === "generation_timeout"
+					? "generation_timeout"
+					: "generation_failed";
+		const state =
+			reflectTerminalOnSession && claimed.attemptCount >= claimed.maxAttempts
+				? await completeWorkerJobFailure(claimed, errorCode, message)
+				: await completeJobRetryOrFail(claimed, errorCode, message);
+		if (!state) {
+			return undefined;
+		}
 		return {
 			job: { ...claimed, state, errorCode, errorMessage: message },
 			state,
 		};
 	}
+
+	// ロックを失っていた場合は、いま掴んでいるworkerの結果を尊重してこちらは何も反映しない。
+	// 問題自体は保存済みなので生成は無駄にならない。
+	const completed = reflectTerminalOnSession
+		? await completeWorkerJobSuccess(claimed, question.questionId)
+		: await completeJobSuccess(claimed, question.questionId);
+	if (!completed) {
+		return undefined;
+	}
+	return {
+		job: { ...claimed, state: "SUCCEEDED", questionId: question.questionId },
+		state: "SUCCEEDED",
+	};
 }
 
 export type CreatePrefetchJobInput = {
@@ -250,20 +337,52 @@ export type CreatePrefetchJobInput = {
 	excludeQuestionIds: string[];
 };
 
-// job作成とsession書き込みは非トランザクションのため、nextSessionQuestion側で
-// セッション更新の楽観ロックが失敗した場合はここで作ったjobが孤立しうる。
-// BANKモードは読み取り専用なので実害はない。GENERATE/MIXEDは孤立してもいずれ
-// /dev/jobs/run に拾われて実行される(reflectJobOnSessionはprefetch.jobId不一致を
-// 無視するだけで実行自体は止めない)ため、誰も使わない問題のためにBedrock課金が
-// 発生し得る。頻発するようならjob作成側でもsessionの整合性を確認してから作るなど要見直し。
-export async function createAndRunPrefetchJob(
-	input: CreatePrefetchJobInput,
-): Promise<NonNullable<SessionMetaItem["prefetch"]>> {
+export type CreateInitialJobInput = Omit<
+	CreatePrefetchJobInput,
+	"targetSequence" | "excludeQuestionIds"
+>;
+
+export function createInitialJob(input: CreateInitialJobInput): {
+	job: GenerationJobItem;
+	initial: NonNullable<SessionMetaItem["initial"]>;
+} {
+	const createdAt = nowIso();
+	const jobId = newJobId();
+	const runKeys = jobRunKeys({ jobId, state: "QUEUED", runAfter: createdAt });
+	const job: GenerationJobItem = {
+		jobId,
+		schemaVersion: 1,
+		kind: "INITIAL",
+		state: "QUEUED",
+		userId: input.userId,
+		sessionId: input.sessionId,
+		targetSequence: 1,
+		cert: input.cert,
+		domainSelection: input.domainSelection,
+		domain: input.domain,
+		mode: input.mode,
+		attemptCount: 0,
+		maxAttempts: maxJobAttempts,
+		runAfter: createdAt,
+		...runKeys,
+		createdAt,
+		updatedAt: createdAt,
+	};
+
+	return {
+		job,
+		initial: { state: "QUEUED", jobId, updatedAt: createdAt },
+	};
+}
+
+function preparePrefetchJob(input: CreatePrefetchJobInput): {
+	job: GenerationJobItem;
+	prefetch: NonNullable<SessionMetaItem["prefetch"]>;
+} {
 	const createdAt = nowIso();
 	const jobId = newJobId();
 	const kind: JobKind = "PREFETCH";
 	const runKeys = jobRunKeys({ jobId, state: "QUEUED", runAfter: createdAt });
-
 	const job: GenerationJobItem = {
 		jobId,
 		schemaVersion: 1,
@@ -285,6 +404,378 @@ export async function createAndRunPrefetchJob(
 		updatedAt: createdAt,
 	};
 
+	return {
+		job,
+		prefetch: {
+			sequence: input.targetSequence,
+			state: "QUEUED",
+			jobId,
+			domain: input.domain,
+			updatedAt: createdAt,
+		},
+	};
+}
+
+function terminalSuccessUpdate(
+	job: GenerationJobItem,
+	questionId: string,
+	updatedAt: string,
+) {
+	return {
+		TableName: tables.generationJobs,
+		Key: { jobId: job.jobId },
+		ConditionExpression: "#state = :running AND lockedBy = :lockedBy",
+		UpdateExpression:
+			"SET #state = :succeeded, questionId = :questionId, finishedAt = :updatedAt, updatedAt = :updatedAt REMOVE runPk, runSk",
+		ExpressionAttributeNames: { "#state": "state" },
+		ExpressionAttributeValues: {
+			":running": "RUNNING",
+			":lockedBy": job.lockedBy,
+			":succeeded": "SUCCEEDED",
+			":questionId": questionId,
+			":updatedAt": updatedAt,
+		},
+	};
+}
+
+function terminalFailureUpdate(
+	job: GenerationJobItem,
+	errorCode: string,
+	errorMessage: string,
+	updatedAt: string,
+) {
+	return {
+		TableName: tables.generationJobs,
+		Key: { jobId: job.jobId },
+		ConditionExpression: "#state = :running AND lockedBy = :lockedBy",
+		UpdateExpression:
+			"SET #state = :failed, errorCode = :errorCode, errorMessage = :errorMessage, finishedAt = :updatedAt, updatedAt = :updatedAt REMOVE runPk, runSk",
+		ExpressionAttributeNames: { "#state": "state" },
+		ExpressionAttributeValues: {
+			":running": "RUNNING",
+			":lockedBy": job.lockedBy,
+			":failed": "FAILED",
+			":errorCode": errorCode,
+			":errorMessage": errorMessage,
+			":updatedAt": updatedAt,
+		},
+	};
+}
+
+async function completeInitialJobSuccess(
+	job: GenerationJobItem & { sessionId: string; userId: string },
+	questionId: string,
+): Promise<boolean> {
+	const updatedAt = nowIso();
+	const domain = job.domain ?? job.domainSelection;
+	const { job: prefetchJob, prefetch } = preparePrefetchJob({
+		sessionId: job.sessionId,
+		userId: job.userId,
+		cert: job.cert,
+		domainSelection: job.domainSelection,
+		domain,
+		mode: job.mode,
+		targetSequence: 2,
+		excludeQuestionIds: [questionId],
+	});
+	const abandonAfter = addDaysIso(updatedAt, policy.abandonAfterDays);
+	const statusKeys = userStatusKeys({
+		userId: job.userId,
+		status: "ACTIVE",
+		updatedAt,
+		sessionId: job.sessionId,
+	});
+	const activeAbandonKeys = abandonKeys({
+		sessionId: job.sessionId,
+		abandonAfter,
+	});
+
+	try {
+		await dynamoDoc.send(
+			new TransactWriteCommand({
+				TransactItems: [
+					{ Update: terminalSuccessUpdate(job, questionId, updatedAt) },
+					{
+						Put: {
+							TableName: tables.generationJobs,
+							Item: prefetchJob,
+							ConditionExpression: "attribute_not_exists(jobId)",
+						},
+					},
+					{
+						Update: {
+							TableName: tables.sessions,
+							Key: { sessionId: job.sessionId, itemKey: "META" },
+							ConditionExpression:
+								"#initial.jobId = :jobId AND attribute_not_exists(#current) AND #status = :active AND userId = :userId",
+							UpdateExpression:
+								"SET #current = :current, lastSeenQuestionIds = :lastSeenQuestionIds, prefetch = :prefetch, version = version + :one, updatedAt = :updatedAt, userStatusPk = :userStatusPk, userStatusSk = :userStatusSk, abandonAfter = :abandonAfter, abandonPk = :abandonPk, abandonSk = :abandonSk REMOVE #initial",
+							ExpressionAttributeNames: {
+								"#initial": "initial",
+								"#current": "current",
+								"#status": "status",
+							},
+							ExpressionAttributeValues: {
+								":jobId": job.jobId,
+								":active": "ACTIVE",
+								":userId": job.userId,
+								":current": {
+									sequence: 1,
+									questionId,
+									domain,
+									state: "ANSWERING",
+								},
+								":lastSeenQuestionIds": [questionId],
+								":prefetch": prefetch,
+								":one": 1,
+								":updatedAt": updatedAt,
+								":userStatusPk": statusKeys.userStatusPk,
+								":userStatusSk": statusKeys.userStatusSk,
+								":abandonAfter": abandonAfter,
+								":abandonPk": activeAbandonKeys.abandonPk,
+								":abandonSk": activeAbandonKeys.abandonSk,
+							},
+						},
+					},
+					{
+						Delete: {
+							TableName: tables.sessions,
+							Key: initialSessionGuardKey(job),
+							ConditionExpression:
+								"attribute_not_exists(preparingSessionId) OR preparingSessionId = :sessionId",
+							ExpressionAttributeValues: { ":sessionId": job.sessionId },
+						},
+					},
+				],
+			}),
+		);
+		return true;
+	} catch (error) {
+		if (!isTransactionCanceled(error)) throw error;
+		// A stale/mismatched session (or a lost lock) must not leave the job RUNNING.
+		// The same lockedBy condition preserves the quiet-loser behavior on lock loss.
+		return completeJobSuccess(job, questionId);
+	}
+}
+
+async function completeInitialJobFailure(
+	job: GenerationJobItem & { sessionId: string; userId: string },
+	errorCode: string,
+	errorMessage: string,
+): Promise<"FAILED" | undefined> {
+	const updatedAt = nowIso();
+	const abandonAfter = addDaysIso(updatedAt, policy.abandonAfterDays);
+	const statusKeys = userStatusKeys({
+		userId: job.userId,
+		status: "ACTIVE",
+		updatedAt,
+		sessionId: job.sessionId,
+	});
+	const activeAbandonKeys = abandonKeys({
+		sessionId: job.sessionId,
+		abandonAfter,
+	});
+
+	try {
+		await dynamoDoc.send(
+			new TransactWriteCommand({
+				TransactItems: [
+					{
+						Update: terminalFailureUpdate(
+							job,
+							errorCode,
+							errorMessage,
+							updatedAt,
+						),
+					},
+					{
+						Update: {
+							TableName: tables.sessions,
+							Key: { sessionId: job.sessionId, itemKey: "META" },
+							ConditionExpression:
+								"#initial.jobId = :jobId AND attribute_not_exists(#current) AND #status = :active AND userId = :userId",
+							UpdateExpression:
+								"SET #initial.#state = :failed, #initial.errorCode = :errorCode, #initial.updatedAt = :updatedAt, updatedAt = :updatedAt, version = version + :one, userStatusPk = :userStatusPk, userStatusSk = :userStatusSk, abandonAfter = :abandonAfter, abandonPk = :abandonPk, abandonSk = :abandonSk",
+							ExpressionAttributeNames: {
+								"#initial": "initial",
+								"#current": "current",
+								"#status": "status",
+								"#state": "state",
+							},
+							ExpressionAttributeValues: {
+								":jobId": job.jobId,
+								":active": "ACTIVE",
+								":userId": job.userId,
+								":failed": "FAILED",
+								":errorCode": errorCode,
+								":updatedAt": updatedAt,
+								":one": 1,
+								":userStatusPk": statusKeys.userStatusPk,
+								":userStatusSk": statusKeys.userStatusSk,
+								":abandonAfter": abandonAfter,
+								":abandonPk": activeAbandonKeys.abandonPk,
+								":abandonSk": activeAbandonKeys.abandonSk,
+							},
+						},
+					},
+					{
+						Delete: {
+							TableName: tables.sessions,
+							Key: initialSessionGuardKey(job),
+							ConditionExpression:
+								"attribute_not_exists(preparingSessionId) OR preparingSessionId = :sessionId",
+							ExpressionAttributeValues: { ":sessionId": job.sessionId },
+						},
+					},
+				],
+			}),
+		);
+		return "FAILED";
+	} catch (error) {
+		if (!isTransactionCanceled(error)) throw error;
+		const state = await completeJobRetryOrFail(job, errorCode, errorMessage);
+		return state === "FAILED" ? state : undefined;
+	}
+}
+
+async function completePrefetchJob(
+	job: GenerationJobItem & { sessionId: string; targetSequence: number },
+	terminal:
+		| { state: "SUCCEEDED"; questionId: string }
+		| { state: "FAILED"; errorCode: string; errorMessage: string },
+): Promise<boolean> {
+	const updatedAt = nowIso();
+	const prefetch: NonNullable<SessionMetaItem["prefetch"]> =
+		terminal.state === "SUCCEEDED"
+			? {
+					sequence: job.targetSequence,
+					state: "READY",
+					jobId: job.jobId,
+					questionId: terminal.questionId,
+					domain: job.domain,
+					updatedAt,
+				}
+			: {
+					sequence: job.targetSequence,
+					state: "FAILED",
+					jobId: job.jobId,
+					domain: job.domain,
+					errorCode: terminal.errorCode,
+					updatedAt,
+				};
+	const jobUpdate =
+		terminal.state === "SUCCEEDED"
+			? terminalSuccessUpdate(job, terminal.questionId, updatedAt)
+			: terminalFailureUpdate(
+					job,
+					terminal.errorCode,
+					terminal.errorMessage,
+					updatedAt,
+				);
+
+	try {
+		await dynamoDoc.send(
+			new TransactWriteCommand({
+				TransactItems: [
+					{ Update: jobUpdate },
+					{
+						Update: {
+							TableName: tables.sessions,
+							Key: { sessionId: job.sessionId, itemKey: "META" },
+							ConditionExpression:
+								"prefetch.jobId = :jobId AND prefetch.#sequence = :targetSequence AND #status = :active" +
+								(job.userId ? " AND userId = :userId" : ""),
+							UpdateExpression: "SET prefetch = :prefetch",
+							ExpressionAttributeNames: {
+								"#sequence": "sequence",
+								"#status": "status",
+							},
+							ExpressionAttributeValues: {
+								":jobId": job.jobId,
+								":targetSequence": job.targetSequence,
+								":active": "ACTIVE",
+								":prefetch": prefetch,
+								...(job.userId ? { ":userId": job.userId } : {}),
+							},
+						},
+					},
+				],
+			}),
+		);
+		return true;
+	} catch (error) {
+		if (!isTransactionCanceled(error)) throw error;
+		return terminal.state === "SUCCEEDED"
+			? completeJobSuccess(job, terminal.questionId)
+			: (await completeJobRetryOrFail(
+					job,
+					terminal.errorCode,
+					terminal.errorMessage,
+				)) === "FAILED";
+	}
+}
+
+async function completeWorkerJobSuccess(
+	job: GenerationJobItem,
+	questionId: string,
+): Promise<boolean> {
+	if (job.kind === "INITIAL" && job.sessionId && job.userId) {
+		return completeInitialJobSuccess(
+			{ ...job, sessionId: job.sessionId, userId: job.userId },
+			questionId,
+		);
+	}
+	if (
+		job.kind === "PREFETCH" &&
+		job.sessionId &&
+		job.targetSequence !== undefined
+	) {
+		return completePrefetchJob(
+			{ ...job, sessionId: job.sessionId, targetSequence: job.targetSequence },
+			{ state: "SUCCEEDED", questionId },
+		);
+	}
+	return completeJobSuccess(job, questionId);
+}
+
+async function completeWorkerJobFailure(
+	job: GenerationJobItem,
+	errorCode: string,
+	errorMessage: string,
+): Promise<"FAILED" | undefined> {
+	if (job.kind === "INITIAL" && job.sessionId && job.userId) {
+		return completeInitialJobFailure(
+			{ ...job, sessionId: job.sessionId, userId: job.userId },
+			errorCode,
+			errorMessage,
+		);
+	}
+	if (
+		job.kind === "PREFETCH" &&
+		job.sessionId &&
+		job.targetSequence !== undefined
+	) {
+		const completed = await completePrefetchJob(
+			{ ...job, sessionId: job.sessionId, targetSequence: job.targetSequence },
+			{ state: "FAILED", errorCode, errorMessage },
+		);
+		return completed ? "FAILED" : undefined;
+	}
+	const state = await completeJobRetryOrFail(job, errorCode, errorMessage);
+	return state === "FAILED" ? state : undefined;
+}
+
+// job作成とsession書き込みは非トランザクションのため、nextSessionQuestion側で
+// セッション更新の楽観ロックが失敗した場合はここで作ったjobが孤立しうる。
+// BANKモードは読み取り専用なので実害はない。GENERATE/MIXEDは孤立してもいずれ
+// /dev/jobs/run に拾われて実行される(reflectJobOnSessionはprefetch.jobId不一致を
+// 無視するだけで実行自体は止めない)ため、誰も使わない問題のためにBedrock課金が
+// 発生し得る。頻発するようならjob作成側でもsessionの整合性を確認してから作るなど要見直し。
+export async function createAndRunPrefetchJob(
+	input: CreatePrefetchJobInput,
+): Promise<NonNullable<SessionMetaItem["prefetch"]>> {
+	const { job, prefetch } = preparePrefetchJob(input);
+
 	await dynamoDoc.send(
 		new PutCommand({
 			TableName: tables.generationJobs,
@@ -294,13 +785,7 @@ export async function createAndRunPrefetchJob(
 	);
 
 	if (input.mode !== "BANK") {
-		return {
-			sequence: input.targetSequence,
-			state: "QUEUED",
-			jobId,
-			domain: input.domain,
-			updatedAt: createdAt,
-		};
+		return prefetch;
 	}
 
 	const outcome = await attemptJob(job, input.excludeQuestionIds);
@@ -310,7 +795,7 @@ export async function createAndRunPrefetchJob(
 		return {
 			sequence: input.targetSequence,
 			state: "QUEUED",
-			jobId,
+			jobId: job.jobId,
 			domain: input.domain,
 			updatedAt,
 		};
@@ -320,7 +805,7 @@ export async function createAndRunPrefetchJob(
 		return {
 			sequence: input.targetSequence,
 			state: "FAILED",
-			jobId,
+			jobId: job.jobId,
 			domain: input.domain,
 			errorCode: outcome.job.errorCode,
 			updatedAt,
@@ -330,7 +815,7 @@ export async function createAndRunPrefetchJob(
 	return {
 		sequence: input.targetSequence,
 		state: "READY",
-		jobId,
+		jobId: job.jobId,
 		questionId: outcome.job.questionId,
 		domain: input.domain,
 		updatedAt,
@@ -338,7 +823,7 @@ export async function createAndRunPrefetchJob(
 }
 
 async function queryRunnableBucket(
-	state: "QUEUED" | "RETRY_WAIT",
+	state: "QUEUED" | "RUNNING" | "RETRY_WAIT",
 	bucket: string,
 	cutoff: string,
 ): Promise<GenerationJobItem[]> {
@@ -356,65 +841,6 @@ async function queryRunnableBucket(
 	return (out.Items ?? []).filter(isGenerationJobItem);
 }
 
-async function reflectJobOnSession(outcome: AttemptOutcome): Promise<void> {
-	const job = outcome.job;
-	if (!job.sessionId || job.targetSequence === undefined) {
-		return;
-	}
-
-	const updatedAt = nowIso();
-	const prefetch: NonNullable<SessionMetaItem["prefetch"]> =
-		outcome.state === "SUCCEEDED"
-			? {
-					sequence: job.targetSequence,
-					state: "READY",
-					jobId: job.jobId,
-					questionId: job.questionId,
-					domain: job.domain,
-					updatedAt,
-				}
-			: {
-					sequence: job.targetSequence,
-					state: "FAILED",
-					jobId: job.jobId,
-					domain: job.domain,
-					errorCode: job.errorCode,
-					updatedAt,
-				};
-
-	try {
-		await dynamoDoc.send(
-			new UpdateCommand({
-				TableName: tables.sessions,
-				Key: { sessionId: job.sessionId, itemKey: "META" },
-				ConditionExpression:
-					"prefetch.jobId = :jobId AND prefetch.#sequence = :targetSequence AND #status = :active" +
-					(job.userId ? " AND userId = :userId" : ""),
-				UpdateExpression: "SET prefetch = :prefetch",
-				ExpressionAttributeNames: {
-					"#sequence": "sequence",
-					"#status": "status",
-				},
-				ExpressionAttributeValues: {
-					":jobId": job.jobId,
-					":targetSequence": job.targetSequence,
-					":active": "ACTIVE",
-					":prefetch": prefetch,
-					...(job.userId ? { ":userId": job.userId } : {}),
-				},
-			}),
-		);
-	} catch (error) {
-		if (
-			error instanceof Error &&
-			error.name === "ConditionalCheckFailedException"
-		) {
-			return;
-		}
-		throw error;
-	}
-}
-
 export type RunRunnableJobsResult = {
 	processed: number;
 	succeeded: number;
@@ -424,6 +850,7 @@ export type RunRunnableJobsResult = {
 
 export async function runRunnableJobs(
 	limit = 20,
+	deadline = Number.POSITIVE_INFINITY,
 ): Promise<RunRunnableJobsResult> {
 	const normalizedLimit = Math.max(0, Math.min(100, Math.floor(limit)));
 	const cutoff = `${nowIso()}#ZZZ`;
@@ -432,7 +859,7 @@ export async function runRunnableJobs(
 	);
 
 	const results = await Promise.all(
-		(["QUEUED", "RETRY_WAIT"] as const).flatMap((state) =>
+		(["QUEUED", "RUNNING", "RETRY_WAIT"] as const).flatMap((state) =>
 			buckets.map((bucket) => queryRunnableBucket(state, bucket, cutoff)),
 		),
 	);
@@ -451,17 +878,16 @@ export async function runRunnableJobs(
 	};
 
 	for (const job of due) {
-		const outcome = await attemptJob(job);
+		if (Date.now() + jobExecutionBudgetMs() > deadline) {
+			break;
+		}
+		const outcome = await attemptJob(job, [], true);
 		if (!outcome) continue;
 
 		summary.processed += 1;
 		if (outcome.state === "SUCCEEDED") summary.succeeded += 1;
 		if (outcome.state === "RETRY_WAIT") summary.retried += 1;
 		if (outcome.state === "FAILED") summary.failed += 1;
-
-		if (outcome.state === "SUCCEEDED" || outcome.state === "FAILED") {
-			await reflectJobOnSession(outcome);
-		}
 	}
 
 	return summary;

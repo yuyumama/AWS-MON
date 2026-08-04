@@ -4,7 +4,11 @@ import { ApiError } from "./errors.js";
 export function errorResponse(_c: Context, error: unknown) {
 	if (error instanceof ApiError) {
 		return new Response(
-			JSON.stringify({ status: "error", message: error.message }),
+			JSON.stringify({
+				status: "error",
+				message: error.message,
+				...(error.code ? { code: error.code } : {}),
+			}),
 			{
 				status: error.status,
 				headers: { "content-type": "application/json; charset=utf-8" },

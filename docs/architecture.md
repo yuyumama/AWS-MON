@@ -88,12 +88,18 @@ sequenceDiagram
     participant J as AwsMonGenerationJobs
     participant UA as AwsMonUserActivity
 
-    U->>API: POST /sessions {cert, domainSelection}
-    API->>Q: GSI1_BankRandomから候補取得
-    API->>S: META item Put (current=Q1)
+    U->>API: POST /sessions {cert, domainSelection, mode}
+    alt BANK / MIXEDでbankヒット
+        API->>Q: GSI1_BankRandomから候補取得
+        API->>S: META item Put (current=Q1)
         API->>J: PREFETCH job作成
-        J-->>API: BANKはinline実行、GENERATE/MIXEDはQUEUED
-    API-->>U: session(current=Q1, answering DTO)
+        J-->>API: BANKはinline実行、MIXEDはQUEUED
+        API-->>U: 201 session(current=Q1, answering DTO)
+    else GENERATE / MIXEDでbank候補なし
+        API->>S: TransactWrite: META Put(current無し, initial=QUEUED) + INITIAL job Put
+        API-->>U: 202 session(preparing=QUEUED)
+        Note over U,API: 最初の問題はworkerが生成する（2.を参照）
+    end
 
     U->>API: POST /sessions/:id/answers {sequence, selectedAnswers}
     API->>S: current questionを取得(strongly consistent)
@@ -106,25 +112,34 @@ sequenceDiagram
     API->>S: current.state=ANSWEREDを確認
     alt prefetch.state == READY
         API->>Q: prefetchのquestionIdを取得
-    else 未READY
-        API->>Q: findBankQuestionへフォールバック
+        API->>J: 次sequence用の新PREFETCH job作成
+        API->>S: META Update (current=Q2, prefetch=新job)
+        API-->>U: 200 session(current=Q2, answering DTO)
+    else GENERATE/MIXED かつ prefetch.state == QUEUED
+        API-->>U: 202 session(current=Q1のまま, prefetch=QUEUED)
+        Note over U,API: Webは先読み完了までポーリングしてnextを再送する
+    else prefetchなし / FAILED
+        API->>J: 新PREFETCH job作成
+        API->>S: META Update (prefetchのみ差し替え)
+        API-->>U: 202 session(prefetch=QUEUED)
     end
-    API->>J: 次sequence用の新PREFETCH job作成
-    API->>S: META Update (current=Q2, prefetch=新job)
-    API-->>U: session(current=Q2, answering DTO)
 ```
 
 - 回答判定は常にAPI側で行い、`correct`はクライアントへ返さない（answering DTO）。回答後のレスポンスのみ`correct`/`explanation`を含む（answered DTO）。
 - 不正解の回答は、同じTransactWrite内の`QUESTION#` Updateで自動的に復習リストへ入る（`reviewMarked=true` + `GSI1_ReviewList`キー設定。正解時は既存マークに触らない。解除は`PUT /reviews/:questionId`で手動）。
 - `/sessions/:id/answers` と `/sessions/:id/next` はどちらも `version`（楽観ロック）と `userId` 一致をDynamoDBの`ConditionExpression`で強制する。
-- job作成とsession更新は非トランザクション。`nextSessionQuestion`側の楽観ロックが競合すると作成済みjobが孤立し得る。BANKモードは読み取り専用のため実害なしだが、GENERATE/MIXEDの孤立jobは`/dev/jobs/run`にいずれ拾われて実行されるため、誰も使わない問題のためにLLM呼び出しが発生し得る（`apps/api/src/jobRepository.ts`のコメント参照）。
+- セッション開始時の INITIAL job 作成は `TransactWrite` で META と同時に書くため孤立しない。一方 `nextSessionQuestion` の PREFETCH job 作成とsession更新は非トランザクションのままで、楽観ロックが競合すると作成済みjobが孤立し得る。BANKモードは読み取り専用のため実害なしだが、GENERATE/MIXEDの孤立jobは worker にいずれ拾われて実行されるため、誰も使わない問題のためにLLM呼び出しが発生し得る（`apps/api/src/jobRepository.ts`のコメント参照）。
+- `GENERATE`/`MIXED` で先読みが未完了のとき、`next` は**同期生成にフォールバックしない**（[ADR 0013](adr/0013-async-initial-generation.md) 決定5）。以前はフォールバックと先読みjobが並行生成し、1問あたり2回生成していた。
 
-### 2. 問題生成（API -> agent HTTP）
+### 2. 問題生成（worker -> agent。非同期job）
+
+生成は中央値190秒・p90 284秒かかるため、HTTPリクエストの中では待たない。API はjobを作って即座に返し、実際の生成は worker が行う（[ADR 0013](adr/0013-async-initial-generation.md)）。
 
 ```mermaid
 sequenceDiagram
-    participant U as ユーザー/API利用者
+    actor U as ユーザー(ブラウザ)
     participant API as apps/api
+    participant W as worker (runRunnableJobs)
     participant Agent as apps/agent (Strands)
     participant LLM as OpenRouter
     participant Q as AwsMonQuestions
@@ -132,17 +147,29 @@ sequenceDiagram
     participant J as AwsMonGenerationJobs
 
     U->>API: POST /sessions {mode: "GENERATE"}
-    API->>Agent: POST /generate {cert, domain, domainSelection}
-    Agent->>LLM: generate_quiz(cert, domain) 構造化出力
+    API->>S: TransactWrite: META Put(initial=QUEUED) + INITIAL job Put
+    API-->>U: 202 session(preparing=QUEUED)
+
+    W->>J: claimJob (QUEUED/RETRY_WAIT、期限切れRUNNING → RUNNING)
+    W->>Agent: POST /generate または InvokeAgentRuntime
+    Agent->>LLM: 構造化出力で問題+解説を生成
     LLM-->>Agent: QuizItem{question, explanation}
-    Agent-->>API: QuizItem + generation metadata
-    API->>Q: contentHash重複チェック → ACTIVE保存
-    API->>S: currentへ設定
-    API->>J: 次問PREFETCH jobをQUEUEDで保存
-    API-->>U: session(current=生成問題)
+    Agent-->>W: QuizItem + generation metadata
+    W->>Q: contentHash重複チェック → ACTIVE保存
+    W->>J: job SUCCEEDED
+    W->>S: TransactWrite: seq2 PREFETCH job Put + META Update(current=Q1, initial削除)
+
+    loop 生成完了まで
+        U->>API: GET /sessions/:id
+        API-->>U: preparing=QUEUED（完了後は current=Q1）
+    end
 ```
 
-ローカルでは `python3 -m quiz_agent.server` が `POST /generate` を提供し、`apps/api` は `AGENT_BASE_URL` 経由で呼び出す（`AGENT_MODE=http`、既定）。本番は `AGENT_MODE=agentcore` で同じリクエスト/レスポンスJSONを AgentCore Runtime の `InvokeAgentRuntime` に載せ替える（`quiz_agent/runtime.py` が `/invocations` で受ける。[ADR 0008](adr/0008-prod-deployment-shape.md)）。`mode=GENERATE` は常にagent生成、`mode=MIXED` はbankを優先し候補がない場合だけagent生成にフォールバックする。コスト抑制のため、`GENERATE/MIXED` のPREFETCH jobは作成直後にinline実行せず、`POST /dev/jobs/run` で明示的に処理する。
+ローカルでは `python3 -m quiz_agent.server` が `POST /generate` を提供し、`AGENT_BASE_URL` 経由で呼び出す（`AGENT_MODE=http`、既定）。本番は `AGENT_MODE=agentcore` で同じリクエスト/レスポンスJSONを AgentCore Runtime の `InvokeAgentRuntime` に載せ替える（`quiz_agent/runtime.py` が `/invocations` で受ける。[ADR 0008](adr/0008-prod-deployment-shape.md)）。
+
+- `mode=GENERATE` は常にagent生成、`mode=MIXED` はbankを優先し候補がない場合だけagent生成にフォールバックする。
+- agent呼び出しのタイムアウトは `AGENT_REQUEST_TIMEOUT_MS` で環境ごとに設定する。超過は汎用の502ではなく `code: "generation_timeout"` の504として扱い、job側は `errorCode=generation_timeout` を記録する。
+- 生成失敗はセッションの `preparing.state=FAILED` / `prefetch.state=FAILED` と `errorCode` に反映され、Webはこれを見て利用者向けの文言を出す。
 
 ### 3. 開発用workerによるjob処理（`/dev/jobs/run`）
 
@@ -157,29 +184,40 @@ sequenceDiagram
     participant LLM as OpenRouter
 
     Dev->>API: POST /dev/jobs/run {limit}
-    API->>J: GSI1_Runnableから QUEUED/RETRY_WAIT を取得
-    loop 各job
-        API->>J: claimJob (state→RUNNING, 楽観ロック)
+    API->>J: GSI1_Runnableから QUEUED/RUNNING/RETRY_WAIT を取得
+    Note over API,J: RUNNINGはrunSk=lockedUntilなので期限切れだけがヒットする
+    loop 各job (残り時間が1件分の予算を切ったら打ち切り)
+        API->>J: claimJob (state→RUNNING, lockedBy/lockedUntil更新)
         API->>Q: BANK/MIXEDはfindBankQuestion(除外リスト適用)
         alt bank成功
-            API->>J: state→SUCCEEDED, questionId保存
-            API->>S: prefetch.jobId一致を条件にsession反映
+            API->>J: state→SUCCEEDED (lockedBy一致が条件)
         else GENERATE または MIXED bank不足
             API->>Agent: POST /generate
             Agent->>LLM: generate_quiz()
             LLM-->>Agent: QuizItem
             Agent-->>API: QuizItem
             API->>Q: ACTIVE保存
-            API->>J: state→SUCCEEDED, questionId保存
-            API->>S: prefetch.jobId一致を条件にsession反映
+            API->>J: state→SUCCEEDED (lockedBy一致が条件)
         else 失敗
-            API->>J: attemptCount<3ならRETRY_WAIT、超えたらFAILED
+            API->>J: attemptCount<maxAttemptsならRETRY_WAIT、超えたらFAILED
+        end
+        alt kind=INITIAL
+            API->>S: initial.jobId一致を条件に current=Q1 へ昇格 + seq2 PREFETCH job作成
+        else kind=PREFETCH
+            API->>S: prefetch.jobId一致を条件にsession反映
         end
     end
     API-->>Dev: {processed, succeeded, retried, failed}
 ```
 
 `BANK` のPREFETCH jobは同一リクエスト内でinline実行される。`GENERATE/MIXED` は不要なLLM呼び出しを避けるためQUEUEDのまま保存し、ローカルでは`/dev/jobs/run`で明示的に実行する。本番は EventBridge Scheduler（rate 1分）が worker Lambda（`apps/api/src/worker.ts`、同じ `runRunnableJobs`）を起動する（[ADR 0008](adr/0008-prod-deployment-shape.md)。`/dev/*` は本番では404）。
+
+job の排他と回収は次のとおり（[ADR 0013](adr/0013-async-initial-generation.md) 決定6・7）。
+
+- **排他は claim の条件付きUpdate**で成立する。`lockedUntil` は排他そのものではなく「落ちた worker が掴んだままの RUNNING job を回収してよくなる期限」を表す。
+- RUNNING の job も `runPk`/`runSk` を保持し、`runSk` に `lockedUntil` を入れる。実行可能job検索は `runSk <= 現在時刻` で引くため、**期限内のロックはヒットせず横取りされない**。
+- job の完了（SUCCEEDED / RETRY_WAIT / FAILED）は `lockedBy` 一致を条件にする。ロックを失っていた worker は結果を書かずに降りる。
+- worker は Lambda の残り時間から算出したデッドラインを持ち、残りが1件分の予算（`AGENT_REQUEST_TIMEOUT_MS` + 30秒）を切ったら次の job を claim しない。Lambda timeout で生成中に殺されて job を RUNNING のまま座礁させないため。
 
 クラウドでは、`GENERATE` と `MIXED` の job 処理は LLM利用につながるため、job 作成時だけでなく worker 実行時にも生成権限または信頼済み内部実行コンテキストを確認する。`BANK` job は保存済み問題の取得だけなので、登録済みユーザーであれば実行できる。
 
@@ -196,7 +234,9 @@ sequenceDiagram
 |---|---|---|
 | JWT検証ミドルウェア | 実装済み（`apps/api/src/auth.ts`、`AUTH_MODE=cognito`）。実ユーザーでのログインE2E（prod CloudFront経由でログイン→`/me` 200）も確認済み（2026-07-06） | [ADR 0006](adr/0006-auth-cognito-cloud-only.md) |
 | 生成権限チェック | 実装済み。`BANK` は登録済みユーザー可、`GENERATE` / `MIXED` は生成グループ必須（権限なしは403）。stale 再生成は job 種別ごと未実装で、実装時に権限確認を入れる | [ADR 0006](adr/0006-auth-cognito-cloud-only.md) |
-| agent ⇄ API の生成連携 | 実装済み。`AGENT_MODE=http`（local HTTP）/ `agentcore`（AgentCore Runtime `InvokeAgentRuntime`）の切替。境界のJSON形は共通 | [ADR 0008](adr/0008-prod-deployment-shape.md) |
+| agent ⇄ API の生成連携 | 実装済み。`AGENT_MODE=http`（local HTTP）/ `agentcore`（AgentCore Runtime `InvokeAgentRuntime`）の切替。境界のJSON形は共通。タイムアウトは `AGENT_REQUEST_TIMEOUT_MS` | [ADR 0008](adr/0008-prod-deployment-shape.md)、[ADR 0013](adr/0013-async-initial-generation.md) |
+| 初回問題生成の非同期job化 | 実装済み（`kind=INITIAL` job + `POST /sessions` 202 + Webポーリング）。同期120秒タイマーによる本番障害の解消 | [ADR 0013](adr/0013-async-initial-generation.md)、issue #80 |
+| 座礁jobの回収 | 実装済み（`lockedUntil` 超過の RUNNING job を再claim。worker は残り時間で claim を打ち切る） | [ADR 0013](adr/0013-async-initial-generation.md) |
 | spaced repetition（復習期限） | 未実装。`GSI2_DueList` の属性予約のみ（復習マーク/一覧のAP-06/07は実装済み: `/reviews`） | `docs/data-model.md` |
 | `apps/web` のS3+CloudFront配備 | デプロイ済み（2026-07-06、二段階apply完了）。CloudFront経由のログインE2E・GENERATE ともに確認済み（GENERATE は 2026-08-02、OpenRouter 経路。[ADR 0009](adr/0009-openrouter-default-provider.md)） | [ADR 0008](adr/0008-prod-deployment-shape.md)、`docs/cicd.md` |
 | prod worker（GENERATE/MIXED job） | デプロイ済み（EventBridge Scheduler rate 1分 + worker Lambda稼働中） | [ADR 0008](adr/0008-prod-deployment-shape.md) |

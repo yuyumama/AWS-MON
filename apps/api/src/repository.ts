@@ -5,6 +5,8 @@ import {
 	abandonKeys,
 	domainStatKey,
 	gsiNames,
+	type InitialSessionGuardItem,
+	initialSessionGuardKey,
 	policy,
 	type QuestionItem,
 	questionStateKey,
@@ -24,10 +26,9 @@ import {
 	TransactWriteCommand,
 	UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
-import { generateAndSaveQuestion } from "./agentClient.js";
 import { dynamoDoc } from "./dynamo.js";
 import { ApiError } from "./errors.js";
-import { createAndRunPrefetchJob } from "./jobRepository.js";
+import { createAndRunPrefetchJob, createInitialJob } from "./jobRepository.js";
 import { findBankQuestion, getQuestion } from "./questionBankRepository.js";
 
 const tables = resolveTableNames();
@@ -56,11 +57,21 @@ export type AnswerInput = {
 
 export type AnswerResult = AnswerResultDto;
 
+export type StartSessionResult = {
+	session: SessionDto;
+	disposition: "CREATED_READY" | "CREATED_PREPARING" | "EXISTING_PREPARING";
+};
+
 export type NextInput = {
 	userId: string;
 	sessionId: string;
 	version?: number;
 	canGenerateQuestions: boolean;
+};
+
+export type NextSessionQuestionResult = {
+	session: SessionDto;
+	preparing: boolean;
 };
 
 export type ListSessionsInput = {
@@ -124,38 +135,31 @@ function resolveDomain(input: {
 	};
 }
 
-async function selectQuestion(input: {
+async function selectInitialQuestion(input: {
 	cert: string;
 	domain: string;
-	domainSelection: string;
 	mode: SessionMode;
-	excludeQuestionIds?: string[];
-}): Promise<QuestionItem> {
+}): Promise<QuestionItem | undefined> {
 	if (input.mode === "GENERATE") {
-		return generateAndSaveQuestion(input);
+		return undefined;
 	}
 
-	if (input.mode === "MIXED") {
-		try {
-			return await findBankQuestion({
-				cert: input.cert,
-				domain: input.domain,
-				excludeQuestionIds: input.excludeQuestionIds,
-				allowExcludedFallback: false,
-			});
-		} catch (error) {
-			if (error instanceof ApiError && error.status === 404) {
-				return generateAndSaveQuestion(input);
-			}
-			throw error;
+	try {
+		return await findBankQuestion({
+			cert: input.cert,
+			domain: input.domain,
+			allowExcludedFallback: input.mode === "BANK",
+		});
+	} catch (error) {
+		if (
+			input.mode === "MIXED" &&
+			error instanceof ApiError &&
+			error.status === 404
+		) {
+			return undefined;
 		}
+		throw error;
 	}
-
-	return findBankQuestion({
-		cert: input.cert,
-		domain: input.domain,
-		excludeQuestionIds: input.excludeQuestionIds,
-	});
 }
 
 function toSessionDto(
@@ -174,6 +178,13 @@ function toSessionDto(
 		},
 		version: meta.version,
 	};
+	if (meta.initial) {
+		dto.preparing = {
+			state: meta.initial.state,
+			jobId: meta.initial.jobId,
+			errorCode: meta.initial.errorCode,
+		};
+	}
 
 	if (meta.current && question) {
 		const answered = meta.current.state === "ANSWERED";
@@ -185,6 +196,15 @@ function toSessionDto(
 			question: answered
 				? toQuestionDto(question, "answered")
 				: toQuestionDto(question, "answering"),
+		};
+	}
+	if (meta.prefetch) {
+		dto.prefetch = {
+			sequence: meta.prefetch.sequence,
+			state: meta.prefetch.state,
+			jobId: meta.prefetch.jobId,
+			domain: meta.prefetch.domain,
+			errorCode: meta.prefetch.errorCode,
 		};
 	}
 
@@ -239,6 +259,12 @@ function isAttemptItem(item: unknown): item is AttemptItem {
 function isConditionalCheckFailed(error: unknown): boolean {
 	return (
 		error instanceof Error && error.name === "ConditionalCheckFailedException"
+	);
+}
+
+function isTransactionCanceled(error: unknown): boolean {
+	return (
+		error instanceof Error && error.name === "TransactionCanceledException"
 	);
 }
 
@@ -319,18 +345,67 @@ function assertGenerationAllowed(
 	}
 }
 
+function isInitialSessionGuardItem(
+	item: unknown,
+): item is InitialSessionGuardItem {
+	return (
+		typeof item === "object" &&
+		item !== null &&
+		(item as { itemKey?: unknown }).itemKey === "INITIAL" &&
+		typeof (item as { preparingSessionId?: unknown }).preparingSessionId ===
+			"string"
+	);
+}
+
+async function findGuardedInitialSession(input: {
+	userId: string;
+	cert: string;
+	domainSelection: string;
+	mode: SessionMode;
+}): Promise<SessionMetaItem | undefined> {
+	const out = await dynamoDoc.send(
+		new GetCommand({
+			TableName: tables.sessions,
+			Key: initialSessionGuardKey(input),
+			ConsistentRead: true,
+		}),
+	);
+	if (!isInitialSessionGuardItem(out.Item)) {
+		return undefined;
+	}
+
+	const guard = out.Item;
+	if (
+		guard.userId !== input.userId ||
+		guard.cert !== input.cert ||
+		guard.domainSelection !== input.domainSelection ||
+		guard.mode !== input.mode
+	) {
+		return undefined;
+	}
+
+	const meta = await getSessionMeta(guard.preparingSessionId);
+	return meta.userId === input.userId &&
+		meta.cert === input.cert &&
+		meta.domainSelection === input.domainSelection &&
+		meta.mode === input.mode &&
+		meta.initial?.state === "QUEUED"
+		? meta
+		: undefined;
+}
+
 export async function startSession(
 	input: StartSessionInput,
-): Promise<SessionDto> {
+): Promise<StartSessionResult> {
 	const mode = input.mode ?? "BANK";
 	assertGenerationAllowed(mode, input.canGenerateQuestions);
 	const { domainSelection, domain } = resolveDomain(input);
-	const question = await selectQuestion({
+	const question = await selectInitialQuestion({
 		cert: input.cert,
 		domain,
-		domainSelection,
 		mode,
 	});
+
 	const createdAt = nowIso();
 	const sessionId = newSessionId();
 	const abandonAfter = addDaysIso(createdAt, policy.abandonAfterDays);
@@ -341,6 +416,114 @@ export async function startSession(
 		sessionId,
 	});
 	const activeAbandonKeys = abandonKeys({ sessionId, abandonAfter });
+
+	if (!question) {
+		// The transaction below is the idempotency authority. A GSI read cannot be
+		// strongly consistent, so checking GSI1_UserStatus before writing is unsafe.
+		const { job, initial } = createInitialJob({
+			sessionId,
+			userId: input.userId,
+			cert: input.cert,
+			domainSelection,
+			domain,
+			mode,
+		});
+		const meta: SessionMetaItem = {
+			sessionId,
+			itemKey: "META",
+			schemaVersion: 1,
+			userId: input.userId,
+			status: "ACTIVE",
+			cert: input.cert,
+			domainSelection,
+			mode,
+			initial,
+			answeredCount: 0,
+			correctCount: 0,
+			lastSeenQuestionIds: [],
+			version: 1,
+			startedAt: createdAt,
+			updatedAt: createdAt,
+			abandonAfter,
+			...statusKeys,
+			...activeAbandonKeys,
+		};
+		const guardKey = initialSessionGuardKey({
+			userId: input.userId,
+			cert: input.cert,
+			domainSelection,
+			mode,
+		});
+		const guard: InitialSessionGuardItem = {
+			...guardKey,
+			schemaVersion: 1,
+			preparingSessionId: sessionId,
+			userId: input.userId,
+			cert: input.cert,
+			domainSelection,
+			mode,
+			createdAt,
+			updatedAt: createdAt,
+			// 24 hours covers three long generation attempts plus backoff with ample
+			// margin, while remaining much shorter than the seven-day session lifetime.
+			deleteAt: Math.floor(Date.now() / 1000) + policy.initialGuardTtlSeconds,
+		};
+
+		try {
+			await dynamoDoc.send(
+				new TransactWriteCommand({
+					TransactItems: [
+						{
+							Put: {
+								TableName: tables.sessions,
+								Item: meta,
+								ConditionExpression: "attribute_not_exists(sessionId)",
+							},
+						},
+						{
+							Put: {
+								TableName: tables.generationJobs,
+								Item: job,
+								ConditionExpression: "attribute_not_exists(jobId)",
+							},
+						},
+						{
+							Put: {
+								TableName: tables.sessions,
+								Item: guard,
+								ConditionExpression:
+									"attribute_not_exists(sessionId) AND attribute_not_exists(itemKey)",
+							},
+						},
+					],
+				}),
+			);
+		} catch (error) {
+			if (!isTransactionCanceled(error)) {
+				throw error;
+			}
+
+			const existing = await findGuardedInitialSession({
+				userId: input.userId,
+				cert: input.cert,
+				domainSelection,
+				mode,
+			});
+			if (!existing) {
+				throw error;
+			}
+			return {
+				session: toSessionDto(existing),
+				disposition: "EXISTING_PREPARING",
+			};
+		}
+
+		return {
+			session: toSessionDto(meta),
+			disposition: "CREATED_PREPARING",
+		};
+	}
+
 	const current: SessionMetaItem["current"] = {
 		sequence: 1,
 		questionId: question.questionId,
@@ -392,7 +575,10 @@ export async function startSession(
 		}),
 	);
 
-	return toSessionDto(meta, question);
+	return {
+		session: toSessionDto(meta, question),
+		disposition: "CREATED_READY",
+	};
 }
 
 export async function getSession(input: {
@@ -620,9 +806,72 @@ export async function answerSession(input: AnswerInput): Promise<AnswerResult> {
 	};
 }
 
+async function replacePrefetch(
+	meta: SessionMetaItem,
+	input: NextInput,
+	prefetch: NonNullable<SessionMetaItem["prefetch"]>,
+): Promise<SessionMetaItem> {
+	const updatedAt = nowIso();
+	const expectedVersion = input.version ?? meta.version;
+	const abandonAfter = addDaysIso(updatedAt, policy.abandonAfterDays);
+	const statusKeys = userStatusKeys({
+		userId: input.userId,
+		status: "ACTIVE",
+		updatedAt,
+		sessionId: input.sessionId,
+	});
+	const activeAbandonKeys = abandonKeys({
+		sessionId: input.sessionId,
+		abandonAfter,
+	});
+
+	try {
+		await dynamoDoc.send(
+			new UpdateCommand({
+				TableName: tables.sessions,
+				Key: { sessionId: input.sessionId, itemKey: "META" },
+				ConditionExpression:
+					"userId = :userId AND version = :expectedVersion AND #status = :active AND #current.#state = :answered" +
+					(meta.prefetch?.jobId
+						? " AND prefetch.jobId = :oldJobId"
+						: " AND attribute_not_exists(prefetch)"),
+				UpdateExpression:
+					"SET prefetch = :prefetch, version = version + :one, updatedAt = :updatedAt, userStatusPk = :userStatusPk, userStatusSk = :userStatusSk, abandonAfter = :abandonAfter, abandonPk = :abandonPk, abandonSk = :abandonSk",
+				ExpressionAttributeNames: {
+					"#status": "status",
+					"#current": "current",
+					"#state": "state",
+				},
+				ExpressionAttributeValues: {
+					":userId": input.userId,
+					":expectedVersion": expectedVersion,
+					":active": "ACTIVE",
+					":answered": "ANSWERED",
+					":prefetch": prefetch,
+					":one": 1,
+					":updatedAt": updatedAt,
+					":userStatusPk": statusKeys.userStatusPk,
+					":userStatusSk": statusKeys.userStatusSk,
+					":abandonAfter": abandonAfter,
+					":abandonPk": activeAbandonKeys.abandonPk,
+					":abandonSk": activeAbandonKeys.abandonSk,
+					...(meta.prefetch?.jobId ? { ":oldJobId": meta.prefetch.jobId } : {}),
+				},
+			}),
+		);
+	} catch (error) {
+		if (isConditionalCheckFailed(error)) {
+			throw new ApiError("session state changed, reload and retry", 409);
+		}
+		throw error;
+	}
+
+	return getSessionMeta(input.sessionId);
+}
+
 export async function nextSessionQuestion(
 	input: NextInput,
-): Promise<SessionDto> {
+): Promise<NextSessionQuestionResult> {
 	const meta = await getSessionMeta(input.sessionId);
 	if (meta.userId !== input.userId) {
 		throw new ApiError("session not found", 404);
@@ -643,16 +892,53 @@ export async function nextSessionQuestion(
 	// GENERATE/MIXED のprefetch job作成に進ませない。
 	assertGenerationAllowed(meta.mode, input.canGenerateQuestions);
 
-	const question =
-		meta.prefetch?.state === "READY" && meta.prefetch.questionId
-			? await getQuestion(meta.prefetch.questionId)
-			: await selectQuestion({
-					cert: meta.cert,
-					domain: nextDomain(meta),
-					domainSelection: meta.domainSelection,
-					mode: meta.mode,
-					excludeQuestionIds: meta.lastSeenQuestionIds,
-				});
+	let question: QuestionItem | undefined;
+	if (meta.prefetch?.state === "READY" && meta.prefetch.questionId) {
+		question = await getQuestion(meta.prefetch.questionId);
+	} else if (
+		meta.prefetch?.state === "QUEUED" &&
+		(meta.mode === "GENERATE" || meta.mode === "MIXED")
+	) {
+		return {
+			session: toSessionDto(meta, await getQuestion(meta.current.questionId)),
+			preparing: true,
+		};
+	} else if (
+		!meta.prefetch ||
+		meta.prefetch.state === "FAILED" ||
+		meta.prefetch.state === "IDLE" ||
+		(meta.prefetch.state === "READY" && !meta.prefetch.questionId)
+	) {
+		const retryPrefetch = await createAndRunPrefetchJob({
+			sessionId: input.sessionId,
+			userId: input.userId,
+			cert: meta.cert,
+			domainSelection: meta.domainSelection,
+			domain: nextDomain(meta),
+			mode: meta.mode,
+			targetSequence: meta.current.sequence + 1,
+			excludeQuestionIds: meta.lastSeenQuestionIds,
+		});
+
+		if (retryPrefetch.state === "READY" && retryPrefetch.questionId) {
+			question = await getQuestion(retryPrefetch.questionId);
+		} else {
+			const updatedMeta = await replacePrefetch(meta, input, retryPrefetch);
+			return {
+				session: toSessionDto(
+					updatedMeta,
+					await getQuestion(meta.current.questionId),
+				),
+				preparing: true,
+			};
+		}
+	} else {
+		question = await findBankQuestion({
+			cert: meta.cert,
+			domain: nextDomain(meta),
+			excludeQuestionIds: meta.lastSeenQuestionIds,
+		});
+	}
 
 	const updatedAt = nowIso();
 	const expectedVersion = input.version ?? meta.version;
@@ -732,5 +1018,5 @@ export async function nextSessionQuestion(
 	}
 
 	const updatedMeta = await getSessionMeta(input.sessionId);
-	return toSessionDto(updatedMeta, question);
+	return { session: toSessionDto(updatedMeta, question), preparing: false };
 }

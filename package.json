@@ -12,6 +12,7 @@
     "build": "npm run build -w @aws-mon/shared && npm run build -w @aws-mon/api && npm run build -w @aws-mon/web",
     "format": "biome check --write .",
     "lint": "biome ci .",
+    "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present"
   },
   "devDependencies": {
