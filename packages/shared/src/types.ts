@@ -113,6 +113,8 @@ export type QuestionItem = {
 	staleSk?: string;
 	hashPk?: string;
 	hashSk?: string;
+	listPk?: string;
+	listSk?: string;
 	createdAt: string;
 	updatedAt: string;
 	deleteAt?: number;

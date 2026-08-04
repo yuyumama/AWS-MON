@@ -20,6 +20,10 @@ import {
 } from "./http.js";
 import { runRunnableJobs } from "./jobRepository.js";
 import {
+	listQuestionItems,
+	parseQuestionListQuery,
+} from "./questionListRepository.js";
+import {
 	getAnsweredQuestion,
 	saveGeneratedQuestion,
 } from "./questionRepository.js";
@@ -248,6 +252,23 @@ app.put("/reviews/:questionId", async (c) => {
 			marked: body.marked,
 		});
 		return c.json({ status: "ok", ...state });
+	} catch (e) {
+		return errorResponse(c, e);
+	}
+});
+
+// 全ユーザー共通の問題バンク一覧。セッションや復習状態は混ぜない。
+app.get("/questions", async (c) => {
+	try {
+		const query = parseQuestionListQuery({
+			cert: c.req.query("cert"),
+			domain: c.req.query("domain"),
+			status: c.req.query("status"),
+			limit: c.req.query("limit"),
+			cursor: c.req.query("cursor"),
+		});
+		const result = await listQuestionItems(query);
+		return c.json({ status: "ok", ...result });
 	} catch (e) {
 		return errorResponse(c, e);
 	}

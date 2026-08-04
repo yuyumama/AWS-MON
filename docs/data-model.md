@@ -52,6 +52,7 @@ DynamoDB は **単一テーブルではなく、責務別の4テーブル**で�
 | AP-12 | 長期間更新されていない active セッションを abandoned 化する | `AwsMonSessions.GSI2_AbandonDue` |
 | AP-13 | `questionId` で問題単体の回答済みビュー（問題本文・選択肢・正解・解説）を取得する | `AwsMonQuestions` primary key |
 | AP-14 | 所有するセッションと回答履歴を削除し、関連する生成待ちを停止する | `AwsMonSessions` primary key Query + BatchWrite、`AwsMonGenerationJobs` primary key Update |
+| AP-15 | 資格×任意のドメイン×状態で生成済み問題を作成日時の降順に一覧する | `AwsMonQuestions.GSI4_QuestionList` + `BatchGetItem` |
 
 ## GSI projection 方針
 
@@ -62,6 +63,7 @@ GSI は必要属性だけを投影する。特に `correct` と `explanation` �
 | `AwsMonQuestions.GSI1_BankRandom` | `INCLUDE` | `cert`, `domain`, `domainSelection`, `type`, `question`, `options`, `validUntil`, `status` |
 | `AwsMonQuestions.GSI2_StaleDue` | `KEYS_ONLY` | なし |
 | `AwsMonQuestions.GSI3_ContentHash` | `KEYS_ONLY` | なし |
+| `AwsMonQuestions.GSI4_QuestionList` | `INCLUDE` | `domain`, `status` |
 | `AwsMonSessions.GSI1_UserStatus` | `INCLUDE` | `userId`, `status`, `cert`, `domainSelection`, `mode`, `current`, `prefetch`, `answeredCount`, `correctCount`, `startedAt`, `updatedAt`, `completedAt` |
 | `AwsMonSessions.GSI2_AbandonDue` | `KEYS_ONLY` | なし |
 | `AwsMonUserActivity.GSI1_ReviewList` | `INCLUDE` | `questionId`, `cert`, `domain`, `reviewMarked`, `reviewMarkedAt`, `answerCount`, `correctCount`, `lastCorrect`, `lastAnsweredAt`, `weaknessScore`, `updatedAt` |
@@ -164,6 +166,34 @@ Projection: `KEYS_ONLY`。
 
 保存前に `hashPk` を Query し、候補 `questionId` を GetItem して status を確認する。既存の active/stale 問題があれば同一問題として再利用または `REJECTED` 扱いにする。GSI は結果整合なので、同時生成時の完全な重複排除までは要求しない。
 
+#### `GSI4_QuestionList`
+
+生成・保存済み問題を資格ごとに作成日時の降順で一覧するための sparse index。
+
+| Key | 値 |
+|---|---|
+| `listPk` | `QLIST#CERT#<cert>` |
+| `listSk` | `<createdAt>#Q#<questionId>` |
+
+Projection: `INCLUDE`。FilterExpression に必要な `domain`, `status` だけを追加投影する。
+一覧 DTO の要約は、GSI で得た `questionId` を最大100件ずつ BatchGet し、既存の
+`deriveQuestionSummary`（保存済み `summary`、解説概要、問題文の順）で作る。
+
+資格ごとに1パーティションとしたのは、ドメインを跨ぐ「すべて」の一覧でもファンアウトや
+複合カーソルを不要にし、全ケースで `createdAt` 降順という一貫した順序を保つためである。
+ドメインと状態は FilterExpression で絞り込む。DynamoDB の `Limit` はフィルタ前の評価件数に
+適用されるため、要求件数に満たない間は `LastEvaluatedKey` から内部 Query を継続する。
+無限ループを避けるため、API は1リクエスト最大25回で打ち切り、続きがあれば不透明化した
+cursor を返す。Scan は一覧取得には使わない。
+
+バケット分割をしないため、将来は資格単位のパーティションが大きくなり得る。ただし資格単位で
+分散されることと当面のデータ量を踏まえ、現時点では複数バケットを採らない。必要になれば
+新しい key version / GSI でバケット化する余地を残す。
+
+`listPk/listSk` は `status=ACTIVE` または `STALE` のときだけ設定し、`REJECTED` / `ARCHIVED`
+では属性ごと削除する。GSI 作成前の既存問題には属性がないため、`local/seed` の冪等な
+backfill を一度実行する必要がある。移行時の全件把握に限り、backfill スクリプト内では Scan を使う。
+
 ### 主な属性
 
 ```ts
@@ -230,6 +260,8 @@ type QuestionItem = {
   staleSk?: string;
   hashPk?: string;
   hashSk?: string;
+  listPk?: string;
+  listSk?: string;
 
   createdAt: string;
   updatedAt: string;
@@ -645,6 +677,7 @@ worker は session を更新するとき、必ず次を condition に入れる�
 | `Question.bankPk/bankSk` | `status=ACTIVE` になったとき | `REJECTED`, `STALE`, `ARCHIVED` へ遷移したとき |
 | `Question.stalePk/staleSk` | `status=ACTIVE` になったとき | `REJECTED`, `STALE`, `ARCHIVED` へ遷移したとき |
 | `Question.hashPk/hashSk` | `status=ACTIVE` または `STALE` の問題 | `REJECTED` または `ARCHIVED` へ遷移したとき。`STALE` では保持し、重複候補として検出できるようにする |
+| `Question.listPk/listSk` | `status=ACTIVE` または `STALE` の問題 | `REJECTED` または `ARCHIVED` へ遷移したとき。`STALE` は一覧対象なので保持する |
 | `Session.userStatusPk/userStatusSk` | `META` item のみ常に設定 | `ATTEMPT` item には設定しない。status 変更時は新 status の key に更新 |
 | `Session.abandonPk/abandonSk` | `META.status=ACTIVE` のみ設定 | `COMPLETED` または `ABANDONED` へ遷移したとき |
 | `UserActivity.reviewPk/reviewSk` | `reviewMarked=true` のみ設定 | 復習マーク解除時 |
@@ -657,6 +690,7 @@ worker は session を更新するとき、必ず次を condition に入れる�
 - `RUNNING` 以降の job が `GSI1_Runnable` に出ない。
 - stale 化した question が `GSI1_BankRandom` と `GSI2_StaleDue` に出ない。
 - 復習マーク解除済み item が `GSI1_ReviewList` に出ない。
+- `REJECTED` / `ARCHIVED` の question が `GSI4_QuestionList` に出ない。
 
 ## 主要フロー
 
@@ -711,6 +745,16 @@ worker は session を更新するとき、必ず次を condition に入れる�
 1. maintenance job が `staleBucket` 全体を走査し、`GSI2_StaleDue` から `validUntil <= now` の question を取得する。
 2. `status=ACTIVE` を condition にして `STALE` へ更新する。
 3. `bankPk/bankSk` と `stalePk/staleSk` を削除する。`hashPk/hashSk` は保持する。
+4. `listPk/listSk` は保持し、問題リストでは `STALE` として表示できるようにする。
+
+### 生成済み問題一覧（AP-15）
+
+1. API が `cert` を必須検証し、`GSI4_QuestionList` の資格パーティションを降順 Query する。
+2. `domain`（任意）と `status`（`ACTIVE` / `STALE`、省略時は両方）を FilterExpression で絞る。
+3. フィルタ後の件数が要求 `limit` に満たなければ、`LastEvaluatedKey` から内部 Query を続ける。
+4. 一覧 DTO は要約・資格・ドメイン・状態・作成/更新日時だけを返し、問題全文、回答履歴、
+   セッション、復習状態などユーザー固有情報を含めない。
+5. 詳細を展開したときだけ `GET /questions/:questionId`（AP-13）を呼ぶ。
 
 ### セッション abandoned 化
 

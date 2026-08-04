@@ -12,6 +12,7 @@ import {
 	type QuestionItem,
 	type QuestionType,
 	type QuizItem,
+	questionListKeys,
 	randomSort,
 	resolveTableNames,
 	type SourceRef,
@@ -425,6 +426,7 @@ export async function saveGeneratedQuestion(
 	const bank = bankKeys({ cert, domain, questionId, randomSort: sort });
 	const stale = staleKeys({ questionId, validUntil });
 	const contentHashKeys = hashKeys(contentHash, questionId);
+	const listKeys = questionListKeys({ cert, createdAt, questionId });
 
 	const item: QuestionItem = {
 		questionId,
@@ -452,6 +454,7 @@ export async function saveGeneratedQuestion(
 		...bank,
 		...stale,
 		...contentHashKeys,
+		...listKeys,
 		createdAt,
 		updatedAt: createdAt,
 	};

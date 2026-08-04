@@ -82,6 +82,19 @@ describe("saveGeneratedQuestion", () => {
 
 		expect(result.item).not.toHaveProperty("summary");
 	});
+
+	it("新規ACTIVE問題に一覧用のsparse GSIキーを保存する", async () => {
+		const result = await saveGeneratedQuestion({
+			cert: "aip",
+			domain: "d1",
+			quiz: quiz(),
+		});
+
+		expect(result.item).toMatchObject({
+			listPk: "QLIST#CERT#aip",
+			listSk: expect.stringMatching(/#Q#q_/),
+		});
+	});
 });
 
 describe("getAnsweredQuestion", () => {

@@ -12,9 +12,10 @@ variable "gsi_names" {
   description = "DynamoDB GSI names. Keep these in sync with packages/shared."
   type = object({
     questions = object({
-      bank_random  = string
-      stale_due    = string
-      content_hash = string
+      bank_random   = string
+      stale_due     = string
+      content_hash  = string
+      question_list = string
     })
     sessions = object({
       user_status = string
@@ -30,9 +31,10 @@ variable "gsi_names" {
   })
   default = {
     questions = {
-      bank_random  = "GSI1_BankRandom"
-      stale_due    = "GSI2_StaleDue"
-      content_hash = "GSI3_ContentHash"
+      bank_random   = "GSI1_BankRandom"
+      stale_due     = "GSI2_StaleDue"
+      content_hash  = "GSI3_ContentHash"
+      question_list = "GSI4_QuestionList"
     }
     sessions = {
       user_status = "GSI1_UserStatus"

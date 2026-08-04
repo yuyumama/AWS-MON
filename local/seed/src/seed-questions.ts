@@ -4,6 +4,7 @@ import {
 	hashKeys,
 	type QuestionItem,
 	type QuizItem,
+	questionListKeys,
 	randomSort,
 	resolveTableNames,
 	staleDaysForCert,
@@ -186,6 +187,11 @@ function toQuestionItem(
 	});
 	const stale = staleKeys({ questionId, validUntil });
 	const contentHashKeys = hashKeys(contentHash, questionId);
+	const listKeys = questionListKeys({
+		cert: fixture.cert,
+		createdAt,
+		questionId,
+	});
 
 	return {
 		questionId,
@@ -220,6 +226,7 @@ function toQuestionItem(
 		...bank,
 		...stale,
 		...contentHashKeys,
+		...listKeys,
 		createdAt,
 		updatedAt: createdAt,
 	};

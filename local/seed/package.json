@@ -4,6 +4,7 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
+		"backfill:question-list": "tsx src/backfill-question-list.ts",
 		"seed": "tsx src/seed-questions.ts",
 		"typecheck": "tsc --noEmit"
 	},
