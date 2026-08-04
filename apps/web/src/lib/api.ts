@@ -74,7 +74,7 @@ async function requestWithStatus<T>(
 		| (Envelope & Record<string, unknown>)
 		| undefined;
 
-	if (!res.ok || body?.status !== "ok") {
+	if (!res.ok || (res.status !== 204 && body?.status !== "ok")) {
 		throw new ApiClientError(
 			body?.message ?? `HTTP ${res.status}`,
 			res.status,
@@ -140,6 +140,12 @@ export async function getSession(sessionId: string): Promise<SessionDto> {
 		`/sessions/${encodeURIComponent(sessionId)}`,
 	);
 	return body.session;
+}
+
+export async function deleteSession(sessionId: string): Promise<void> {
+	await requestWithStatus<void>(`/sessions/${encodeURIComponent(sessionId)}`, {
+		method: "DELETE",
+	});
 }
 
 export async function submitAnswer(

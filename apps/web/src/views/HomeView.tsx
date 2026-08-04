@@ -3,10 +3,22 @@ import type {
 	SessionMode,
 	SessionSummaryDto,
 } from "@aws-mon/shared";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { SessionListSkeleton } from "../components/Loading";
-import { errorMessage, listSessions, startSession } from "../lib/api";
-import { aipDomains, certOptions, modeLabel, modeOptions } from "../lib/certs";
+import {
+	ApiClientError,
+	deleteSession,
+	errorMessage,
+	listSessions,
+	startSession,
+} from "../lib/api";
+import {
+	aipDomains,
+	certName,
+	certOptions,
+	modeLabel,
+	modeOptions,
+} from "../lib/certs";
 
 type Props = {
 	// 生成権限(/me の canGenerateQuestions)。無いユーザーには GENERATE/MIXED を出さない。
@@ -38,6 +50,14 @@ export function HomeView({ canGenerate, onOpenSession, onResume }: Props) {
 
 	const [sessions, setSessions] = useState<SessionSummaryDto[] | null>(null);
 	const [sessionsError, setSessionsError] = useState<string | null>(null);
+	const [confirmSession, setConfirmSession] =
+		useState<SessionSummaryDto | null>(null);
+	const [deleting, setDeleting] = useState(false);
+	const [deleteError, setDeleteError] = useState<string | null>(null);
+	const dialogRef = useRef<HTMLDivElement>(null);
+	const cancelButtonRef = useRef<HTMLButtonElement>(null);
+	const deleteTriggerRef = useRef<HTMLButtonElement | null>(null);
+	const resumeHeadingRef = useRef<HTMLHeadingElement>(null);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -53,6 +73,40 @@ export function HomeView({ canGenerate, onOpenSession, onResume }: Props) {
 		};
 	}, []);
 
+	useEffect(() => {
+		if (!confirmSession) return;
+		cancelButtonRef.current?.focus();
+		const dialog = dialogRef.current;
+		const onKeyDown = (event: KeyboardEvent) => {
+			if (event.key === "Escape" && !deleting) {
+				event.preventDefault();
+				setConfirmSession(null);
+				setDeleteError(null);
+				requestAnimationFrame(() => deleteTriggerRef.current?.focus());
+				return;
+			}
+			if (event.key !== "Tab" || !dialog) return;
+			const focusable = Array.from(
+				dialog.querySelectorAll<HTMLElement>("button:not(:disabled)"),
+			);
+			if (focusable.length === 0) {
+				event.preventDefault();
+				return;
+			}
+			const first = focusable[0];
+			const last = focusable.at(-1);
+			if (event.shiftKey && document.activeElement === first) {
+				event.preventDefault();
+				last?.focus();
+			} else if (!event.shiftKey && document.activeElement === last) {
+				event.preventDefault();
+				first?.focus();
+			}
+		};
+		document.addEventListener("keydown", onKeyDown);
+		return () => document.removeEventListener("keydown", onKeyDown);
+	}, [confirmSession, deleting]);
+
 	const start = async () => {
 		setStarting(true);
 		setStartError(null);
@@ -66,6 +120,46 @@ export function HomeView({ canGenerate, onOpenSession, onResume }: Props) {
 		} catch (error) {
 			setStartError(errorMessage(error));
 			setStarting(false);
+		}
+	};
+
+	const closeDeleteDialog = () => {
+		if (deleting) return;
+		setConfirmSession(null);
+		setDeleteError(null);
+		requestAnimationFrame(() => deleteTriggerRef.current?.focus());
+	};
+
+	const removeSessionFromList = (sessionId: string) => {
+		setSessions(
+			(current) =>
+				current?.filter((session) => session.sessionId !== sessionId) ??
+				current,
+		);
+	};
+
+	const confirmDelete = async () => {
+		if (!confirmSession || deleting) return;
+		const sessionId = confirmSession.sessionId;
+		setDeleting(true);
+		setDeleteError(null);
+		try {
+			await deleteSession(sessionId);
+			removeSessionFromList(sessionId);
+			setConfirmSession(null);
+			requestAnimationFrame(() => resumeHeadingRef.current?.focus());
+		} catch (error) {
+			if (error instanceof ApiClientError && error.status === 404) {
+				removeSessionFromList(sessionId);
+				setConfirmSession(null);
+				requestAnimationFrame(() => resumeHeadingRef.current?.focus());
+			} else {
+				setDeleteError(
+					`セッションを削除できませんでした。${errorMessage(error)}`,
+				);
+			}
+		} finally {
+			setDeleting(false);
 		}
 	};
 
@@ -149,7 +243,12 @@ export function HomeView({ canGenerate, onOpenSession, onResume }: Props) {
 			</section>
 
 			<section className="sheet" aria-labelledby="resume-heading">
-				<h2 className="sheet-heading" id="resume-heading">
+				<h2
+					ref={resumeHeadingRef}
+					className="sheet-heading"
+					id="resume-heading"
+					tabIndex={-1}
+				>
 					<span className="sheet-no">02</span>途中のセッションを再開する
 				</h2>
 
@@ -164,7 +263,7 @@ export function HomeView({ canGenerate, onOpenSession, onResume }: Props) {
 				{sessions !== null && sessions.length > 0 && (
 					<ul className="session-list">
 						{sessions.map((session) => (
-							<li key={session.sessionId}>
+							<li className="session-item" key={session.sessionId}>
 								<button
 									type="button"
 									className="session-row"
@@ -184,11 +283,74 @@ export function HomeView({ canGenerate, onOpenSession, onResume }: Props) {
 									</span>
 									<span className="session-resume">再開 →</span>
 								</button>
+								<button
+									type="button"
+									className="session-delete"
+									aria-label={`${certName(session.cert)}のセッションを削除`}
+									onClick={(event) => {
+										event.stopPropagation();
+										deleteTriggerRef.current = event.currentTarget;
+										setDeleteError(null);
+										setConfirmSession(session);
+									}}
+								>
+									削除
+								</button>
 							</li>
 						))}
 					</ul>
 				)}
 			</section>
+
+			{confirmSession && (
+				<div className="dialog-backdrop">
+					<div
+						ref={dialogRef}
+						className="confirm-dialog"
+						role="dialog"
+						aria-modal="true"
+						aria-labelledby="delete-dialog-title"
+						aria-describedby="delete-dialog-description"
+					>
+						<p className="confirm-dialog-kicker">SESSION DELETE</p>
+						<h2 id="delete-dialog-title">このセッションを削除しますか？</h2>
+						<div id="delete-dialog-description" className="delete-target">
+							<strong>{certName(confirmSession.cert)}</strong>
+							<span>
+								進捗: 第{confirmSession.current?.sequence ?? "—"}問 ・{" "}
+								{confirmSession.stats.answeredCount}問回答済み
+							</span>
+						</div>
+						<p className="confirm-dialog-note">
+							この操作は取り消せません。復習マークと苦手集計は残ります。
+						</p>
+						{deleteError && (
+							<p className="notice notice-error" role="alert">
+								{deleteError}
+							</p>
+						)}
+						<div className="confirm-dialog-actions">
+							<button
+								ref={cancelButtonRef}
+								type="button"
+								className="button"
+								onClick={closeDeleteDialog}
+								disabled={deleting}
+							>
+								キャンセル
+							</button>
+							<button
+								type="button"
+								className="button button-danger"
+								onClick={() => void confirmDelete()}
+								disabled={deleting}
+							>
+								{deleting ? "削除中…" : "削除する"}
+							</button>
+						</div>
+					</div>
+				</div>
+			)}
 		</div>
 	);
 }

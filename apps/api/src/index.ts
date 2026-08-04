@@ -25,6 +25,7 @@ import {
 } from "./questionRepository.js";
 import {
 	answerSession,
+	deleteSession,
 	getSession,
 	listSessions,
 	nextSessionQuestion,
@@ -148,6 +149,18 @@ app.get("/sessions/:sessionId", async (c) => {
 			sessionId: c.req.param("sessionId"),
 		});
 		return c.json({ status: "ok", session });
+	} catch (e) {
+		return errorResponse(c, e);
+	}
+});
+
+app.delete("/sessions/:sessionId", async (c) => {
+	try {
+		await deleteSession({
+			userId: getAuth(c).userId,
+			sessionId: c.req.param("sessionId"),
+		});
+		return c.body(null, 204);
 	} catch (e) {
 		return errorResponse(c, e);
 	}

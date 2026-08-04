@@ -20,10 +20,13 @@ import {
 	userStatusKeys,
 } from "@aws-mon/shared";
 import {
+	BatchWriteCommand,
+	type BatchWriteCommandInput,
 	GetCommand,
 	PutCommand,
 	QueryCommand,
 	TransactWriteCommand,
+	type TransactWriteCommandInput,
 	UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
 import { dynamoDoc } from "./dynamo.js";
@@ -78,6 +81,11 @@ export type ListSessionsInput = {
 	userId: string;
 	status?: SessionMetaItem["status"];
 	limit?: number;
+};
+
+export type DeleteSessionInput = {
+	userId: string;
+	sessionId: string;
 };
 
 function nowIso(): string {
@@ -329,6 +337,157 @@ export async function listSessions(
 	return (out.Items ?? [])
 		.filter(isSessionMetaItem)
 		.map((item) => toSessionSummaryDto(item));
+}
+
+async function deleteSessionAttempts(
+	sessionId: string,
+	expectedUserId: string,
+): Promise<void> {
+	let exclusiveStartKey: Record<string, unknown> | undefined;
+	const keys: Array<{ sessionId: string; itemKey: string }> = [];
+	do {
+		const out = await dynamoDoc.send(
+			new QueryCommand({
+				TableName: tables.sessions,
+				KeyConditionExpression: "sessionId = :sessionId",
+				ExpressionAttributeValues: { ":sessionId": sessionId },
+				ProjectionExpression: "sessionId, itemKey, userId",
+				ExclusiveStartKey: exclusiveStartKey,
+				ConsistentRead: true,
+			}),
+		);
+		for (const item of out.Items ?? []) {
+			if (
+				typeof item.sessionId !== "string" ||
+				typeof item.itemKey !== "string" ||
+				!item.itemKey.startsWith("ATTEMPT#") ||
+				item.userId !== expectedUserId
+			) {
+				return;
+			}
+			keys.push({ sessionId: item.sessionId, itemKey: item.itemKey });
+		}
+		exclusiveStartKey = out.LastEvaluatedKey;
+	} while (exclusiveStartKey);
+
+	for (let offset = 0; offset < keys.length; offset += 25) {
+		let requests: NonNullable<BatchWriteCommandInput["RequestItems"]>[string] =
+			keys.slice(offset, offset + 25).map((key) => ({
+				DeleteRequest: { Key: key },
+			}));
+		do {
+			const batch = await dynamoDoc.send(
+				new BatchWriteCommand({
+					RequestItems: { [tables.sessions]: requests },
+				}),
+			);
+			requests = batch.UnprocessedItems?.[tables.sessions] ?? [];
+		} while (requests.length > 0);
+	}
+}
+
+async function getGenerationJob(jobId: string) {
+	const out = await dynamoDoc.send(
+		new GetCommand({
+			TableName: tables.generationJobs,
+			Key: { jobId },
+			ConsistentRead: true,
+		}),
+	);
+	return out.Item;
+}
+
+export async function deleteSession(
+	input: DeleteSessionInput,
+	transactionRetryCount = 0,
+): Promise<void> {
+	let meta: SessionMetaItem;
+	try {
+		meta = await getSessionMeta(input.sessionId);
+	} catch (error) {
+		if (error instanceof ApiError && error.status === 404) {
+			// META 削除後に ATTEMPT の一括削除だけ失敗した再送も収束させる。
+			await deleteSessionAttempts(input.sessionId, input.userId);
+		}
+		throw error;
+	}
+	if (meta.userId !== input.userId) {
+		throw new ApiError("session not found", 404);
+	}
+
+	const jobIds = [
+		...new Set([meta.initial?.jobId, meta.prefetch?.jobId]),
+	].filter((jobId): jobId is string => typeof jobId === "string");
+	const [guardOut, ...jobs] = await Promise.all([
+		dynamoDoc.send(
+			new GetCommand({
+				TableName: tables.sessions,
+				Key: initialSessionGuardKey(meta),
+				ConsistentRead: true,
+			}),
+		),
+		...jobIds.map(getGenerationJob),
+	]);
+	const guard = isInitialSessionGuardItem(guardOut.Item)
+		? guardOut.Item
+		: undefined;
+	const cancelledAt = nowIso();
+	const transactItems: NonNullable<TransactWriteCommandInput["TransactItems"]> =
+		[
+			{
+				Delete: {
+					TableName: tables.sessions,
+					Key: { sessionId: input.sessionId, itemKey: "META" },
+					ConditionExpression:
+						"attribute_exists(sessionId) AND userId = :userId",
+					ExpressionAttributeValues: { ":userId": input.userId },
+				},
+			},
+		];
+	for (const job of jobs) {
+		if (job?.state !== "QUEUED" && job?.state !== "RETRY_WAIT") continue;
+		transactItems.push({
+			Update: {
+				TableName: tables.generationJobs,
+				Key: { jobId: job.jobId },
+				ConditionExpression: "#state = :queued OR #state = :retryWait",
+				UpdateExpression:
+					"SET #state = :cancelled, finishedAt = :cancelledAt, updatedAt = :cancelledAt REMOVE runPk, runSk",
+				ExpressionAttributeNames: { "#state": "state" },
+				ExpressionAttributeValues: {
+					":queued": "QUEUED",
+					":retryWait": "RETRY_WAIT",
+					":cancelled": "CANCELLED",
+					":cancelledAt": cancelledAt,
+				},
+			},
+		});
+	}
+	if (!guard || guard.preparingSessionId === input.sessionId) {
+		transactItems.push({
+			Delete: {
+				TableName: tables.sessions,
+				Key: initialSessionGuardKey(meta),
+				ConditionExpression:
+					"attribute_not_exists(preparingSessionId) OR preparingSessionId = :sessionId",
+				ExpressionAttributeValues: { ":sessionId": input.sessionId },
+			},
+		});
+	}
+
+	try {
+		await dynamoDoc.send(
+			new TransactWriteCommand({ TransactItems: transactItems }),
+		);
+	} catch (error) {
+		if (isTransactionCanceled(error) && transactionRetryCount < 3) {
+			// job/guard が読み取り直後に遷移した場合は META が残るため、最新状態で再構成する。
+			return deleteSession(input, transactionRetryCount + 1);
+		}
+		throw error;
+	}
+
+	await deleteSessionAttempts(input.sessionId, input.userId);
 }
 
 // GENERATE/MIXED は Bedrock/LLM 課金に到達し得るため生成権限を必須にする(ADR 0006)。
