@@ -28,6 +28,16 @@ cd local/seed
 npm run typecheck
 ```
 
+既存問題へ `GSI4_QuestionList` のキーを補完する場合は、先に dry-run で対象件数を確認する。
+この処理は冪等で、`ACTIVE` / `STALE` にはキーを設定し、`REJECTED` / `ARCHIVED` からは
+キー属性を削除する。
+
+```bash
+cd local/seed
+npm run backfill:question-list -- --dry-run
+npm run backfill:question-list
+```
+
 既定では `http://localhost:8000` の DynamoDB Local に接続する。
 
 環境変数で接続先やテーブル名を上書きできる。

@@ -158,7 +158,7 @@ a {
 	text-underline-offset: 3px;
 }
 
-/* ---- ナビ(演習 / 復習リスト) ---- */
+/* ---- ナビ(演習 / 問題リスト / 復習リスト) ---- */
 
 .nav {
 	display: flex;
@@ -1289,6 +1289,44 @@ button.option:hover:not(:disabled) {
 	color: var(--ng);
 }
 
+/* ---- 生成済み問題リスト ---- */
+
+.question-list-head {
+	margin-bottom: 18px;
+}
+
+.question-list-head .sheet-heading {
+	margin-bottom: 14px;
+}
+
+.question-list-filters {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+	gap: 12px;
+}
+
+.question-list-filter .field-label {
+	margin-bottom: 4px;
+}
+
+.question-list-date {
+	margin-left: auto;
+	font-family: var(--font-mono);
+	font-size: 11px;
+	color: var(--ink-soft);
+}
+
+.question-list .review-detail {
+	padding-top: 12px;
+	border-top: 1px dashed var(--line);
+}
+
+.question-list-more {
+	display: flex;
+	justify-content: center;
+	margin-top: 18px;
+}
+
 /* ---- レスポンシブ ---- */
 
 @media (max-width: 560px) {
@@ -1332,6 +1370,15 @@ button.option:hover:not(:disabled) {
 	.action-error {
 		align-items: flex-start;
 		flex-direction: column;
+	}
+
+	.question-list-filters {
+		grid-template-columns: 1fr;
+	}
+
+	.question-list-date {
+		width: 100%;
+		margin-left: 0;
 	}
 }
 

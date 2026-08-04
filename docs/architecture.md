@@ -65,8 +65,8 @@ flowchart TB
 
 | コンポーネント | 技術 | 実行/配信場所 | 状態 |
 |---|---|---|---|
-| `apps/web` | Vite + React + TS | S3 + CloudFront | 主要画面(資格選択/出題/解説/セッション再開・削除/復習リスト)を実装済み。セッション削除はキーボード操作可能な確認ダイアログを挟む。Cognitoログインは自前フォーム+SRP(`amazon-cognito-identity-js`、`VITE_AUTH_MODE=cognito`)。ローカルは vite dev server(:5173) が `/api` を api(:8080) にプロキシ |
-| `apps/api` | Hono + Lambda Web Adapter (TS) | Lambda | セッション開始・取得・一覧・削除（`DELETE /sessions/:id`）、回答、次問、dev用endpoint、agent HTTP連携、認証・生成権限(`src/auth.ts`)を実装済み |
+| `apps/web` | Vite + React + TS | S3 + CloudFront | 主要画面(資格選択/出題/解説/セッション再開・削除/問題リスト/復習リスト)を実装済み。セッション削除はキーボード操作可能な確認ダイアログを挟む。問題リストは資格・AIPドメインをURL queryに保持し、一覧から詳細を遅延取得する。Cognitoログインは自前フォーム+SRP(`amazon-cognito-identity-js`、`VITE_AUTH_MODE=cognito`)。ローカルは vite dev server(:5173) が `/api` を api(:8080) にプロキシ |
+| `apps/api` | Hono + Lambda Web Adapter (TS) | Lambda | セッション開始・取得・一覧・削除（`DELETE /sessions/:id`）、回答、次問、問題一覧（`GET /questions`）、dev用endpoint、agent HTTP連携、認証・生成権限(`src/auth.ts`)を実装済み |
 | `apps/agent` | Strands Agents + OpenRouter / Bedrock (Python) | AgentCore Runtime | CLI + local HTTP server (`/health`, `/generate`) を実装済み。AWSドキュメントMCPで調査してから生成(調査失敗時のみ調査なしへフォールバック)。既定はOpenRouter（`nvidia/nemotron-3-ultra-550b-a55b:free`）で、`AGENT_MODEL_PROVIDER=bedrock` によりBedrockへ切り替え可。オブザーバビリティ（OTel/ADOT計装・Guardrailsグラウンディングゲート）も実装・ライブ確認済み（[ADR 0007](adr/0007-observability-stack.md)。AgentCore Evaluationsオンライン評価は検証後に [ADR 0011](adr/0011-retire-online-evaluations.md) で廃止） |
 | `packages/shared` | TS型 + テーブル定義 | web/apiがimport | 実装済み |
 | DynamoDB | 4テーブル構成 | AWS / DynamoDB Local | テーブル定義確定。prod（`aws-mon-prod-*`）・localともTerraform適用済み |
@@ -84,9 +84,10 @@ flowchart TB
 | `POST /sessions/:sessionId/next` | 次問への遷移 |
 | `GET /reviews` | 復習マーク済み問題の軽量一覧（要約・集計・状態） |
 | `GET /reviews/:questionId` / `PUT /reviews/:questionId` | 復習状態の取得・更新 |
+| `GET /questions` | 生成済み問題の資格・ドメイン・状態別一覧（要約のみ、cursorページング） |
 | `GET /questions/:questionId` | 問題単体の回答済みビュー（問題本文・選択肢・正解・解説） |
 
-上記はすべて認証必須。復習一覧は問題全文を含めず、「正解と解説を見る」を開いたときだけ問題単体を取得する。
+上記はすべて認証必須。問題リストと復習一覧は問題全文を含めず、項目を展開したときだけ問題単体を取得する。問題リストは全ユーザー共通の問題バンクだけを扱い、セッション・回答・復習状態を返さない。
 
 **ローカルとクラウドの差はほぼ認証のみ**（[ADR 0004](adr/0004-local-first-dev.md)）。`apps/api` はLWA前提で書かれているため、ローカルでは普通のNode Webサーバとして起動し、DynamoDB LocalとLocalStack（`ssm,secretsmanager,s3`のみ、`cognito-idp`は含まない）に接続する。Cognito は別AWSアカウントの既存 User Pool を参照し、AWS-MON 側 Terraform では新規作成しない。OpenRouterは外部APIを直接呼び、Bedrock/AgentCore Runtimeはローカルで再現しない。ロジックはローカル、観測は実環境、と役割分担する。
 
@@ -251,6 +252,7 @@ job の失敗時は `errorCode` ごとの試行上限とbackoffを使う（[ADR 
 - 問題本文はセッションに埋め込まず`questionId`参照のみ保持する。source of truthは`AwsMonQuestions`（`apps/api/src/questionBankRepository.ts`の`getQuestion`）。
 - 未回答の問題を返すAPIは必ず`toQuestionDto(item, visibility)`を通し、`answering`時は`correct`/`explanation`を落とす（`packages/shared`）。
 - 復習一覧（`GET /reviews`）は要約と集計だけの軽量DTOを返し、問題全文は`GET /questions/:questionId`で必要時に回答済みビューとして取得する。
+- 問題リスト（`GET /questions`）は`GSI4_QuestionList`を資格単位でQueryし、ドメイン・状態のFilterExpressionを内部ページ補充しながら適用する。一覧DTOにはユーザー固有情報を混ぜない。
 - 先読みは`Session.prefetch`に問題本体を埋め込まず、`GenerationJob`と`questionId`参照で表現する（`apps/api/src/jobRepository.ts`の`reflectJobOnSession`）。
 - 認証・認可は `apps/api/src/auth.ts` に実装。`AUTH_MODE=dev`（既定）は `x-dev-user-id` devシム（無ければ `dev-user`）、`AUTH_MODE=cognito` は別AWSアカウントの既存 Cognito User Pool の access token を `aws-jwt-verify` で検証（issuer / client_id / token_use / 署名）して `sub` を `userId` にする。生成権限 `canGenerateQuestions` は `cognito:groups` に `COGNITO_GENERATE_GROUP` が含まれるかで判定し、`GENERATE` / `MIXED`（セッション開始・`next` の生成フォールバック・prefetch job 作成）は権限が無いと403。**クラウド配備は `AUTH_MODE=cognito` を必須とし、devシムは信用しない**（[ADR 0006](adr/0006-auth-cognito-cloud-only.md)）。
 

@@ -2,6 +2,7 @@
 import type {
 	AnsweredQuestionDto,
 	AnswerResultDto,
+	QuestionListItemDto,
 	ReviewItemDto,
 	ReviewStateDto,
 	SessionDto,
@@ -198,6 +199,23 @@ export async function getQuestion(
 		`/questions/${encodeURIComponent(questionId)}`,
 	);
 	return body.question;
+}
+
+export async function listQuestions(input: {
+	cert: string;
+	domain?: string;
+	status?: "ACTIVE" | "STALE";
+	limit?: number;
+	cursor?: string;
+}): Promise<{ items: QuestionListItemDto[]; nextCursor?: string }> {
+	const query = new URLSearchParams({ cert: input.cert });
+	if (input.domain) query.set("domain", input.domain);
+	if (input.status) query.set("status", input.status);
+	if (input.limit) query.set("limit", String(input.limit));
+	if (input.cursor) query.set("cursor", input.cursor);
+	return request<{ items: QuestionListItemDto[]; nextCursor?: string }>(
+		`/questions?${query.toString()}`,
+	);
 }
 
 export async function getReviewState(

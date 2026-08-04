@@ -91,3 +91,13 @@ export type ReviewItemDto = {
 	// 本体が削除済みの場合はstatusを欠落させ、summaryには欠落を示す文言を返す。
 	questionStatus?: QuestionStatus;
 };
+
+export type QuestionListItemDto = {
+	questionId: string;
+	summary: string;
+	cert: string;
+	domain: string;
+	status: "ACTIVE" | "STALE";
+	createdAt: string;
+	updatedAt: string;
+};

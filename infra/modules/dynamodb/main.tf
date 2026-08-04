@@ -10,6 +10,11 @@ locals {
     "status",
   ]
 
+  question_list_projection = [
+    "domain",
+    "status",
+  ]
+
   session_user_status_projection = [
     "userId",
     "status",
@@ -110,6 +115,16 @@ resource "aws_dynamodb_table" "questions" {
     type = "S"
   }
 
+  attribute {
+    name = "listPk"
+    type = "S"
+  }
+
+  attribute {
+    name = "listSk"
+    type = "S"
+  }
+
   ttl {
     attribute_name = "deleteAt"
     enabled        = true
@@ -135,6 +150,14 @@ resource "aws_dynamodb_table" "questions" {
     hash_key        = "hashPk"
     range_key       = "hashSk"
     projection_type = "KEYS_ONLY"
+  }
+
+  global_secondary_index {
+    name               = var.gsi_names.questions.question_list
+    hash_key           = "listPk"
+    range_key          = "listSk"
+    projection_type    = "INCLUDE"
+    non_key_attributes = local.question_list_projection
   }
 }
 

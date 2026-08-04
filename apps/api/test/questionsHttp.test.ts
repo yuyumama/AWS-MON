@@ -4,6 +4,7 @@ import { questionFixture } from "./fixtures.js";
 
 const httpMocks = vi.hoisted(() => ({
 	getAnsweredQuestion: vi.fn(),
+	listQuestionItems: vi.fn(),
 	serve: vi.fn(),
 }));
 
@@ -13,8 +14,66 @@ vi.mock("../src/questionRepository.js", async (importOriginal) => {
 		await importOriginal<typeof import("../src/questionRepository.js")>();
 	return { ...actual, getAnsweredQuestion: httpMocks.getAnsweredQuestion };
 });
+vi.mock("../src/questionListRepository.js", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("../src/questionListRepository.js")>();
+	return { ...actual, listQuestionItems: httpMocks.listQuestionItems };
+});
 
 const { app } = await import("../src/index.js");
+
+describe("GET /questions", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		process.env.AUTH_MODE = "dev";
+		httpMocks.listQuestionItems.mockResolvedValue({ items: [] });
+	});
+
+	it.each(["/questions", "/questions?cert=unknown"])(
+		"cert未指定・未知の値は400を返す: %s",
+		async (path) => {
+			const response = await app.request(path, {
+				headers: { "x-dev-user-id": "user-test" },
+			});
+
+			expect(response.status).toBe(400);
+			expect(httpMocks.listQuestionItems).not.toHaveBeenCalled();
+		},
+	);
+
+	it("フィルタと既定値をrepositoryへ渡す", async () => {
+		await app.request("/questions?cert=aip&domain=d1&status=STALE", {
+			headers: { "x-dev-user-id": "user-test" },
+		});
+
+		expect(httpMocks.listQuestionItems).toHaveBeenCalledWith({
+			cert: "aip",
+			domain: "d1",
+			status: "STALE",
+			limit: 20,
+			exclusiveStartKey: undefined,
+		});
+	});
+
+	it("壊れたcursorは400を返す", async () => {
+		const response = await app.request(
+			"/questions?cert=aip&cursor=not-a-cursor",
+			{ headers: { "x-dev-user-id": "user-test" } },
+		);
+
+		expect(response.status).toBe(400);
+		expect(httpMocks.listQuestionItems).not.toHaveBeenCalled();
+	});
+
+	it("未認証なら401を返す", async () => {
+		process.env.AUTH_MODE = "cognito";
+
+		const response = await app.request("/questions?cert=aip");
+
+		expect(response.status).toBe(401);
+		expect(httpMocks.listQuestionItems).not.toHaveBeenCalled();
+	});
+});
 
 describe("GET /questions/:questionId", () => {
 	beforeEach(() => {

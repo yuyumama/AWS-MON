@@ -14,19 +14,22 @@ import { errorMessage, getMe } from "./lib/api";
 import { authMode, displayName, initAuth, logout } from "./lib/auth";
 import { HomeView } from "./views/HomeView";
 import { LoginView } from "./views/LoginView";
+import { QuestionListView } from "./views/QuestionListView";
 import { QuizView } from "./views/QuizView";
 import { ReviewView } from "./views/ReviewView";
 
 // 依存を増やさないためのハッシュベース最小ルーティング。
-// ""(home) / #/review / #/session/:sessionId の3ルートのみ。
+// ""(home) / #/questions / #/review / #/session/:sessionId の最小ルーティング。
 type Route =
 	| { view: "home" }
+	| { view: "questions" }
 	| { view: "review" }
 	| { view: "session"; sessionId: string };
 
 function parseRoute(): Route {
 	const match = window.location.hash.match(/^#\/session\/([^/]+)$/);
 	if (match?.[1]) return { view: "session", sessionId: match[1] };
+	if (window.location.hash === "#/questions") return { view: "questions" };
 	if (window.location.hash === "#/review") return { view: "review" };
 	return { view: "home" };
 }
@@ -164,6 +167,9 @@ export function App() {
 						<a href="#/" data-current={route.view === "home"}>
 							演習
 						</a>
+						<a href="#/questions" data-current={route.view === "questions"}>
+							問題リスト
+						</a>
 						<a href="#/review" data-current={route.view === "review"}>
 							復習リスト
 						</a>
@@ -191,6 +197,8 @@ export function App() {
 									/>
 								) : route.view === "review" ? (
 									<ReviewView />
+								) : route.view === "questions" ? (
+									<QuestionListView />
 								) : (
 									<QuizView
 										key={route.sessionId}

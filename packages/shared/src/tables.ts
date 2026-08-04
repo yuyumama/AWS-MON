@@ -37,6 +37,7 @@ export const gsiNames = {
 		bankRandom: "GSI1_BankRandom",
 		staleDue: "GSI2_StaleDue",
 		contentHash: "GSI3_ContentHash",
+		questionList: "GSI4_QuestionList",
 	},
 	sessions: {
 		userStatus: "GSI1_UserStatus",
@@ -63,6 +64,8 @@ export const attrNames = {
 	staleSk: "staleSk",
 	hashPk: "hashPk",
 	hashSk: "hashSk",
+	listPk: "listPk",
+	listSk: "listSk",
 	userStatusPk: "userStatusPk",
 	userStatusSk: "userStatusSk",
 	abandonPk: "abandonPk",
@@ -155,6 +158,18 @@ export function staleKeys(input: { questionId: string; validUntil: string }) {
 	return {
 		stalePk: `STALE#STATUS#ACTIVE#B#${staleBucket}`,
 		staleSk: `${input.validUntil}#Q#${input.questionId}`,
+	};
+}
+
+// GSI4_QuestionList 用キー。ACTIVE / STALE のときだけ設定する(sparse GSI)。
+export function questionListKeys(input: {
+	cert: string;
+	createdAt: string;
+	questionId: string;
+}) {
+	return {
+		listPk: `QLIST#CERT#${input.cert}`,
+		listSk: `${input.createdAt}#Q#${input.questionId}`,
 	};
 }
 
