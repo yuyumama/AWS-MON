@@ -65,8 +65,8 @@ flowchart TB
 
 | コンポーネント | 技術 | 実行/配信場所 | 状態 |
 |---|---|---|---|
-| `apps/web` | Vite + React + TS | S3 + CloudFront | 主要画面(資格選択/出題/解説/セッション再開/復習リスト)を実装済み。Cognitoログインは自前フォーム+SRP(`amazon-cognito-identity-js`、`VITE_AUTH_MODE=cognito`)。ローカルは vite dev server(:5173) が `/api` を api(:8080) にプロキシ |
-| `apps/api` | Hono + Lambda Web Adapter (TS) | Lambda | セッション/回答/次問/一覧/dev用endpoint、agent HTTP連携、認証・生成権限(`src/auth.ts`)を実装済み |
+| `apps/web` | Vite + React + TS | S3 + CloudFront | 主要画面(資格選択/出題/解説/セッション再開・削除/復習リスト)を実装済み。セッション削除はキーボード操作可能な確認ダイアログを挟む。Cognitoログインは自前フォーム+SRP(`amazon-cognito-identity-js`、`VITE_AUTH_MODE=cognito`)。ローカルは vite dev server(:5173) が `/api` を api(:8080) にプロキシ |
+| `apps/api` | Hono + Lambda Web Adapter (TS) | Lambda | セッション開始・取得・一覧・削除（`DELETE /sessions/:id`）、回答、次問、dev用endpoint、agent HTTP連携、認証・生成権限(`src/auth.ts`)を実装済み |
 | `apps/agent` | Strands Agents + OpenRouter / Bedrock (Python) | AgentCore Runtime | CLI + local HTTP server (`/health`, `/generate`) を実装済み。AWSドキュメントMCPで調査してから生成(調査失敗時のみ調査なしへフォールバック)。既定はOpenRouter（`nvidia/nemotron-3-ultra-550b-a55b:free`）で、`AGENT_MODEL_PROVIDER=bedrock` によりBedrockへ切り替え可。オブザーバビリティ（OTel/ADOT計装・Guardrailsグラウンディングゲート）も実装・ライブ確認済み（[ADR 0007](adr/0007-observability-stack.md)。AgentCore Evaluationsオンライン評価は検証後に [ADR 0011](adr/0011-retire-online-evaluations.md) で廃止） |
 | `packages/shared` | TS型 + テーブル定義 | web/apiがimport | 実装済み |
 | DynamoDB | 4テーブル構成 | AWS / DynamoDB Local | テーブル定義確定。prod（`aws-mon-prod-*`）・localともTerraform適用済み |
@@ -237,6 +237,12 @@ job の排他と回収は次のとおり（[ADR 0013](adr/0013-async-initial-gen
 job の失敗時は `errorCode` ごとの試行上限とbackoffを使う（[ADR 0014](adr/0014-generation-retry-policy.md)）。`research_incomplete` は3回・5秒、`grounding_blocked` は2回・5秒、`generation_timeout` / `research_failed` / 未分類失敗は3回・30秒、`rate_limited` は1回で即FAILEDとする。登録時の `maxAttempts=3` も上限として残し、種別上限との小さい方を使う。次の `runAfter` が `createdAt` から10分の締切を超える場合は再試行せず、元の `errorCode` を維持してFAILEDにする。
 
 クラウドでは、`GENERATE` と `MIXED` の job 処理は LLM利用につながるため、job 作成時だけでなく worker 実行時にも生成権限または信頼済み内部実行コンテキストを確認する。`BANK` job は保存済み問題の取得だけなので、登録済みユーザーであれば実行できる。
+
+### 4. セッション削除
+
+ホーム画面の進行中セッション一覧から確認ダイアログを経て `DELETE /sessions/:id` を呼ぶ。API は認証コンテキストの `userId` と DynamoDB の condition の両方で所有者を確認し、他ユーザーのセッションと存在しないセッションをともに 404、成功を 204 で返す。
+
+削除は `META` の条件付き物理削除を起点とし、対象を指す `INITIAL` guard と `QUEUED` / `RETRY_WAIT` job の `CANCELLED` 更新を同じ TransactWrite で確定した後、対象 partition の `ATTEMPT#*` を BatchWrite で削除する。`RUNNING` job は中断しない。完了後の worker は `initial.jobId` / `prefetch.jobId` など既存属性を条件に session へ反映するため、削除済み `META` を復活させない。復習状態、苦手集計、共通問題バンクはセッション外のデータとして保持する。詳細は `docs/data-model.md` AP-14 を参照。
 
 ## データフローの原則（実装との対応）
 

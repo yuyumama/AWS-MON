@@ -51,6 +51,7 @@ DynamoDB は **単一テーブルではなく、責務別の4テーブル**で�
 | AP-11 | 生成済み問題の重複候補を `contentHash` で検出する | `AwsMonQuestions.GSI3_ContentHash` |
 | AP-12 | 長期間更新されていない active セッションを abandoned 化する | `AwsMonSessions.GSI2_AbandonDue` |
 | AP-13 | `questionId` で問題単体の回答済みビュー（問題本文・選択肢・正解・解説）を取得する | `AwsMonQuestions` primary key |
+| AP-14 | 所有するセッションと回答履歴を削除し、関連する生成待ちを停止する | `AwsMonSessions` primary key Query + BatchWrite、`AwsMonGenerationJobs` primary key Update |
 
 ## GSI projection 方針
 
@@ -432,6 +433,28 @@ type AttemptItem = {
 - `lastSeenQuestionIds` は更新時に直近50件へ切り詰める。META item の肥大化を防ぐ。
 - `ATTEMPT#<sequence>` が既に存在して transaction が失敗した場合は、既存 attempt を読み、正規化後の `selectedAnswers` が同じなら同じ結果を返す。選択肢が異なる場合は `409 Conflict` を返す。
 
+### セッション削除（AP-14）
+
+利用者が `ACTIVE` / `COMPLETED` / `ABANDONED` のいずれのセッションも一覧から整理できるよう、`DELETE /sessions/:sessionId` で**物理削除**する。認証コンテキストの `userId` を使用し、アプリケーション層の所有者確認に加えて、削除起点となる `META` の Delete に `attribute_exists(sessionId) AND userId = :userId` を条件として付ける。他ユーザーのセッションと存在しないセッションは、存在を推測できないよう、どちらも 404 とする。
+
+物理削除の対象は次のとおり。
+
+- `AwsMonSessions` の対象 partition にある `META` とすべての `ATTEMPT#*`。`META` の条件付き Delete が成功してから primary key を Query し、25件ずつ BatchWrite で attempt を削除する。未処理項目は空になるまで再送する。
+- 同じ `userId` / `cert` / `domainSelection` / `mode` の `INITIAL` guard。ただし `preparingSessionId` が削除対象の `sessionId` と一致する場合だけ条件付きで削除する。別セッションを指す guard は残す。対象 guard の Delete は `META` の条件付き Delete と同じ TransactWrite に含める。
+- 削除前に読んだ `META.initial.jobId` / `META.prefetch.jobId` の生成 job。`QUEUED` / `RETRY_WAIT` の場合だけ条件付き Update で `CANCELLED` にし、`runPk` / `runSk` を削除する。全件 Scan はしない。`RUNNING` と終端状態は変更しない。対象 job の Update も `META` の条件付き Delete と同じ TransactWrite に含め、途中失敗時に必要な job ID を失わないようにする。
+
+次の item は削除しない。
+
+- `UserQuestionStateItem`（復習マーク・回答履歴の materialized view）
+- `UserDomainStatItem`（苦手集計）
+- `AwsMonQuestions`（全ユーザー共有の問題バンク）
+
+これらはセッション単位の所有物ではなく、別の materialized view または共有データであるため、セッション削除による巻き戻しを行わない。`ATTEMPT` は通常 append-only だが、利用者による AP-14 の物理削除だけを例外とする。
+
+論理削除（`status=DELETED`）を採らないのは、1セッションの partition が `META` と回答数ぶんの `ATTEMPT` のみで件数が数十件に収まり、Query + BatchWrite で消し切れるためである。論理削除では一覧 Query、GSI key の除去、TTL 管理が増える一方、保持価値のある復習状態・苦手集計・共有問題は別 item として残るため、複雑さに見合う監査価値がない。
+
+削除と競合して `RUNNING` job が完了した場合、worker の session Update は INITIAL なら `initial.jobId`、PREFETCH なら `prefetch.jobId` など既存属性の一致を条件にする。`META` が存在しなければ条件付き Update は失敗し、Update による item の再生成は起きない。回答・次問遷移の Update も `userId`、`version`、`current.state` など既存属性を条件にするため同様に復活しない。
+
 ## `AwsMonUserActivity`
 
 復習機能と将来の苦手ドメイン分析の土台。append-only の真実は `ATTEMPT`、このテーブルは画面表示・集計用の projection。
@@ -695,6 +718,13 @@ worker は session を更新するとき、必ず次を condition に入れる�
 2. `status=ACTIVE` を condition にして `ABANDONED` へ更新する。
 3. `abandonPk/abandonSk` を削除し、`userStatusPk/userStatusSk` を `SESSION#ABANDONED` の値へ更新する。
 4. 初期ポリシーは `updatedAt + 7 days`。この job は運用ループ層の監視・改善対象にできる。
+
+### セッション削除
+
+1. API が `sessionId` で `META` を強整合 Get し、認証コンテキストの `userId` と所有者が一致することを確認する。
+2. `META` が参照する INITIAL/PREFETCH job と決定的なキーの `INITIAL` guard を強整合 Get する。job は全件 Scan しない。
+3. `attribute_exists(sessionId) AND userId = :userId` を condition にした `META` Delete、`QUEUED` / `RETRY_WAIT` job の `CANCELLED` Update、対象を指す guard の条件付き Delete を同じ TransactWrite で行う。不一致の guard、`RUNNING` / 終端 job は transaction に含めない。所有者不一致・存在なしは 404 にする。
+4. 対象 session partition を Query し、残った `ATTEMPT#*` を BatchWrite で物理削除する。復習状態・苦手集計・問題バンクは変更しない。BatchWrite だけが途中失敗した再送では、残存 attempt の `userId` が認証ユーザーと一致することを確認して削除を続け、レスポンス自体は存在なしとして 404 にする。
 
 ## ローカル実装の初期テーブル定義
 

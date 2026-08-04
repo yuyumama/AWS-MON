@@ -597,7 +597,7 @@ describe("runRunnableJobs", () => {
 		);
 	});
 
-	it("falls back to terminalizing only the job when the INITIAL session condition no longer matches", async () => {
+	it("does not recreate a deleted META when a RUNNING INITIAL worker finishes", async () => {
 		const question = questionFixture("q_stale_session");
 		jobMocks.generateAndSaveQuestion.mockResolvedValue(question);
 		const runAfter = new Date(baseTime).toISOString();
@@ -634,6 +634,18 @@ describe("runRunnableJobs", () => {
 			([command]) => command instanceof TransactWriteCommand,
 		);
 		expect(transactions).toHaveLength(1);
+		const transaction = transactions[0]?.[0];
+		expect(transaction).toBeInstanceOf(TransactWriteCommand);
+		const sessionUpdate =
+			transaction instanceof TransactWriteCommand
+				? transaction.input.TransactItems?.find(
+						(item) => item.Update?.Key?.itemKey === "META",
+					)?.Update
+				: undefined;
+		expect(sessionUpdate?.ConditionExpression).toContain(
+			"#initial.jobId = :jobId",
+		);
+		expect(sessionUpdate?.ConditionExpression).toContain("userId = :userId");
 		const terminalUpdates = jobMocks.dynamoSend.mock.calls
 			.map(([command]) => command)
 			.filter(
