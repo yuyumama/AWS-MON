@@ -1,5 +1,6 @@
 import type { AnsweredQuestionDto, ReviewItemDto } from "@aws-mon/shared";
 import { useEffect, useState } from "react";
+import { ButtonSpinner } from "../components/Loading";
 import {
 	errorMessage,
 	getQuestion,
@@ -250,6 +251,7 @@ export function ReviewView() {
 										disabled={unmarkingId === item.questionId}
 										onClick={() => void unmark(item.questionId)}
 									>
+										{unmarkingId === item.questionId && <ButtonSpinner />}
 										{unmarkingId === item.questionId
 											? "解除中…"
 											: "マークを解除"}

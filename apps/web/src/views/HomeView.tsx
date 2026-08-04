@@ -4,6 +4,7 @@ import type {
 	SessionSummaryDto,
 } from "@aws-mon/shared";
 import { useEffect, useState } from "react";
+import { SessionListSkeleton } from "../components/Loading";
 import { errorMessage, listSessions, startSession } from "../lib/api";
 import { aipDomains, certOptions, modeLabel, modeOptions } from "../lib/certs";
 
@@ -155,9 +156,7 @@ export function HomeView({ canGenerate, onOpenSession, onResume }: Props) {
 				{sessionsError && (
 					<p className="notice notice-error">{sessionsError}</p>
 				)}
-				{!sessionsError && sessions === null && (
-					<p className="notice">読み込み中…</p>
-				)}
+				{!sessionsError && sessions === null && <SessionListSkeleton />}
 				{sessions !== null && sessions.length === 0 && (
 					<p className="notice">進行中のセッションはありません。</p>
 				)}
