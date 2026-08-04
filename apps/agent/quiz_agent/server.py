@@ -22,6 +22,7 @@ except ModuleNotFoundError:
         return False
 
 
+from .content_policy import ContentPolicyViolationError
 from .guardrail import GateResult, GroundingBlockedError
 from .log_filters import suppress_duplicate_strands_warnings
 from .model_config import model_id as _model_id
@@ -53,6 +54,11 @@ def _stub_quiz(cert: str, domain: str | None) -> QuizItem:
         explanation=Explanation(
             overview="Knowledge Bases は外部データを検索して生成時の根拠として使うRAG構成を支援します。",
             correct_reason="選択肢BがKnowledge Basesの用途に該当します。",
+            grounding_claim_en=(
+                "Amazon Bedrock Knowledge Bases retrieves information from connected "
+                "data sources for retrieval augmented generation. The retrieved context "
+                "supports grounded responses from a foundation model."
+            ),
             option_reasons=[
                 OptionReason(
                     label="A",
@@ -170,7 +176,7 @@ def build_generate_response(
         "cert": cert,
         "domain": domain,
         "domainSelection": domain_selection,
-        "quiz": item.model_dump(),
+        "quiz": item.model_dump(exclude={"explanation": {"grounding_claim_en"}}),
         "generation": {
             "modelId": _model_id(),
             "promptVersion": PROMPT_VERSION,
@@ -264,6 +270,9 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(
                 HTTPStatus.UNPROCESSABLE_ENTITY, grounding_blocked_response(exc)
             )
+        except ContentPolicyViolationError as exc:
+            # 日本語プレーンテキスト要件を満たさない問題は保存させない。
+            self._send_json(HTTPStatus.UNPROCESSABLE_ENTITY, error_response(exc))
         except Exception as exc:  # noqa: BLE001 - HTTP boundary returns JSON error
             # .agent は重い依存(strands/mcp)を持つため、エラー時のみ遅延importする
             from .agent import (

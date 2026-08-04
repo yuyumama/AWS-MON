@@ -182,6 +182,8 @@ sequenceDiagram
 
 ローカルでは `python3 -m quiz_agent.server` が `POST /generate` を提供し、`AGENT_BASE_URL` 経由で呼び出す（`AGENT_MODE=http`、既定）。本番は `AGENT_MODE=agentcore` で同じリクエスト/レスポンスJSONを AgentCore Runtime の `InvokeAgentRuntime` に載せ替える（`quiz_agent/runtime.py` が `/invocations` で受ける。[ADR 0008](adr/0008-prod-deployment-shape.md)）。
 
+agent は Guardrails のグラウンディングゲート後、保存前の生成境界で利用者向けフィールドが日本語のプレーンテキストかを検証する。違反時は構造化出力だけを再生成し、解消しなければ fail-closed で worker へエラーを返す。
+
 - `mode=GENERATE` は常にagent生成、`mode=MIXED` はbankを優先し候補がない場合だけagent生成にフォールバックする。
 - agent呼び出しのタイムアウトは `AGENT_REQUEST_TIMEOUT_MS` で環境ごとに設定する。超過は汎用の502ではなく `code: "generation_timeout"` の504として扱う。agentが返す `grounding_blocked` / `research_incomplete` / `research_failed` / `rate_limited` / `content_invalid` もHTTP・AgentCore両経路で `ApiError.code` からjobの `errorCode` まで保持する（[ADR 0014](adr/0014-generation-retry-policy.md)）。
 - 生成失敗はセッションの `preparing.state=FAILED` / `prefetch.state=FAILED` と `errorCode` に反映され、Webはこれを見て利用者向けの文言を出す。
