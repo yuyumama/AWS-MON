@@ -20,6 +20,7 @@ from quiz_agent.schema import QuizItem
 def _quiz_item(question: str = "設問") -> QuizItem:
     return QuizItem.model_validate(
         {
+            "summary": "Bedrock Knowledge Basesの検索設計",
             "question": {
                 "type": "single",
                 "question": question,

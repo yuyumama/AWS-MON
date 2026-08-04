@@ -1,7 +1,6 @@
 // web ⇄ api で共有するAPIレスポンスDTO。
 // DynamoDB item 型(types.ts)はサーバ内部表現、こちらはHTTP境界の形。
 import type {
-	AnsweredQuestionDto,
 	CurrentQuestionState,
 	PrefetchState,
 	QuestionDto,
@@ -80,6 +79,7 @@ export type ReviewStateDto = {
 
 export type ReviewItemDto = {
 	questionId: string;
+	summary: string;
 	cert: string;
 	domain: string;
 	answerCount: number;
@@ -87,9 +87,7 @@ export type ReviewItemDto = {
 	lastCorrect?: boolean;
 	lastAnsweredAt?: string;
 	reviewMarkedAt?: string;
-	// 回答済み問題のみマーク可能なので answered DTO(correct/explanation入り)を返す。
-	// 問題がSTALE化しても復習stateは残す設計(data-model.md)のため、statusを併せて返し
-	// 本体が削除済みの場合は question を欠落させる。
-	question?: AnsweredQuestionDto;
+	// 問題がSTALE化しても復習stateは残す設計(data-model.md)のためstatusを併せて返す。
+	// 本体が削除済みの場合はstatusを欠落させ、summaryには欠落を示す文言を返す。
 	questionStatus?: QuestionStatus;
 };

@@ -35,6 +35,7 @@ def _stub_quiz(cert: str, domain: str | None) -> QuizItem:
     domain_label = domain or "general"
     nonce = int(time.time() * 1000)
     return QuizItem(
+        summary="Bedrock Knowledge BasesによるRAG構成",
         question=Question(
             type="single",
             question=(

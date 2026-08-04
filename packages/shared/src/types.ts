@@ -56,6 +56,7 @@ export type Explanation = {
 };
 
 export type QuizItem = {
+	summary?: string;
 	question: Question;
 	explanation: Explanation;
 };
@@ -76,6 +77,7 @@ export type QuestionItem = {
 	domainSelection?: string;
 	type: QuestionType;
 	question: string;
+	summary?: string;
 	options: Option[];
 	correct: string[];
 	explanation: Explanation;
@@ -276,6 +278,7 @@ export type AnsweringQuestionDto = {
 	domain: string;
 	type: QuestionType;
 	question: string;
+	summary?: string;
 	options: Option[];
 	validUntil: string;
 };
@@ -307,6 +310,7 @@ export function toQuestionDto(
 		domain: item.domain,
 		type: item.type,
 		question: item.question,
+		summary: item.summary,
 		options: item.options,
 		validUntil: item.validUntil,
 	};
@@ -321,4 +325,25 @@ export function toQuestionDto(
 		correct: item.correct,
 		explanation: item.explanation,
 	};
+}
+
+const questionSummaryMaxLength = 60;
+
+function truncateQuestionSummary(value: string): string {
+	return value.length > questionSummaryMaxLength
+		? `${value.slice(0, questionSummaryMaxLength)}…`
+		: value;
+}
+
+export function deriveQuestionSummary(
+	item: Pick<QuestionItem, "summary" | "question" | "explanation">,
+): string {
+	const summary = item.summary?.trim();
+	if (summary) return summary;
+
+	const overview = item.explanation.overview.trim();
+	const firstSentence = overview.split("。", 1)[0]?.trim() ?? "";
+	if (firstSentence) return truncateQuestionSummary(firstSentence);
+
+	return truncateQuestionSummary(item.question.trim());
 }

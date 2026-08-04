@@ -19,7 +19,10 @@ import {
 	errorResponse,
 } from "./http.js";
 import { runRunnableJobs } from "./jobRepository.js";
-import { saveGeneratedQuestion } from "./questionRepository.js";
+import {
+	getAnsweredQuestion,
+	saveGeneratedQuestion,
+} from "./questionRepository.js";
 import {
 	answerSession,
 	getSession,
@@ -46,6 +49,8 @@ app.use("/sessions/*", authMiddleware());
 app.use("/sessions", authMiddleware());
 app.use("/reviews/*", authMiddleware());
 app.use("/reviews", authMiddleware());
+app.use("/questions/*", authMiddleware());
+app.use("/questions", authMiddleware());
 app.use("/me", authMiddleware());
 
 // ローカル開発専用ルートのガード。cognitoモード(本番)では露出させない。
@@ -235,6 +240,16 @@ app.put("/reviews/:questionId", async (c) => {
 	}
 });
 
+// 復習一覧などから、回答済みビューの問題詳細を必要なときだけ取得する。
+app.get("/questions/:questionId", async (c) => {
+	try {
+		const question = await getAnsweredQuestion(c.req.param("questionId"));
+		return c.json({ status: "ok", question });
+	} catch (e) {
+		return errorResponse(c, e);
+	}
+});
+
 app.post("/dev/questions", async (c) => {
 	try {
 		const body = asObject(await c.req.json().catch(() => ({})));
@@ -275,6 +290,8 @@ app.post("/dev/jobs/run", async (c) => {
 
 // ミドルウェア(認証)で投げられたApiErrorもルートと同じ形式で返す。
 app.onError((error, c) => errorResponse(c, error));
+
+export { app };
 
 serve({ fetch: app.fetch, port }, (info) => {
 	console.log(`api listening on http://localhost:${info.port}`);

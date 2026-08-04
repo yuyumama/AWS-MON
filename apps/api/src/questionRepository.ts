@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
+	type AnsweredQuestionDto,
 	bankKeys,
 	type Explanation,
 	gsiNames,
@@ -235,6 +236,7 @@ function parseQuiz(value: unknown): QuizItem {
 	const question = parseQuestion(raw.question);
 
 	return {
+		summary: optionalString(raw.summary),
 		question,
 		explanation: parseExplanation(raw.explanation, question.options),
 	};
@@ -354,6 +356,16 @@ async function getQuestion(
 	return isQuestionItem(out.Item) ? out.Item : undefined;
 }
 
+export async function getAnsweredQuestion(
+	questionId: string,
+): Promise<AnsweredQuestionDto> {
+	const question = await getQuestion(requiredString(questionId, "questionId"));
+	if (!question) {
+		throw new ApiError("question not found", 404);
+	}
+	return toQuestionDto(question, "answered");
+}
+
 async function findReusableDuplicate(
 	contentHash: string,
 ): Promise<QuestionItem | undefined> {
@@ -423,6 +435,7 @@ export async function saveGeneratedQuestion(
 		domainSelection: optionalString(input.domainSelection),
 		type: quiz.question.type,
 		question: quiz.question.question,
+		...(quiz.summary ? { summary: quiz.summary } : {}),
 		options: quiz.question.options,
 		correct: quiz.question.correct,
 		explanation: quiz.explanation,
