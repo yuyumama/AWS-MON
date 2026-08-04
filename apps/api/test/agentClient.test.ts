@@ -34,6 +34,14 @@ const input = {
 	sessionId: "s_test",
 };
 
+const agentErrorCases = [
+	{ code: "grounding_blocked", status: 422 },
+	{ code: "research_incomplete", status: 422 },
+	{ code: "research_failed", status: 502 },
+	{ code: "rate_limited", status: 429 },
+	{ code: "content_invalid", status: 502 },
+] as const;
+
 function abortError(): Error {
 	return Object.assign(new Error("Request aborted"), { name: "AbortError" });
 }
@@ -86,6 +94,52 @@ describe("generateAndSaveQuestion", () => {
 		});
 		expect((error as Error).message).not.toContain("Request aborted");
 	});
+
+	it.each(agentErrorCases)(
+		"keeps the $code code from an HTTP agent error response",
+		async ({ code, status }) => {
+			vi.stubEnv("AGENT_MODE", "http");
+			vi.stubGlobal(
+				"fetch",
+				vi.fn().mockResolvedValue({
+					ok: false,
+					json: vi.fn().mockResolvedValue({
+						status: "error",
+						code,
+						message: `${code} message`,
+					}),
+				}),
+			);
+
+			const error = await captureError(generateAndSaveQuestion(input));
+
+			expect(error).toBeInstanceOf(ApiError);
+			expect(error).toMatchObject({ status, code });
+		},
+	);
+
+	it.each(agentErrorCases)(
+		"keeps the $code code from an AgentCore error response",
+		async ({ code, status }) => {
+			vi.stubEnv("AGENT_MODE", "agentcore");
+			agentClientMocks.bedrockSend.mockResolvedValue({
+				response: {
+					transformToString: vi.fn().mockResolvedValue(
+						JSON.stringify({
+							status: "error",
+							code,
+							message: `${code} message`,
+						}),
+					),
+				},
+			});
+
+			const error = await captureError(generateAndSaveQuestion(input));
+
+			expect(error).toBeInstanceOf(ApiError);
+			expect(error).toMatchObject({ status, code });
+		},
+	);
 
 	it("aborts a slow AgentCore response at AGENT_REQUEST_TIMEOUT_MS", async () => {
 		vi.useFakeTimers();

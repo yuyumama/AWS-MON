@@ -104,6 +104,19 @@ function isAgentErrorResponse(value: unknown): value is AgentErrorResponse {
 	);
 }
 
+function agentResponseError(body: AgentErrorResponse): ApiError {
+	const status =
+		body.code === "rate_limited"
+			? 429
+			: body.code === "grounding_blocked" || body.code === "research_incomplete"
+				? 422
+				: 502;
+	const message =
+		body.message ??
+		(status === 422 ? "agent grounding blocked" : "agent generation failed");
+	return new ApiError(message, status, body.code);
+}
+
 function agentGeneratePayload(input: GenerateAndSaveQuestionInput): {
 	cert: string;
 	domain: string;
@@ -158,6 +171,9 @@ async function generateAndSaveQuestionWithHttp(
 		body = await response.json().catch(() => undefined);
 
 		if (!response.ok) {
+			if (isAgentErrorResponse(body)) {
+				throw agentResponseError(body);
+			}
 			const message =
 				typeof body === "object" &&
 				body !== null &&
@@ -174,6 +190,10 @@ async function generateAndSaveQuestionWithHttp(
 		throw new ApiError(`agent request failed: ${message}`, 502);
 	} finally {
 		clearTimeout(timeout);
+	}
+
+	if (isAgentErrorResponse(body)) {
+		throw agentResponseError(body);
 	}
 
 	if (!isAgentGenerateResponse(body)) {
@@ -220,13 +240,7 @@ async function generateAndSaveQuestionWithAgentCore(
 	}
 
 	if (isAgentErrorResponse(body)) {
-		if (
-			body.code === "grounding_blocked" ||
-			body.code === "research_incomplete"
-		) {
-			throw new ApiError(body.message ?? "agent grounding blocked", 422);
-		}
-		throw new ApiError(body.message ?? "agent generation failed", 502);
+		throw agentResponseError(body);
 	}
 
 	throw new ApiError("agent response is invalid", 502);

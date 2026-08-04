@@ -168,7 +168,7 @@ sequenceDiagram
 ローカルでは `python3 -m quiz_agent.server` が `POST /generate` を提供し、`AGENT_BASE_URL` 経由で呼び出す（`AGENT_MODE=http`、既定）。本番は `AGENT_MODE=agentcore` で同じリクエスト/レスポンスJSONを AgentCore Runtime の `InvokeAgentRuntime` に載せ替える（`quiz_agent/runtime.py` が `/invocations` で受ける。[ADR 0008](adr/0008-prod-deployment-shape.md)）。
 
 - `mode=GENERATE` は常にagent生成、`mode=MIXED` はbankを優先し候補がない場合だけagent生成にフォールバックする。
-- agent呼び出しのタイムアウトは `AGENT_REQUEST_TIMEOUT_MS` で環境ごとに設定する。超過は汎用の502ではなく `code: "generation_timeout"` の504として扱い、job側は `errorCode=generation_timeout` を記録する。
+- agent呼び出しのタイムアウトは `AGENT_REQUEST_TIMEOUT_MS` で環境ごとに設定する。超過は汎用の502ではなく `code: "generation_timeout"` の504として扱う。agentが返す `grounding_blocked` / `research_incomplete` / `research_failed` / `rate_limited` / `content_invalid` もHTTP・AgentCore両経路で `ApiError.code` からjobの `errorCode` まで保持する（[ADR 0014](adr/0014-generation-retry-policy.md)）。
 - 生成失敗はセッションの `preparing.state=FAILED` / `prefetch.state=FAILED` と `errorCode` に反映され、Webはこれを見て利用者向けの文言を出す。
 
 ### 3. 開発用workerによるjob処理（`/dev/jobs/run`）
@@ -199,7 +199,7 @@ sequenceDiagram
             API->>Q: ACTIVE保存
             API->>J: state→SUCCEEDED (lockedBy一致が条件)
         else 失敗
-            API->>J: attemptCount<maxAttemptsならRETRY_WAIT、超えたらFAILED
+            API->>J: 失敗種別の試行上限・backoff・10分締切でRETRY_WAITまたはFAILED
         end
         alt kind=INITIAL
             API->>S: initial.jobId一致を条件に current=Q1 へ昇格 + seq2 PREFETCH job作成
@@ -218,6 +218,8 @@ job の排他と回収は次のとおり（[ADR 0013](adr/0013-async-initial-gen
 - RUNNING の job も `runPk`/`runSk` を保持し、`runSk` に `lockedUntil` を入れる。実行可能job検索は `runSk <= 現在時刻` で引くため、**期限内のロックはヒットせず横取りされない**。
 - job の完了（SUCCEEDED / RETRY_WAIT / FAILED）は `lockedBy` 一致を条件にする。ロックを失っていた worker は結果を書かずに降りる。
 - worker は Lambda の残り時間から算出したデッドラインを持ち、残りが1件分の予算（`AGENT_REQUEST_TIMEOUT_MS` + 30秒）を切ったら次の job を claim しない。Lambda timeout で生成中に殺されて job を RUNNING のまま座礁させないため。
+
+job の失敗時は `errorCode` ごとの試行上限とbackoffを使う（[ADR 0014](adr/0014-generation-retry-policy.md)）。`research_incomplete` は3回・5秒、`grounding_blocked` は2回・5秒、`generation_timeout` / `research_failed` / 未分類失敗は3回・30秒、`rate_limited` は1回で即FAILEDとする。登録時の `maxAttempts=3` も上限として残し、種別上限との小さい方を使う。次の `runAfter` が `createdAt` から10分の締切を超える場合は再試行せず、元の `errorCode` を維持してFAILEDにする。
 
 クラウドでは、`GENERATE` と `MIXED` の job 処理は LLM利用につながるため、job 作成時だけでなく worker 実行時にも生成権限または信頼済み内部実行コンテキストを確認する。`BANK` job は保存済み問題の取得だけなので、登録済みユーザーであれば実行できる。
 

@@ -31,8 +31,52 @@ import { findBankQuestion } from "./questionBankRepository.js";
 const tables = resolveTableNames();
 
 const maxJobAttempts = 3;
-const retryBackoffMs = 30_000;
 const jobLockMarginMs = 30_000;
+const jobDeadlineMs = 600_000;
+
+type JobErrorCode =
+	| "no_bank_question"
+	| "generation_timeout"
+	| "research_incomplete"
+	| "research_failed"
+	| "grounding_blocked"
+	| "rate_limited"
+	| "content_invalid"
+	| "generation_failed";
+
+type RetryPolicy = {
+	maxAttempts: number;
+	backoffMs: number;
+};
+
+const defaultRetryPolicy: RetryPolicy = {
+	maxAttempts: 3,
+	backoffMs: 30_000,
+};
+
+const retryPolicies: Record<JobErrorCode, RetryPolicy> = {
+	no_bank_question: defaultRetryPolicy,
+	generation_timeout: defaultRetryPolicy,
+	research_incomplete: { maxAttempts: 3, backoffMs: 5_000 },
+	research_failed: defaultRetryPolicy,
+	grounding_blocked: { maxAttempts: 2, backoffMs: 5_000 },
+	rate_limited: { maxAttempts: 1, backoffMs: 0 },
+	content_invalid: defaultRetryPolicy,
+	generation_failed: defaultRetryPolicy,
+};
+
+const apiErrorCodeToJobErrorCode: Readonly<Record<string, JobErrorCode>> = {
+	no_bank_question: "no_bank_question",
+	generation_timeout: "generation_timeout",
+	research_incomplete: "research_incomplete",
+	research_failed: "research_failed",
+	grounding_blocked: "grounding_blocked",
+	rate_limited: "rate_limited",
+	content_invalid: "content_invalid",
+};
+
+const deadlineExceededMessage =
+	"ジョブ作成から10分の締切を超えるため、再試行を終了しました。";
 
 function nowIso(): string {
 	return new Date().toISOString();
@@ -158,13 +202,14 @@ async function completeJobSuccess(
 
 async function completeJobRetryOrFail(
 	job: GenerationJobItem,
-	errorCode: string,
+	errorCode: JobErrorCode,
 	errorMessage: string,
+	retry = jobFailureDisposition(job, errorCode, errorMessage),
 ): Promise<"RETRY_WAIT" | "FAILED" | undefined> {
 	const now = nowIso();
 
-	if (job.attemptCount < job.maxAttempts) {
-		const runAfter = new Date(Date.now() + retryBackoffMs).toISOString();
+	if (retry.state === "RETRY_WAIT") {
+		const runAfter = new Date(retry.runAfterMs).toISOString();
 		const runKeys = jobRunKeys({
 			jobId: job.jobId,
 			state: "RETRY_WAIT",
@@ -187,7 +232,7 @@ async function completeJobRetryOrFail(
 						":runPk": runKeys.runPk,
 						":runSk": runKeys.runSk,
 						":errorCode": errorCode,
-						":errorMessage": errorMessage,
+						":errorMessage": retry.errorMessage,
 						":now": now,
 					},
 				}),
@@ -199,6 +244,15 @@ async function completeJobRetryOrFail(
 		return "RETRY_WAIT";
 	}
 
+	return completeJobFailure(job, errorCode, retry.errorMessage, now);
+}
+
+async function completeJobFailure(
+	job: GenerationJobItem,
+	errorCode: JobErrorCode,
+	errorMessage: string,
+	now = nowIso(),
+): Promise<"FAILED" | undefined> {
 	try {
 		await dynamoDoc.send(
 			new UpdateCommand({
@@ -223,6 +277,46 @@ async function completeJobRetryOrFail(
 		throw error;
 	}
 	return "FAILED";
+}
+
+type JobFailureDisposition =
+	| { state: "RETRY_WAIT"; runAfterMs: number; errorMessage: string }
+	| { state: "FAILED"; errorMessage: string };
+
+function jobFailureDisposition(
+	job: GenerationJobItem,
+	errorCode: JobErrorCode,
+	errorMessage: string,
+	nowMs = Date.now(),
+): JobFailureDisposition {
+	const retryPolicy = retryPolicies[errorCode];
+	const attemptLimit = Math.min(job.maxAttempts, retryPolicy.maxAttempts);
+	if (job.attemptCount >= attemptLimit) {
+		return { state: "FAILED", errorMessage };
+	}
+
+	const runAfterMs = nowMs + retryPolicy.backoffMs;
+	const deadlineMs = new Date(job.createdAt).getTime() + jobDeadlineMs;
+	if (Number.isFinite(deadlineMs) && runAfterMs > deadlineMs) {
+		return {
+			state: "FAILED",
+			errorMessage: `${errorMessage}（${deadlineExceededMessage}）`,
+		};
+	}
+
+	return { state: "RETRY_WAIT", runAfterMs, errorMessage };
+}
+
+function jobErrorCode(error: unknown): JobErrorCode {
+	if (!(error instanceof ApiError)) {
+		return "generation_failed";
+	}
+	if (error.status === 404) {
+		return "no_bank_question";
+	}
+	return error.code
+		? (apiErrorCodeToJobErrorCode[error.code] ?? "generation_failed")
+		: "generation_failed";
 }
 
 type AttemptOutcome = {
@@ -293,21 +387,26 @@ async function attemptJob(
 	} catch (error) {
 		const message =
 			error instanceof Error ? error.message : "generation job failed";
-		const errorCode =
-			error instanceof ApiError && error.status === 404
-				? "no_bank_question"
-				: error instanceof ApiError && error.code === "generation_timeout"
-					? "generation_timeout"
-					: "generation_failed";
+		const errorCode = jobErrorCode(error);
+		const failure = jobFailureDisposition(claimed, errorCode, message);
 		const state =
-			reflectTerminalOnSession && claimed.attemptCount >= claimed.maxAttempts
-				? await completeWorkerJobFailure(claimed, errorCode, message)
-				: await completeJobRetryOrFail(claimed, errorCode, message);
+			reflectTerminalOnSession && failure.state === "FAILED"
+				? await completeWorkerJobFailure(
+						claimed,
+						errorCode,
+						failure.errorMessage,
+					)
+				: await completeJobRetryOrFail(claimed, errorCode, message, failure);
 		if (!state) {
 			return undefined;
 		}
 		return {
-			job: { ...claimed, state, errorCode, errorMessage: message },
+			job: {
+				...claimed,
+				state,
+				errorCode,
+				errorMessage: failure.errorMessage,
+			},
 			state,
 		};
 	}
@@ -560,7 +659,7 @@ async function completeInitialJobSuccess(
 
 async function completeInitialJobFailure(
 	job: GenerationJobItem & { sessionId: string; userId: string },
-	errorCode: string,
+	errorCode: JobErrorCode,
 	errorMessage: string,
 ): Promise<"FAILED" | undefined> {
 	const updatedAt = nowIso();
@@ -633,8 +732,7 @@ async function completeInitialJobFailure(
 		return "FAILED";
 	} catch (error) {
 		if (!isTransactionCanceled(error)) throw error;
-		const state = await completeJobRetryOrFail(job, errorCode, errorMessage);
-		return state === "FAILED" ? state : undefined;
+		return completeJobFailure(job, errorCode, errorMessage);
 	}
 }
 
@@ -642,7 +740,7 @@ async function completePrefetchJob(
 	job: GenerationJobItem & { sessionId: string; targetSequence: number },
 	terminal:
 		| { state: "SUCCEEDED"; questionId: string }
-		| { state: "FAILED"; errorCode: string; errorMessage: string },
+		| { state: "FAILED"; errorCode: JobErrorCode; errorMessage: string },
 ): Promise<boolean> {
 	const updatedAt = nowIso();
 	const prefetch: NonNullable<SessionMetaItem["prefetch"]> =
@@ -705,13 +803,16 @@ async function completePrefetchJob(
 		return true;
 	} catch (error) {
 		if (!isTransactionCanceled(error)) throw error;
-		return terminal.state === "SUCCEEDED"
-			? completeJobSuccess(job, terminal.questionId)
-			: (await completeJobRetryOrFail(
-					job,
-					terminal.errorCode,
-					terminal.errorMessage,
-				)) === "FAILED";
+		if (terminal.state === "SUCCEEDED") {
+			return completeJobSuccess(job, terminal.questionId);
+		}
+		return (
+			(await completeJobFailure(
+				job,
+				terminal.errorCode,
+				terminal.errorMessage,
+			)) === "FAILED"
+		);
 	}
 }
 
@@ -740,7 +841,7 @@ async function completeWorkerJobSuccess(
 
 async function completeWorkerJobFailure(
 	job: GenerationJobItem,
-	errorCode: string,
+	errorCode: JobErrorCode,
 	errorMessage: string,
 ): Promise<"FAILED" | undefined> {
 	if (job.kind === "INITIAL" && job.sessionId && job.userId) {
@@ -761,8 +862,7 @@ async function completeWorkerJobFailure(
 		);
 		return completed ? "FAILED" : undefined;
 	}
-	const state = await completeJobRetryOrFail(job, errorCode, errorMessage);
-	return state === "FAILED" ? state : undefined;
+	return completeJobFailure(job, errorCode, errorMessage);
 }
 
 // job作成とsession書き込みは非トランザクションのため、nextSessionQuestion側で
