@@ -32,7 +32,7 @@ AWS-MON/
   - web⇄api で共有するデータ形（DTO・enum）とDynamoDBテーブル定義は `packages/shared`（`@aws-mon/shared`）に置く。`apps/api` は shared のビルド出力（`dist/`）に依存するため、shared を変更したら先に `npm run build -w @aws-mon/shared`。
 - **Python（agent）**
   - **構造化出力（Pydantic）**を使い、モデル出力のJSONパース・正規化はしない。
-  - 環境変数は `python-dotenv`（`.env`）で読む。生成モデルはOpenRouterの `nvidia/nemotron-3-ultra-550b-a55b:free`（`AGENT_MODEL_ID` で上書き可）に一本化している（ADR 0012）。
+  - 環境変数は `python-dotenv`（`.env`）で読む。生成モデルはOpenRouterの `inclusionai/ling-3.0-flash:free`（`AGENT_MODEL_ID` で上書き可）に一本化している（ADR 0012）。
 
 ## 命名・スタイル
 

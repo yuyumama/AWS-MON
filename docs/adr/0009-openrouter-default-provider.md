@@ -1,6 +1,6 @@
 # ADR 0009: 生成モデルプロバイダの既定を Bedrock から OpenRouter へ昇格
 
-- 状態: 採用（2026-07-29 実装 [PR #57](https://github.com/yuyumama/AWS-MON/pull/57) / 2026-08-02 本番デプロイ・検証完了・稼働中）。**決定1・3の「Bedrock を opt-in の切り戻し手段として残す」部分は [ADR 0012](0012-openrouter-only-inference.md) で撤回**（OpenRouter 一本化・Bedrock 推論経路は撤去）
+- 状態: 採用（2026-07-29 実装 [PR #57](https://github.com/yuyumama/AWS-MON/pull/57) / 2026-08-02 本番デプロイ・検証完了・稼働中）。**決定1・3の「Bedrock を opt-in の切り戻し手段として残す」部分は [ADR 0012](0012-openrouter-only-inference.md) で撤回**（OpenRouter 一本化・Bedrock 推論経路は撤去）。**既定モデルを `nvidia/nemotron-3-ultra-550b-a55b:free` とする部分は [ADR 0016](0016-generation-model-selection.md) で置き換え**（`inclusionai/ling-3.0-flash:free`）
 - 関連: [ADR 0005](0005-combined-generation.md)（同時生成）、[ADR 0007](0007-observability-stack.md)（Guardrailsゲート）、[ADR 0008](0008-prod-deployment-shape.md)（prodデプロイ構成・SSM運用）、issue #39 / #46（OpenRouter切替の下地）、issue #47（本ADRの意思決定元）
 
 ## 背景
