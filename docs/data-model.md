@@ -433,7 +433,7 @@ type AttemptItem = {
 - `lastSeenQuestionIds` は更新時に直近50件へ切り詰める。META item の肥大化を防ぐ。
 - `ATTEMPT#<sequence>` が既に存在して transaction が失敗した場合は、既存 attempt を読み、正規化後の `selectedAnswers` が同じなら同じ結果を返す。選択肢が異なる場合は `409 Conflict` を返す。
 
-### セッション削除（AP-13）
+### セッション削除（AP-14）
 
 利用者が `ACTIVE` / `COMPLETED` / `ABANDONED` のいずれのセッションも一覧から整理できるよう、`DELETE /sessions/:sessionId` で**物理削除**する。認証コンテキストの `userId` を使用し、アプリケーション層の所有者確認に加えて、削除起点となる `META` の Delete に `attribute_exists(sessionId) AND userId = :userId` を条件として付ける。他ユーザーのセッションと存在しないセッションは、存在を推測できないよう、どちらも 404 とする。
 
@@ -449,7 +449,7 @@ type AttemptItem = {
 - `UserDomainStatItem`（苦手集計）
 - `AwsMonQuestions`（全ユーザー共有の問題バンク）
 
-これらはセッション単位の所有物ではなく、別の materialized view または共有データであるため、セッション削除による巻き戻しを行わない。`ATTEMPT` は通常 append-only だが、利用者による AP-13 の物理削除だけを例外とする。
+これらはセッション単位の所有物ではなく、別の materialized view または共有データであるため、セッション削除による巻き戻しを行わない。`ATTEMPT` は通常 append-only だが、利用者による AP-14 の物理削除だけを例外とする。
 
 論理削除（`status=DELETED`）を採らないのは、1セッションの partition が `META` と回答数ぶんの `ATTEMPT` のみで件数が数十件に収まり、Query + BatchWrite で消し切れるためである。論理削除では一覧 Query、GSI key の除去、TTL 管理が増える一方、保持価値のある復習状態・苦手集計・共有問題は別 item として残るため、複雑さに見合う監査価値がない。
 

@@ -10,7 +10,7 @@ import {
 	TransactWriteCommand,
 	UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	deleteSession,
 	listSessions,
@@ -200,6 +200,7 @@ describe("deleteSession", () => {
 		attempts?: StoredItem[];
 		guard?: InitialSessionGuardItem;
 		jobs?: GenerationJobItem[];
+		alwaysReturnUnprocessed?: boolean;
 	}) {
 		let meta = input.meta;
 		let guard = input.guard;
@@ -238,6 +239,9 @@ describe("deleteSession", () => {
 				return { Items: attempts };
 			}
 			if (command instanceof BatchWriteCommand) {
+				if (input.alwaysReturnUnprocessed) {
+					return { UnprocessedItems: command.input.RequestItems };
+				}
 				const requests = Object.values(command.input.RequestItems ?? {}).flat();
 				for (const request of requests) {
 					const key = request.DeleteRequest?.Key;
@@ -263,6 +267,10 @@ describe("deleteSession", () => {
 
 	beforeEach(() => {
 		vi.clearAllMocks();
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
 	});
 
 	it.each(["ACTIVE", "COMPLETED", "ABANDONED"] as const)(
@@ -351,6 +359,74 @@ describe("deleteSession", () => {
 		expect(store.attempts).toHaveLength(0);
 	});
 
+	it("keeps 404 when best-effort cleanup stops on an unexpected item", async () => {
+		vi.spyOn(console, "error").mockImplementation(() => undefined);
+		const store = installDeleteStore({
+			attempts: [
+				{
+					sessionId: "s_deleted",
+					itemKey: "ATTEMPT#000001",
+					userId: "user-other",
+				},
+			],
+		});
+
+		await expect(
+			deleteSession({ userId: "user-test", sessionId: "s_deleted" }),
+		).rejects.toMatchObject({ status: 404 });
+		expect(store.attempts).toHaveLength(1);
+	});
+
+	it("returns a server error instead of success when ATTEMPT cleanup is incomplete", async () => {
+		vi.spyOn(console, "error").mockImplementation(() => undefined);
+		const meta = sessionFixture();
+		const store = installDeleteStore({
+			meta,
+			attempts: [
+				{
+					sessionId: meta.sessionId,
+					itemKey: "ATTEMPT#000001",
+					userId: "user-other",
+				},
+			],
+		});
+
+		await expect(
+			deleteSession({ userId: meta.userId, sessionId: meta.sessionId }),
+		).rejects.toMatchObject({
+			status: 500,
+			message:
+				"セッションを完全に削除できませんでした。もう一度お試しください。",
+		});
+		expect(store.meta()).toBeUndefined();
+		expect(store.attempts).toHaveLength(1);
+	});
+
+	it("stops with a server error after five retries of unprocessed ATTEMPT items", async () => {
+		vi.spyOn(console, "error").mockImplementation(() => undefined);
+		const meta = sessionFixture();
+		installDeleteStore({
+			meta,
+			attempts: [
+				{
+					sessionId: meta.sessionId,
+					itemKey: "ATTEMPT#000001",
+					userId: meta.userId,
+				},
+			],
+			alwaysReturnUnprocessed: true,
+		});
+
+		await expect(
+			deleteSession({ userId: meta.userId, sessionId: meta.sessionId }),
+		).rejects.toMatchObject({ status: 500 });
+		expect(
+			repositoryMocks.dynamoSend.mock.calls.filter(
+				([command]) => command instanceof BatchWriteCommand,
+			),
+		).toHaveLength(6);
+	});
+
 	it.each([
 		{ preparingSessionId: "s_test", remains: false },
 		{ preparingSessionId: "s_other", remains: true },
@@ -407,6 +483,69 @@ describe("deleteSession", () => {
 
 		expect(store.job("j_initial")?.state).toBe("CANCELLED");
 		expect(store.job("j_prefetch")?.state).toBe("CANCELLED");
+	});
+
+	it("binds job cancellation to the session and optional job owner", async () => {
+		const meta = sessionFixture({
+			initial: {
+				state: "QUEUED",
+				jobId: "j_initial",
+				updatedAt: "2026-08-04T00:00:00.000Z",
+			},
+		});
+		installDeleteStore({
+			meta,
+			jobs: [
+				{
+					...sessionJob("j_initial", "QUEUED"),
+					kind: "INITIAL",
+				},
+			],
+		});
+
+		await deleteSession({ userId: meta.userId, sessionId: meta.sessionId });
+
+		const jobUpdates = repositoryMocks.dynamoSend.mock.calls
+			.map(([command]) => command)
+			.filter(
+				(command): command is TransactWriteCommand =>
+					command instanceof TransactWriteCommand,
+			)[0]
+			?.input.TransactItems?.filter((item) => item.Update);
+		expect(jobUpdates).toHaveLength(1);
+		for (const item of jobUpdates ?? []) {
+			expect(item.Update?.ConditionExpression).toBe(
+				"(#state = :queued OR #state = :retryWait) AND sessionId = :sessionId AND (attribute_not_exists(userId) OR userId = :userId)",
+			);
+			expect(item.Update?.ExpressionAttributeValues).toMatchObject({
+				":sessionId": meta.sessionId,
+				":userId": meta.userId,
+			});
+		}
+	});
+
+	it("skips a referenced job bound to another session and continues deletion", async () => {
+		const meta = sessionFixture({
+			prefetch: {
+				sequence: 2,
+				state: "QUEUED",
+				jobId: "j_other_session",
+			},
+		});
+		const store = installDeleteStore({
+			meta,
+			jobs: [
+				{
+					...sessionJob("j_other_session", "QUEUED"),
+					sessionId: "s_other",
+				},
+			],
+		});
+
+		await deleteSession({ userId: meta.userId, sessionId: meta.sessionId });
+
+		expect(store.meta()).toBeUndefined();
+		expect(store.job("j_other_session")?.state).toBe("QUEUED");
 	});
 
 	it("does not change a RUNNING job", async () => {

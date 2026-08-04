@@ -88,6 +88,11 @@ export type DeleteSessionInput = {
 	sessionId: string;
 };
 
+const sessionDeleteFailedMessage =
+	"セッションを完全に削除できませんでした。もう一度お試しください。";
+const deleteBatchMaxRetries = 5;
+const deleteBatchBaseDelayMs = 1;
+
 function nowIso(): string {
 	return new Date().toISOString();
 }
@@ -342,7 +347,7 @@ export async function listSessions(
 async function deleteSessionAttempts(
 	sessionId: string,
 	expectedUserId: string,
-): Promise<void> {
+): Promise<boolean> {
 	let exclusiveStartKey: Record<string, unknown> | undefined;
 	const keys: Array<{ sessionId: string; itemKey: string }> = [];
 	do {
@@ -363,7 +368,11 @@ async function deleteSessionAttempts(
 				!item.itemKey.startsWith("ATTEMPT#") ||
 				item.userId !== expectedUserId
 			) {
-				return;
+				console.error("セッションの ATTEMPT 削除を中断しました", {
+					sessionId,
+					item,
+				});
+				return false;
 			}
 			keys.push({ sessionId: item.sessionId, itemKey: item.itemKey });
 		}
@@ -375,6 +384,7 @@ async function deleteSessionAttempts(
 			keys.slice(offset, offset + 25).map((key) => ({
 				DeleteRequest: { Key: key },
 			}));
+		let retryCount = 0;
 		do {
 			const batch = await dynamoDoc.send(
 				new BatchWriteCommand({
@@ -382,8 +392,22 @@ async function deleteSessionAttempts(
 				}),
 			);
 			requests = batch.UnprocessedItems?.[tables.sessions] ?? [];
+			if (requests.length === 0) break;
+			if (retryCount >= deleteBatchMaxRetries) {
+				console.error("セッションの ATTEMPT 削除が最大再試行回数を超えました", {
+					sessionId,
+					unprocessedCount: requests.length,
+				});
+				throw new ApiError(sessionDeleteFailedMessage, 500);
+			}
+			const backoffMs = deleteBatchBaseDelayMs * 2 ** retryCount;
+			const jitterMs = Math.floor(Math.random() * backoffMs);
+			await new Promise((resolve) => setTimeout(resolve, backoffMs + jitterMs));
+			retryCount += 1;
 		} while (requests.length > 0);
 	}
+
+	return true;
 }
 
 async function getGenerationJob(jobId: string) {
@@ -407,7 +431,15 @@ export async function deleteSession(
 	} catch (error) {
 		if (error instanceof ApiError && error.status === 404) {
 			// META 削除後に ATTEMPT の一括削除だけ失敗した再送も収束させる。
-			await deleteSessionAttempts(input.sessionId, input.userId);
+			try {
+				await deleteSessionAttempts(input.sessionId, input.userId);
+			} catch (cleanupError) {
+				// META がない経路の残骸掃除は best-effort とし、元の 404 を維持する。
+				console.error("削除済みセッションの残骸掃除に失敗しました", {
+					sessionId: input.sessionId,
+					error: cleanupError,
+				});
+			}
 		}
 		throw error;
 	}
@@ -446,17 +478,26 @@ export async function deleteSession(
 		];
 	for (const job of jobs) {
 		if (job?.state !== "QUEUED" && job?.state !== "RETRY_WAIT") continue;
+		if (
+			job.sessionId !== input.sessionId ||
+			(job.userId !== undefined && job.userId !== input.userId)
+		) {
+			continue;
+		}
 		transactItems.push({
 			Update: {
 				TableName: tables.generationJobs,
 				Key: { jobId: job.jobId },
-				ConditionExpression: "#state = :queued OR #state = :retryWait",
+				ConditionExpression:
+					"(#state = :queued OR #state = :retryWait) AND sessionId = :sessionId AND (attribute_not_exists(userId) OR userId = :userId)",
 				UpdateExpression:
 					"SET #state = :cancelled, finishedAt = :cancelledAt, updatedAt = :cancelledAt REMOVE runPk, runSk",
 				ExpressionAttributeNames: { "#state": "state" },
 				ExpressionAttributeValues: {
 					":queued": "QUEUED",
 					":retryWait": "RETRY_WAIT",
+					":sessionId": input.sessionId,
+					":userId": input.userId,
 					":cancelled": "CANCELLED",
 					":cancelledAt": cancelledAt,
 				},
@@ -487,7 +528,13 @@ export async function deleteSession(
 		throw error;
 	}
 
-	await deleteSessionAttempts(input.sessionId, input.userId);
+	const completelyDeleted = await deleteSessionAttempts(
+		input.sessionId,
+		input.userId,
+	);
+	if (!completelyDeleted) {
+		throw new ApiError(sessionDeleteFailedMessage, 500);
+	}
 }
 
 // GENERATE/MIXED は Bedrock/LLM 課金に到達し得るため生成権限を必須にする(ADR 0006)。

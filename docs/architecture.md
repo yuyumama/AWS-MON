@@ -242,7 +242,7 @@ job の失敗時は `errorCode` ごとの試行上限とbackoffを使う（[ADR 
 
 ホーム画面の進行中セッション一覧から確認ダイアログを経て `DELETE /sessions/:id` を呼ぶ。API は認証コンテキストの `userId` と DynamoDB の condition の両方で所有者を確認し、他ユーザーのセッションと存在しないセッションをともに 404、成功を 204 で返す。
 
-削除は `META` の条件付き物理削除を起点とし、対象を指す `INITIAL` guard と `QUEUED` / `RETRY_WAIT` job の `CANCELLED` 更新を同じ TransactWrite で確定した後、対象 partition の `ATTEMPT#*` を BatchWrite で削除する。`RUNNING` job は中断しない。完了後の worker は `initial.jobId` / `prefetch.jobId` など既存属性を条件に session へ反映するため、削除済み `META` を復活させない。復習状態、苦手集計、共通問題バンクはセッション外のデータとして保持する。詳細は `docs/data-model.md` AP-13 を参照。
+削除は `META` の条件付き物理削除を起点とし、対象を指す `INITIAL` guard と `QUEUED` / `RETRY_WAIT` job の `CANCELLED` 更新を同じ TransactWrite で確定した後、対象 partition の `ATTEMPT#*` を BatchWrite で削除する。`RUNNING` job は中断しない。完了後の worker は `initial.jobId` / `prefetch.jobId` など既存属性を条件に session へ反映するため、削除済み `META` を復活させない。復習状態、苦手集計、共通問題バンクはセッション外のデータとして保持する。詳細は `docs/data-model.md` AP-14 を参照。
 
 ## データフローの原則（実装との対応）
 
