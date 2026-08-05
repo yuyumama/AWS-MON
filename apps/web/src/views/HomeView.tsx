@@ -12,6 +12,7 @@ import {
 	listSessions,
 	startSession,
 } from "../lib/api";
+import { invalidateCache, mutateCache, useCachedResource } from "../lib/cache";
 import {
 	aipDomains,
 	certName,
@@ -19,6 +20,7 @@ import {
 	modeLabel,
 	modeOptions,
 } from "../lib/certs";
+import { useRouteScrollPosition } from "../lib/viewState";
 
 type Props = {
 	// 生成権限(/me の canGenerateQuestions)。無いユーザーには GENERATE/MIXED を出さない。
@@ -39,6 +41,7 @@ function formatUpdatedAt(iso: string): string {
 }
 
 export function HomeView({ canGenerate, onOpenSession, onResume }: Props) {
+	useRouteScrollPosition("home");
 	const availableModes = canGenerate
 		? modeOptions
 		: modeOptions.filter((option) => option.value === "BANK");
@@ -48,8 +51,16 @@ export function HomeView({ canGenerate, onOpenSession, onResume }: Props) {
 	const [starting, setStarting] = useState(false);
 	const [startError, setStartError] = useState<string | null>(null);
 
-	const [sessions, setSessions] = useState<SessionSummaryDto[] | null>(null);
-	const [sessionsError, setSessionsError] = useState<string | null>(null);
+	const {
+		data: sessions,
+		error: sessionsResourceError,
+		isLoading: sessionsLoading,
+	} = useCachedResource<SessionSummaryDto[]>("sessions:ACTIVE", () =>
+		listSessions("ACTIVE"),
+	);
+	const sessionsError = sessionsResourceError
+		? errorMessage(sessionsResourceError)
+		: null;
 	const [confirmSession, setConfirmSession] =
 		useState<SessionSummaryDto | null>(null);
 	const [deleting, setDeleting] = useState(false);
@@ -58,20 +69,6 @@ export function HomeView({ canGenerate, onOpenSession, onResume }: Props) {
 	const cancelButtonRef = useRef<HTMLButtonElement>(null);
 	const deleteTriggerRef = useRef<HTMLButtonElement | null>(null);
 	const resumeHeadingRef = useRef<HTMLHeadingElement>(null);
-
-	useEffect(() => {
-		let cancelled = false;
-		listSessions("ACTIVE")
-			.then((items) => {
-				if (!cancelled) setSessions(items);
-			})
-			.catch((error) => {
-				if (!cancelled) setSessionsError(errorMessage(error));
-			});
-		return () => {
-			cancelled = true;
-		};
-	}, []);
 
 	useEffect(() => {
 		if (!confirmSession) return;
@@ -116,6 +113,7 @@ export function HomeView({ canGenerate, onOpenSession, onResume }: Props) {
 				domainSelection: cert === "aip" ? domainSelection : undefined,
 				mode,
 			});
+			invalidateCache("sessions:ACTIVE");
 			onOpenSession(session);
 		} catch (error) {
 			setStartError(errorMessage(error));
@@ -131,10 +129,10 @@ export function HomeView({ canGenerate, onOpenSession, onResume }: Props) {
 	};
 
 	const removeSessionFromList = (sessionId: string) => {
-		setSessions(
+		mutateCache<SessionSummaryDto[]>(
+			"sessions:ACTIVE",
 			(current) =>
-				current?.filter((session) => session.sessionId !== sessionId) ??
-				current,
+				current?.filter((session) => session.sessionId !== sessionId) ?? [],
 		);
 	};
 
@@ -255,12 +253,12 @@ export function HomeView({ canGenerate, onOpenSession, onResume }: Props) {
 				{sessionsError && (
 					<p className="notice notice-error">{sessionsError}</p>
 				)}
-				{!sessionsError && sessions === null && <SessionListSkeleton />}
-				{sessions !== null && sessions.length === 0 && (
+				{sessionsLoading && <SessionListSkeleton />}
+				{sessions !== undefined && sessions.length === 0 && (
 					<p className="notice">進行中のセッションはありません。</p>
 				)}
 
-				{sessions !== null && sessions.length > 0 && (
+				{sessions !== undefined && sessions.length > 0 && (
 					<ul className="session-list">
 						{sessions.map((session) => (
 							<li className="session-item" key={session.sessionId}>

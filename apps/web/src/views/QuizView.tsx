@@ -24,6 +24,7 @@ import {
 	setReviewMark,
 	submitAnswer,
 } from "../lib/api";
+import { invalidateCache } from "../lib/cache";
 import { certName, domainLabel, modeLabel } from "../lib/certs";
 import { useElapsedSeconds } from "../lib/useElapsedSeconds";
 
@@ -151,6 +152,13 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 	const initialElapsed = useElapsedSeconds(initialPreparing);
 	const generatingNext = pending === "next" && session?.mode !== "BANK";
 	const nextElapsed = useElapsedSeconds(generatingNext);
+
+	useEffect(() => {
+		const questionId = session?.current?.question.questionId;
+		if (!questionId || session.mode === "BANK") return;
+		// GENERATE / MIXED で新しい問題を受け取った時点で一覧を再検証対象にする。
+		invalidateCache("questions:");
+	}, [session?.current?.question.questionId, session?.mode]);
 
 	const reload = useCallback(async () => {
 		setLoadError(null);
@@ -331,6 +339,7 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 		try {
 			const state = await setReviewMark(answeredQuestionId, !reviewMarked);
 			setReviewMarked(state.reviewMarked);
+			invalidateCache("reviews:");
 		} catch (error) {
 			setActionError(errorMessage(error));
 		} finally {
@@ -360,6 +369,8 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 				version: session.version,
 				elapsedMs: Date.now() - shownAtRef.current,
 			});
+			invalidateCache("reviews:");
+			invalidateCache("sessions:ACTIVE");
 			setSession(result.session);
 		} catch (error) {
 			setActionError(errorMessage(error));
@@ -378,6 +389,7 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 		nextFromSequenceRef.current = current.sequence;
 		try {
 			const result = await nextQuestion(session.sessionId, session.version);
+			invalidateCache("sessions:ACTIVE");
 			setSession(result.session);
 			if (result.preparing) {
 				setNextWaiting(true);
@@ -423,16 +435,19 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 
 			try {
 				const fresh = await getSession(sessionId);
-				if (cancelled) return;
-				setSession(fresh);
-
 				const fromSequence = nextFromSequenceRef.current;
-				if (
+				const advancedCurrent =
 					fresh.current &&
 					fromSequence !== null &&
 					fresh.current.sequence > fromSequence
-				) {
-					setSelected(fresh.current.selectedAnswers ?? []);
+						? fresh.current
+						: null;
+				if (advancedCurrent) invalidateCache("sessions:ACTIVE");
+				if (cancelled) return;
+				setSession(fresh);
+
+				if (advancedCurrent) {
+					setSelected(advancedCurrent.selectedAnswers ?? []);
 					shownAtRef.current = Date.now();
 					setNextWaiting(false);
 					setPending(null);
@@ -458,6 +473,7 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 				if (fresh.prefetch?.state !== "QUEUED") {
 					if (cancelled || !isPresentRef.current) return;
 					const result = await nextQuestion(fresh.sessionId, fresh.version);
+					invalidateCache("sessions:ACTIVE");
 					if (cancelled) return;
 					setSession(result.session);
 					if (!result.preparing) {

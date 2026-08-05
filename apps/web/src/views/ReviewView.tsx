@@ -1,5 +1,5 @@
 import type { AnsweredQuestionDto, ReviewItemDto } from "@aws-mon/shared";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { ButtonSpinner } from "../components/Loading";
 import {
 	errorMessage,
@@ -7,7 +7,12 @@ import {
 	listReviews,
 	setReviewMark,
 } from "../lib/api";
+import { invalidateCache, mutateCache, useCachedResource } from "../lib/cache";
 import { certOptions, domainLabel } from "../lib/certs";
+import {
+	usePersistedViewState,
+	useRouteScrollPosition,
+} from "../lib/viewState";
 
 function formatDate(iso?: string): string {
 	if (!iso) return "—";
@@ -22,82 +27,67 @@ function formatDate(iso?: string): string {
 }
 
 export function ReviewView() {
-	const [certFilter, setCertFilter] = useState("");
-	const [items, setItems] = useState<ReviewItemDto[] | null>(null);
-	const [error, setError] = useState<string | null>(null);
-	const [expandedId, setExpandedId] = useState<string | null>(null);
+	useRouteScrollPosition("review");
+	const [certFilter, setCertFilter] = usePersistedViewState(
+		"review:certFilter",
+		"",
+	);
+	const [expandedId, setExpandedId] = usePersistedViewState<string | null>(
+		"review:expandedId",
+		null,
+	);
 	const [unmarkingId, setUnmarkingId] = useState<string | null>(null);
-	const [details, setDetails] = useState<
-		Record<string, AnsweredQuestionDto | undefined>
-	>({});
-	const [detailErrors, setDetailErrors] = useState<
-		Record<string, string | undefined>
-	>({});
-	const [loadingIds, setLoadingIds] = useState<Set<string>>(new Set());
-
-	useEffect(() => {
-		let cancelled = false;
-		setItems(null);
-		setError(null);
-		setExpandedId(null);
-		listReviews(certFilter || undefined)
-			.then((result) => {
-				if (!cancelled) setItems(result);
-			})
-			.catch((e) => {
-				if (!cancelled) setError(errorMessage(e));
-			});
-		return () => {
-			cancelled = true;
-		};
-	}, [certFilter]);
+	const [actionError, setActionError] = useState<string | null>(null);
+	const cacheKey = `reviews:${certFilter}`;
+	const {
+		data: items,
+		error: resourceError,
+		isLoading,
+	} = useCachedResource<ReviewItemDto[]>(cacheKey, () =>
+		listReviews(certFilter || undefined),
+	);
+	const expandableId = items?.some(
+		(item) =>
+			item.questionId === expandedId && item.questionStatus !== undefined,
+	)
+		? expandedId
+		: null;
+	const {
+		data: expandedQuestion,
+		error: detailError,
+		isLoading: detailLoading,
+	} = useCachedResource<AnsweredQuestionDto>(
+		expandableId ? `question:${expandableId}` : null,
+		() => getQuestion(expandableId ?? ""),
+		{ staleMs: Number.POSITIVE_INFINITY },
+	);
+	const error =
+		actionError ?? (resourceError ? errorMessage(resourceError) : null);
 
 	const unmark = async (questionId: string) => {
 		setUnmarkingId(questionId);
-		setError(null);
+		setActionError(null);
 		try {
 			await setReviewMark(questionId, false);
-			setItems((prev) =>
-				prev ? prev.filter((item) => item.questionId !== questionId) : prev,
+			// 先に全資格分を無効化し、現在表示中のキーだけ楽観更新で有効に戻す。
+			invalidateCache("reviews:");
+			mutateCache<ReviewItemDto[]>(cacheKey, (current) =>
+				(current ?? []).filter((item) => item.questionId !== questionId),
 			);
+			setExpandedId((current) => (current === questionId ? null : current));
 		} catch (e) {
-			setError(errorMessage(e));
+			setActionError(errorMessage(e));
 		} finally {
 			setUnmarkingId(null);
 		}
 	};
 
-	const toggleDetail = async (item: ReviewItemDto) => {
+	const toggleDetail = (item: ReviewItemDto) => {
 		if (expandedId === item.questionId) {
 			setExpandedId(null);
 			return;
 		}
 		setExpandedId(item.questionId);
-		if (
-			item.questionStatus === undefined ||
-			details[item.questionId] ||
-			loadingIds.has(item.questionId)
-		) {
-			return;
-		}
-
-		setLoadingIds((prev) => new Set(prev).add(item.questionId));
-		setDetailErrors((prev) => ({ ...prev, [item.questionId]: undefined }));
-		try {
-			const question = await getQuestion(item.questionId);
-			setDetails((prev) => ({ ...prev, [item.questionId]: question }));
-		} catch (e) {
-			setDetailErrors((prev) => ({
-				...prev,
-				[item.questionId]: errorMessage(e),
-			}));
-		} finally {
-			setLoadingIds((prev) => {
-				const next = new Set(prev);
-				next.delete(item.questionId);
-				return next;
-			});
-		}
 	};
 
 	return (
@@ -110,7 +100,11 @@ export function ReviewView() {
 					className="select review-filter"
 					aria-label="資格で絞り込み"
 					value={certFilter}
-					onChange={(e) => setCertFilter(e.target.value)}
+					onChange={(e) => {
+						setCertFilter(e.target.value);
+						setExpandedId(null);
+						setActionError(null);
+					}}
 				>
 					<option value="">すべての資格</option>
 					{certOptions.map((option) => (
@@ -122,8 +116,8 @@ export function ReviewView() {
 			</div>
 
 			{error && <p className="notice notice-error">{error}</p>}
-			{!error && items === null && <p className="notice">読み込み中…</p>}
-			{items !== null && items.length === 0 && (
+			{isLoading && <p className="notice">読み込み中…</p>}
+			{items !== undefined && items.length === 0 && (
 				<p className="notice">
 					復習リストに問題はまだありません。間違えた問題は自動で追加され、
 					正解した問題も回答後の解説画面の「☆
@@ -131,13 +125,12 @@ export function ReviewView() {
 				</p>
 			)}
 
-			{items !== null && items.length > 0 && (
+			{items !== undefined && items.length > 0 && (
 				<ul className="review-list">
 					{items.map((item) => {
 						const expanded = expandedId === item.questionId;
-						const question = details[item.questionId];
-						const detailError = detailErrors[item.questionId];
-						const loading = loadingIds.has(item.questionId);
+						const question = expanded ? expandedQuestion : undefined;
+						const loading = expanded && detailLoading;
 						const hasQuestion = item.questionStatus !== undefined;
 						const correctSet = new Set(
 							question?.correct.map((c) => c.toUpperCase()) ?? [],
@@ -179,8 +172,10 @@ export function ReviewView() {
 										正解と解説を読み込み中…
 									</p>
 								)}
-								{expanded && detailError && (
-									<p className="notice notice-error">{detailError}</p>
+								{expanded && detailError !== undefined && (
+									<p className="notice notice-error">
+										{errorMessage(detailError)}
+									</p>
 								)}
 								{expanded && question && (
 									<div className="review-detail">
@@ -240,7 +235,7 @@ export function ReviewView() {
 										<button
 											type="button"
 											className="button button-ghost"
-											onClick={() => void toggleDetail(item)}
+											onClick={() => toggleDetail(item)}
 										>
 											{expanded ? "閉じる" : "正解と解説を見る"}
 										</button>
