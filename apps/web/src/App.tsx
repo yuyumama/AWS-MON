@@ -12,6 +12,7 @@ import { useCallback, useEffect, useState } from "react";
 import { AuthSkeleton } from "./components/Loading";
 import { errorMessage, getMe } from "./lib/api";
 import { authMode, displayName, initAuth, logout } from "./lib/auth";
+import { clearCache } from "./lib/cache";
 import { HomeView } from "./views/HomeView";
 import { LoginView } from "./views/LoginView";
 import { QuestionListView } from "./views/QuestionListView";
@@ -149,6 +150,8 @@ export function App() {
 											className="link-button"
 											onClick={() => {
 												logout();
+												// 別ユーザーへ前ユーザーのセッション・復習一覧を見せない。
+												clearCache();
 												window.location.hash = "";
 												setAuth({ phase: "login" });
 											}}

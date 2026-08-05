@@ -1,9 +1,18 @@
 import type { AnsweredQuestionDto, QuestionListItemDto } from "@aws-mon/shared";
 import { useEffect, useRef, useState } from "react";
 import { errorMessage, getQuestion, listQuestions } from "../lib/api";
+import { mutateCache, useCachedResource } from "../lib/cache";
 import { aipDomains, certName, certOptions, domainLabel } from "../lib/certs";
+import {
+	usePersistedViewState,
+	useRouteScrollPosition,
+} from "../lib/viewState";
 
 type Filters = { cert: string; domain: string };
+type QuestionListCache = {
+	items: QuestionListItemDto[];
+	nextCursor?: string;
+};
 
 function initialFilters(): Filters {
 	const params = new URLSearchParams(window.location.search);
@@ -49,58 +58,75 @@ function formatDate(item: QuestionListItemDto): string {
 }
 
 export function QuestionListView() {
+	useRouteScrollPosition("questions");
 	const [filters, setFilters] = useState<Filters>(initialFilters);
-	const [items, setItems] = useState<QuestionListItemDto[]>([]);
-	const [nextCursor, setNextCursor] = useState<string | undefined>();
-	const [initialLoading, setInitialLoading] = useState(true);
 	const [loadingMore, setLoadingMore] = useState(false);
-	const [error, setError] = useState<string | null>(null);
-	const [expandedId, setExpandedId] = useState<string | null>(null);
-	const [details, setDetails] = useState<
-		Record<string, AnsweredQuestionDto | undefined>
-	>({});
-	const [detailErrors, setDetailErrors] = useState<
-		Record<string, string | undefined>
-	>({});
-	const [loadingIds, setLoadingIds] = useState<Set<string>>(new Set());
+	const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
+	const [expandedId, setExpandedId] = usePersistedViewState<string | null>(
+		"questions:expandedId",
+		null,
+	);
 	const filterKey = `${filters.cert}:${filters.domain}`;
+	const cacheKey = `questions:${filters.cert}:${filters.domain}`;
 	const currentFilterKey = useRef(filterKey);
 	currentFilterKey.current = filterKey;
+	const {
+		data: page,
+		error: resourceError,
+		isLoading: initialLoading,
+	} = useCachedResource<QuestionListCache>(
+		cacheKey,
+		() =>
+			listQuestions({
+				cert: filters.cert,
+				domain: filters.domain || undefined,
+			}),
+		{
+			merge: (cached, fresh) => {
+				if (!cached) return fresh;
+				const cachedIds = new Set(cached.items.map((item) => item.questionId));
+				const newItems = fresh.items.filter(
+					(item) => !cachedIds.has(item.questionId),
+				);
+				// 先頭ページから消えた問題が ARCHIVED / REJECTED になったかは判別できないため、
+				// 再検証では既存項目を残し、新しく見つかった問題だけを先頭へ追加する。
+				return {
+					items: [...newItems, ...cached.items],
+					nextCursor: cached.nextCursor,
+				};
+			},
+		},
+	);
+	const items = page?.items ?? [];
+	const nextCursor = page?.nextCursor;
+	const error =
+		loadMoreError ?? (resourceError ? errorMessage(resourceError) : null);
+	const {
+		data: expandedQuestion,
+		error: detailError,
+		isLoading: detailLoading,
+	} = useCachedResource<AnsweredQuestionDto>(
+		expandedId ? `question:${expandedId}` : null,
+		() => getQuestion(expandedId ?? ""),
+		{ staleMs: Number.POSITIVE_INFINITY },
+	);
 
 	useEffect(() => {
-		let cancelled = false;
 		replaceFilterUrl(filters);
-		setItems([]);
-		setNextCursor(undefined);
-		setExpandedId(null);
-		setError(null);
-		setInitialLoading(true);
-		setLoadingMore(false);
-		listQuestions({
-			cert: filters.cert,
-			domain: filters.domain || undefined,
-		})
-			.then((result) => {
-				if (cancelled) return;
-				setItems(result.items);
-				setNextCursor(result.nextCursor);
-			})
-			.catch((cause) => {
-				if (!cancelled) setError(errorMessage(cause));
-			})
-			.finally(() => {
-				if (!cancelled) setInitialLoading(false);
-			});
-		return () => {
-			cancelled = true;
-		};
 	}, [filters]);
+
+	const changeFilters = (next: Filters) => {
+		setFilters(next);
+		setExpandedId(null);
+		setLoadMoreError(null);
+		setLoadingMore(false);
+	};
 
 	const loadMore = async () => {
 		if (!nextCursor || loadingMore) return;
 		const requestedFilterKey = filterKey;
 		setLoadingMore(true);
-		setError(null);
+		setLoadMoreError(null);
 		try {
 			const result = await listQuestions({
 				cert: filters.cert,
@@ -108,11 +134,22 @@ export function QuestionListView() {
 				cursor: nextCursor,
 			});
 			if (currentFilterKey.current !== requestedFilterKey) return;
-			setItems((current) => [...current, ...result.items]);
-			setNextCursor(result.nextCursor);
+			mutateCache<QuestionListCache>(cacheKey, (current) => {
+				const currentItems = current?.items ?? [];
+				const existingIds = new Set(
+					currentItems.map((item) => item.questionId),
+				);
+				return {
+					items: [
+						...currentItems,
+						...result.items.filter((item) => !existingIds.has(item.questionId)),
+					],
+					nextCursor: result.nextCursor,
+				};
+			});
 		} catch (cause) {
 			if (currentFilterKey.current === requestedFilterKey) {
-				setError(errorMessage(cause));
+				setLoadMoreError(errorMessage(cause));
 			}
 		} finally {
 			if (currentFilterKey.current === requestedFilterKey) {
@@ -121,31 +158,12 @@ export function QuestionListView() {
 		}
 	};
 
-	const toggleDetail = async (questionId: string) => {
+	const toggleDetail = (questionId: string) => {
 		if (expandedId === questionId) {
 			setExpandedId(null);
 			return;
 		}
 		setExpandedId(questionId);
-		if (details[questionId] || loadingIds.has(questionId)) return;
-
-		setLoadingIds((current) => new Set(current).add(questionId));
-		setDetailErrors((current) => ({ ...current, [questionId]: undefined }));
-		try {
-			const question = await getQuestion(questionId);
-			setDetails((current) => ({ ...current, [questionId]: question }));
-		} catch (cause) {
-			setDetailErrors((current) => ({
-				...current,
-				[questionId]: errorMessage(cause),
-			}));
-		} finally {
-			setLoadingIds((current) => {
-				const next = new Set(current);
-				next.delete(questionId);
-				return next;
-			});
-		}
 	};
 
 	return (
@@ -161,7 +179,7 @@ export function QuestionListView() {
 							className="select"
 							value={filters.cert}
 							onChange={(event) =>
-								setFilters({ cert: event.target.value, domain: "" })
+								changeFilters({ cert: event.target.value, domain: "" })
 							}
 						>
 							{certOptions.map((option) => (
@@ -179,10 +197,10 @@ export function QuestionListView() {
 								className="select"
 								value={filters.domain}
 								onChange={(event) =>
-									setFilters((current) => ({
-										...current,
+									changeFilters({
+										...filters,
 										domain: event.target.value,
-									}))
+									})
 								}
 							>
 								<option value="">すべて</option>
@@ -205,7 +223,7 @@ export function QuestionListView() {
 					問題リストを読み込み中…
 				</p>
 			)}
-			{!initialLoading && !error && items.length === 0 && (
+			{!initialLoading && !resourceError && items.length === 0 && (
 				<p className="notice">
 					0件です。条件に一致する生成済み問題はありません。
 				</p>
@@ -215,9 +233,8 @@ export function QuestionListView() {
 				<ul className="review-list question-list">
 					{items.map((item) => {
 						const expanded = expandedId === item.questionId;
-						const question = details[item.questionId];
-						const loading = loadingIds.has(item.questionId);
-						const detailError = detailErrors[item.questionId];
+						const question = expanded ? expandedQuestion : undefined;
+						const loading = expanded && detailLoading;
 						const correctSet = new Set(
 							question?.correct.map((answer) => answer.toUpperCase()) ?? [],
 						);
@@ -246,8 +263,10 @@ export function QuestionListView() {
 										問題と解説を読み込み中…
 									</p>
 								)}
-								{expanded && detailError && (
-									<p className="notice notice-error">{detailError}</p>
+								{expanded && detailError !== undefined && (
+									<p className="notice notice-error">
+										{errorMessage(detailError)}
+									</p>
 								)}
 								{expanded && question && (
 									<div className="review-detail">
@@ -325,7 +344,7 @@ export function QuestionListView() {
 										type="button"
 										className="button button-ghost"
 										aria-expanded={expanded}
-										onClick={() => void toggleDetail(item.questionId)}
+										onClick={() => toggleDetail(item.questionId)}
 									>
 										{expanded ? "閉じる" : "問題と解説を見る"}
 									</button>
