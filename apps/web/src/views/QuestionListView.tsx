@@ -84,14 +84,22 @@ export function QuestionListView() {
 		{
 			merge: (cached, fresh) => {
 				if (!cached) return fresh;
+				const freshById = new Map(
+					fresh.items.map((item) => [item.questionId, item]),
+				);
 				const cachedIds = new Set(cached.items.map((item) => item.questionId));
 				const newItems = fresh.items.filter(
 					(item) => !cachedIds.has(item.questionId),
 				);
 				// 先頭ページから消えた問題が ARCHIVED / REJECTED になったかは判別できないため、
-				// 再検証では既存項目を残し、新しく見つかった問題だけを先頭へ追加する。
+				// 再検証では既存項目を残し、同じIDは最新データへ置換して、未知のIDだけを先頭へ追加する。
 				return {
-					items: [...newItems, ...cached.items],
+					items: [
+						...newItems,
+						...cached.items.map(
+							(item) => freshById.get(item.questionId) ?? item,
+						),
+					],
 					nextCursor: cached.nextCursor,
 				};
 			},
@@ -125,16 +133,20 @@ export function QuestionListView() {
 	const loadMore = async () => {
 		if (!nextCursor || loadingMore) return;
 		const requestedFilterKey = filterKey;
+		const requestedCursor = nextCursor;
 		setLoadingMore(true);
 		setLoadMoreError(null);
 		try {
 			const result = await listQuestions({
 				cert: filters.cert,
 				domain: filters.domain || undefined,
-				cursor: nextCursor,
+				cursor: requestedCursor,
 			});
 			if (currentFilterKey.current !== requestedFilterKey) return;
 			mutateCache<QuestionListCache>(cacheKey, (current) => {
+				if (current?.nextCursor !== requestedCursor) {
+					return current ?? { items: [] };
+				}
 				const currentItems = current?.items ?? [];
 				const existingIds = new Set(
 					currentItems.map((item) => item.questionId),

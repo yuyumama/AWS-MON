@@ -369,6 +369,8 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 				version: session.version,
 				elapsedMs: Date.now() - shownAtRef.current,
 			});
+			invalidateCache("reviews:");
+			invalidateCache("sessions:ACTIVE");
 			setSession(result.session);
 		} catch (error) {
 			setActionError(errorMessage(error));
@@ -387,6 +389,7 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 		nextFromSequenceRef.current = current.sequence;
 		try {
 			const result = await nextQuestion(session.sessionId, session.version);
+			invalidateCache("sessions:ACTIVE");
 			setSession(result.session);
 			if (result.preparing) {
 				setNextWaiting(true);
@@ -432,16 +435,19 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 
 			try {
 				const fresh = await getSession(sessionId);
-				if (cancelled) return;
-				setSession(fresh);
-
 				const fromSequence = nextFromSequenceRef.current;
-				if (
+				const advancedCurrent =
 					fresh.current &&
 					fromSequence !== null &&
 					fresh.current.sequence > fromSequence
-				) {
-					setSelected(fresh.current.selectedAnswers ?? []);
+						? fresh.current
+						: null;
+				if (advancedCurrent) invalidateCache("sessions:ACTIVE");
+				if (cancelled) return;
+				setSession(fresh);
+
+				if (advancedCurrent) {
+					setSelected(advancedCurrent.selectedAnswers ?? []);
 					shownAtRef.current = Date.now();
 					setNextWaiting(false);
 					setPending(null);
@@ -467,6 +473,7 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 				if (fresh.prefetch?.state !== "QUEUED") {
 					if (cancelled || !isPresentRef.current) return;
 					const result = await nextQuestion(fresh.sessionId, fresh.version);
+					invalidateCache("sessions:ACTIVE");
 					if (cancelled) return;
 					setSession(result.session);
 					if (!result.preparing) {
