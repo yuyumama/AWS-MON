@@ -11,6 +11,15 @@ npm run build
 echo "==> Typecheck workspaces"
 npm run typecheck --workspaces --if-present
 
+echo "==> Test (workspaces)"
+# 統合テストは DynamoDB Local(:8000) を使う。未起動ならそのテストはスキップされる
+# (正のゲートはCI側。ここは push 前の早期検知用)。
+if ! curl -sf -o /dev/null --max-time 2 http://127.0.0.1:8000 2>/dev/null; then
+  warn "DynamoDB Local (127.0.0.1:8000) is not reachable; integration tests will be skipped"
+  warn "  start it with: (cd local && docker compose up -d)"
+fi
+npm test
+
 echo "==> Biome"
 npm run lint
 
@@ -20,6 +29,22 @@ if command -v ruff >/dev/null 2>&1; then
   ruff format --check apps/agent
 else
   warn "ruff is not installed; skipping Python lint/format checks"
+fi
+
+# pytest はリポジトリ内の venv に入っていることが多いのでそちらを優先する
+if [ -x apps/agent/.venv/bin/pytest ]; then
+  PYTEST_BIN="$(pwd)/apps/agent/.venv/bin/pytest"
+elif command -v pytest >/dev/null 2>&1; then
+  PYTEST_BIN="pytest"
+else
+  PYTEST_BIN=""
+fi
+
+if [ -n "$PYTEST_BIN" ]; then
+  echo "==> Pytest"
+  (cd apps/agent && "$PYTEST_BIN" -q)
+else
+  warn "pytest is not installed; skipping Python tests"
 fi
 
 if command -v terraform >/dev/null 2>&1; then

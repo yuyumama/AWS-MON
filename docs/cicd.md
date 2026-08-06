@@ -1,6 +1,6 @@
 # cicd — CI/CDパイプライン構成
 
-最終更新: 2026-07-06
+最終更新: 2026-08-07
 
 GitHub Actions による CI/CD の確定構成である。`docs/architecture.md` はシステム構成、本書は
 **コードがどのように検証され、AWSに届くか**を示す。
@@ -11,8 +11,11 @@ GitHub Actions による CI/CD の確定構成である。`docs/architecture.md`
 ローカルCI（補助・高速）→ GitHub Actions CI（正・必須ゲート）→ GitHub Actions CD（mainマージ後・承認付き）
 ```
 
-- **ローカルCI**は push 前の高速フィードバック用。スキップ可能なため、マージ可否のゲートは
-  必ず GitHub Actions 側に置く。チェック内容は両者で同一（スクリプトを共有し乖離を防ぐ）。
+- **ローカルCI**（`scripts/ci-local.sh`）は push 前の高速フィードバック用。スキップ可能なため、
+  マージ可否のゲートは必ず GitHub Actions 側に置く。チェック項目は GitHub Actions CI に揃えるが、
+  **完全に同一ではない**: ローカル側は未インストールのツール（ruff / pytest / terraform / gitleaks）と
+  未起動の DynamoDB Local を警告付きでスキップする。CI側は全チェックを必ず実行する。
+- **CI は main の ruleset により必須ゲートである**（下記「マージゲート」）。落ちたPRはマージできない。
 - **CD は main への push のみを契機**とする。PRや手動pushから本番リソースには触れない。
 - `terraform apply` の前には GitHub Environments（`prod`）の**手動承認**を挟む。
 - AWSへのアクセスには、すべて **OIDC による一時クレデンシャル**を使用する。GitHub Secrets に
@@ -46,8 +49,8 @@ infra/
 
 | ジョブ | 内容 | 実行条件 |
 |---|---|---|
-| node | npm ci → shared build → typecheck → `biome ci .` → web/api build | 常時 |
-| agent | `ruff check` / `ruff format --check` | `apps/agent/**` 変更時 |
+| node | npm ci → shared build → web/api build → typecheck → **`npm test`** → `biome ci .` | 常時 |
+| agent | `ruff check` / `ruff format --check` / **`pytest`** | `apps/agent/**` 変更時 |
 | terraform | `fmt -check` / `init -backend=false` / `validate` | `infra/**` 変更時 |
 | tf-plan | `terraform plan -lock=false`（結果はジョブログで確認） | `infra/envs/prod/**` 変更時（同一リポジトリのPRのみ） |
 | security | gitleaks（シークレット検知）+ trivy（IaCミスコンフィグ検知） | 常時 |
@@ -64,6 +67,30 @@ infra/
 - **LLMレビュー（ローカル・助言的）**: 認証・IAM・データアクセスに触る変更はマージ前に
   Claude Code の `/security-review` をローカルで実行する。文脈依存の指摘（権限設計の穴、
   認可漏れ）を拾う補助であり、非決定的なためゲートにはしない。
+
+### マージゲート（main の ruleset）
+
+`main` には ruleset `main-merge-gate` を設定し、CIを助言ではなく**必須ゲート**にする。
+
+| 設定 | 値 |
+|---|---|
+| required status checks | `node` / `security` / `agent` / `terraform` |
+| PR必須 | あり（`required_approving_review_count: 0`） |
+| 管理者バイパス | **なし**（`bypass_actors: []`） |
+| その他 | ブランチ削除禁止 / force push 禁止 |
+
+- **`agent` / `terraform` は条件付き実行だが required に含めてよい。** `ci.yml` は `on:` に
+  パスフィルタを持たず常に起動し、ジョブレベルの `if:` でのみ skip する。この場合 skip は
+  成功扱いになる（ワークフロー自体が起動しない構成ではチェックが永久に pending になる）。
+- **`tf-plan` は required に含めない。** 実AWSに接続するため、コードと無関係な理由でマージが
+  止まりうる。参考情報に留める。
+- 承認者数を0にしているのは単独オーナーのためである（自分のPRは自分で承認できない）。
+  PRを必須にすることで main への直接 push だけを禁じる。
+- **管理者バイパスを設定しない**のは、抜け道を常設するとゲートが助言に戻るためである。
+  CIが壊れて詰まった場合は ruleset 自体を一時的に無効化する（明示的な操作で監査ログに残る）。
+
+テストの層構成・対象・テスト先行の運用ルールは [ADR 0017](adr/0017-test-strategy.md) と
+`AGENTS.md`「テスト方針」を参照する。
 
 ## CD — infra と app の分離
 
