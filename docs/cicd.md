@@ -74,7 +74,7 @@ infra/
 
 | 設定 | 値 |
 |---|---|
-| required status checks | `node` / `security` / `agent` / `terraform` |
+| required status checks | `changes` / `node` / `security` / `agent` / `terraform` |
 | PR必須 | あり（`required_approving_review_count: 0`） |
 | 管理者バイパス | **なし**（`bypass_actors: []`） |
 | その他 | ブランチ削除禁止 / force push 禁止 |
@@ -82,6 +82,12 @@ infra/
 - **`agent` / `terraform` は条件付き実行だが required に含めてよい。** `ci.yml` は `on:` に
   パスフィルタを持たず常に起動し、ジョブレベルの `if:` でのみ skip する。この場合 skip は
   成功扱いになる（ワークフロー自体が起動しない構成ではチェックが永久に pending になる）。
+- **`changes` を required に含めるのは必須である。** 条件付きジョブは
+  `needs.changes.outputs.*` で実行可否を決めるため、`changes` が失敗すると
+  `agent` / `terraform` は **skip = 成功扱い**になる。`changes` を required から外すと、
+  「`apps/agent` を変更したPRで pytest が一度も走らないままマージできる」状態が生まれる
+  （2026-08-07、PR #113 で実際に発生した。`changes` がランナー確保に失敗し、
+  `agent` が skipped になった）。
 - **`tf-plan` は required に含めない。** 実AWSに接続するため、コードと無関係な理由でマージが
   止まりうる。参考情報に留める。
 - 承認者数を0にしているのは単独オーナーのためである（自分のPRは自分で承認できない）。
