@@ -27,6 +27,7 @@
   - [0014](adr/0014-generation-retry-policy.md) 生成失敗を分類し、失敗種別ごとのリトライ方針と実時間締切を導入する
   - [0015](adr/0015-display-and-grounding-data-separation.md) 表示用の日本語テキストとグラウンディング評価用の英語根拠を分離する
   - [0016](adr/0016-generation-model-selection.md) 生成モデルを ling-3.0-flash に切り替える
+  - [0017](adr/0017-test-strategy.md) テストを2層構成にし、テスト先行を委譲プロセスに組み込む
 - [`research/`](research/) — 調査メモ
   - [genai-observability-vs-xray](research/genai-observability-vs-xray.md) X-Ray / CloudWatch生成AIオブザーバビリティ / Evaluations の整理（Evaluations は検証後に廃止）
 

@@ -74,6 +74,83 @@ AWS認定試験の模擬問題を生成するWebアプリ。問題・解説は�
 - **Codex へ委譲**: 探索・設計判断・試行錯誤を含むもの。新機能、複数ファイル横断の変更、
   デバッグ、API/ライブラリ仕様の裏取りをしながらの実装など。
 
+## テスト方針
+
+> **暫定版（2026-08-07）**。実際に整備を進めた時点で見直す。
+> 層構成の背景と根拠は [`docs/adr/0017-test-strategy.md`](docs/adr/0017-test-strategy.md)。
+
+### 目的
+
+テストは**回帰ネット**である。実装をCodexに委譲し、人間が全diffを精読しない体制では、
+「エージェントが静かに壊したこと」を検知する唯一の手段がテストになる。
+
+- **壊れたときの実害が大きい順**に固める。カバレッジ率は目標にしない。
+- 手動実行を前提としない。**正のゲートは GitHub Actions のCI**（`scripts/ci-local.sh` は早期検知の補助）。
+- 壊れても即座に目に見えるもの（定数表、プロンプト文字列、CLIの入口）はテストしない。
+
+### 層構成（2層）
+
+| 層 | 手段 | 対象 |
+|---|---|---|
+| 統合 | **DynamoDB Local**（ローカルは `local/docker-compose.yml`、CIは `ci.yml` の `services:`） | `apps/api` の repository系6ファイル（`repository.ts` / `jobRepository.ts` / `questionRepository.ts` / `questionListRepository.ts` / `reviewRepository.ts` / `questionBankRepository.ts`） |
+| ユニット | モック | それ以外（`auth.ts`、HTTPルート、`apps/agent`、`packages/shared`、`apps/web` の `lib/`） |
+
+DynamoDBを直接叩くコードを**純モックだけで検証しない**。モックは「自分が書いたとおりに呼んだ」ことしか
+確認できず、次のクラスのバグを構造的に見逃す:
+
+- GSIの射影漏れ（`INCLUDE` / `KEYS_ONLY` に含まれない属性を読む）
+- sparse GSI のキー属性の設定漏れ・削除漏れ（`questionListKeys` / `reviewKeys`）
+- `ConditionExpression` の誤り（冪等性ガード、二重回答防止）
+- `TransactWriteCommand` の制約違反（同一トランザクション内での同一キー重複など）
+
+**実AWSには接続しない。** 統合テストもエミュレータで完結する（唯一の例外はデプロイ後スモーク）。
+
+### 誰がテストを書くか
+
+**Claude Code がテストを書き、Codex には「このテストを通せ」と委譲する。**
+
+Codexに「実装して、テストも書いて」と渡すと、テストは実装の写像になる。さらに修正時は
+実装とテストを同時に書き換えれば常に緑になり、回帰ネットとしての意味が消える。
+
+1. Claude がテストを書く
+2. **実装前に走らせ、赤になることを確認する**（初めから緑のテストは何も検証していない）
+3. Codex には実装だけを委譲し、そのテストファイルを完了条件として明示する
+4. **既存テストの変更差分は Claude が必ず個別に精査する** — 仕様変更なのか、実装に合わせて
+   テストを緩めたのかを判定する（どの委譲形態でも必須）
+
+### テストを先に書くことが必須の範囲
+
+| 対象 | 扱い |
+|---|---|
+| バグ修正（実機・本番で発現した、または回帰しうるもの） | **必須**。再現テストを書き、赤を見てから直す |
+| 認可・認証の分岐（`auth.ts`、`devOnly`） | **必須** |
+| 採点・判定ロジック（`answerSession`、`arrays_equal`、`check_grounding`） | **必須** |
+| DynamoDBキー生成（`packages/shared/src/tables.ts`） | **必須** |
+| APIの外部契約（ステータスコード、レスポンス形状） | **必須** |
+| repository層の新規クエリ | 実装と並行でよい。マージ前に緑であること |
+| UI/UX、プロンプト、モデル選定、Terraform、ドキュメント | 対象外 |
+
+**例外**: レビュー指摘の自明な微修正・typo・書式には再現テストを要求しない。
+
+### 新機能の場合
+
+新機能は「外部契約 / 認可 / repository / UI」に分解し、上表を当てる。
+
+1. Claude が**受け入れテスト（外部契約＋認可）**を書く。これが実装計画の成果物であり、
+   委譲プロンプトの「何をもって完了か」そのものになる（日本語の仕様説明を置き換える。純増ではない）
+2. 赤を確認して Codex に委譲する。テストが縛るのは外部契約だけで、内部実装は自由
+
+**例外**: 外部仕様の調査なしにAPIの形が決められない場合に限り、「プロトタイプ」と明示して
+Codex に調査＋試作を委譲し、形が見えてから受け入れテストを書いて本実装を委譲する。
+毎回これを選ぶと単なる後付けテストに退化するため、明示的に宣言した委譲に限る。
+
+### UIロジックの置き場所
+
+`apps/web` の views はレンダリングテストの対象外である。そのため**表示と無関係な純ロジック
+（一覧のマージ、カーソル整合、キャッシュ無効化キーの決定など）は view に埋め込まず、`lib/` に
+出してテストする**。#99 のキャッシュ不具合3件はいずれも view に埋まった純ロジックで発生しており、
+`lib/` だけを対象にすると検知できない。
+
 ## よく使うコマンド
 
 ```bash
@@ -98,6 +175,14 @@ cd apps/web && npm run dev      # http://localhost:5173
 # 問題生成エージェント（要 AWS認証 + Bedrockモデルアクセス）
 cd apps/agent && python -m quiz_agent.cli --cert aip   # CLIで1問
 python -m quiz_agent.server                            # API連携用HTTPサーバ（AGENT_BASE_URL）
+
+# テスト
+npm test                        # ルートから。workspaces の vitest を実行
+cd apps/agent && pytest         # agent の pytest
+bash scripts/ci-local.sh        # ローカルCI一括（CIと同じチェック。push前の早期検知用）
+
+# 統合テスト（repository層）は DynamoDB Local が必要
+cd local && docker compose up -d   # :8000 が未起動だとローカルではスキップされる（CIでは必ず走る）
 ```
 
 ## セキュリティ制約（厳守）
