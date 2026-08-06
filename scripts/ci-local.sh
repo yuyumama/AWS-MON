@@ -14,7 +14,8 @@ npm run typecheck --workspaces --if-present
 echo "==> Test (workspaces)"
 # 統合テストは DynamoDB Local(:8000) を使う。未起動ならそのテストはスキップされる
 # (正のゲートはCI側。ここは push 前の早期検知用)。
-if ! curl -sf -o /dev/null --max-time 2 http://127.0.0.1:8000 2>/dev/null; then
+# DynamoDB Local は素のGETに400を返すため -f は付けない(接続可否だけを見る)。
+if ! curl -s -o /dev/null --max-time 2 http://127.0.0.1:8000 2>/dev/null; then
   warn "DynamoDB Local (127.0.0.1:8000) is not reachable; integration tests will be skipped"
   warn "  start it with: (cd local && docker compose up -d)"
 fi
