@@ -12,14 +12,18 @@ echo "==> Typecheck workspaces"
 npm run typecheck --workspaces --if-present
 
 echo "==> Test (workspaces)"
-# 統合テストは DynamoDB Local(:8000) を使う。未起動ならそのテストはスキップされる
-# (正のゲートはCI側。ここは push 前の早期検知用)。
+npm test
+
+# 統合テストは DynamoDB Local(:8000) と infra/envs/local の terraform が作るテーブルを使う。
+# 未起動ならスキップする(正のゲートはCI側。ここは push 前の早期検知用)。
 # DynamoDB Local は素のGETに400を返すため -f は付けない(接続可否だけを見る)。
-if ! curl -s -o /dev/null --max-time 2 http://127.0.0.1:8000 2>/dev/null; then
-  warn "DynamoDB Local (127.0.0.1:8000) is not reachable; integration tests will be skipped"
+if curl -s -o /dev/null --max-time 2 http://127.0.0.1:8000 2>/dev/null; then
+  echo "==> Integration test (DynamoDB Local)"
+  npm run test:integration -w @aws-mon/api
+else
+  warn "DynamoDB Local (127.0.0.1:8000) is not reachable; skipping integration tests"
   warn "  start it with: (cd local && docker compose up -d)"
 fi
-npm test
 
 echo "==> Biome"
 npm run lint

@@ -38,6 +38,12 @@ jobs:
 
   node:
     runs-on: ubuntu-latest
+    # repository層の統合テスト用(ADR 0017)。実AWSには接続しない。
+    services:
+      dynamodb-local:
+        image: amazon/dynamodb-local:latest
+        ports:
+          - 8000:8000
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -59,6 +65,23 @@ jobs:
 
       - name: Test
         run: npm test
+
+      # 統合テストのテーブルは infra/envs/local の terraform で作る。prod と同じ
+      # modules/dynamodb を使うことで、キースキーマ・GSI・射影設定の乖離をゼロにする。
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+
+      - name: Create tables on DynamoDB Local
+        working-directory: infra/envs/local
+        run: |
+          terraform init -input=false
+          terraform apply -input=false -auto-approve
+
+      - name: Integration test (DynamoDB Local)
+        env:
+          # 未起動・テーブル未作成を検知したら、スキップせず失敗させる
+          REQUIRE_DYNAMODB_LOCAL: "1"
+        run: npm run test:integration -w @aws-mon/api
 
       - name: Biome
         run: npm run lint
