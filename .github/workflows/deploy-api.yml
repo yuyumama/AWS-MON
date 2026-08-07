@@ -70,7 +70,8 @@ jobs:
           WORKER_LATEST_IMAGE="${REGISTRY}/${ECR_REPOSITORY}:worker-latest"
 
           # npm workspacesのためビルドコンテキストはリポジトリルート(Dockerfile冒頭コメント参照)
-          docker build -f apps/api/Dockerfile -t "${API_IMAGE}" -t "${API_LATEST_IMAGE}" .
+          # GIT_SHA は GET /health が返す。デプロイ後スモークが版を突き合わせる(ADR 0017 決定6)
+          docker build -f apps/api/Dockerfile --build-arg GIT_SHA="${SHORT_SHA}" -t "${API_IMAGE}" -t "${API_LATEST_IMAGE}" .
           docker build -f apps/api/Dockerfile.worker -t "${WORKER_IMAGE}" -t "${WORKER_LATEST_IMAGE}" .
 
           docker push "${API_IMAGE}"
@@ -85,6 +86,7 @@ jobs:
 
       # 初回bootstrapではLambdaがまだ無いので、ECR pushだけで成功終了する
       - name: Update api Lambda if exists
+        id: update_api
         run: |
           set -euo pipefail
           if aws lambda get-function --function-name "${API_FUNCTION_NAME}" >/dev/null 2>&1; then
@@ -92,8 +94,10 @@ jobs:
               --function-name "${API_FUNCTION_NAME}" \
               --image-uri "${API_IMAGE}"
             aws lambda wait function-updated --function-name "${API_FUNCTION_NAME}"
+            echo "updated=true" >> "${GITHUB_OUTPUT}"
           else
             echo "bootstrap: ${API_FUNCTION_NAME} does not exist; push only"
+            echo "updated=false" >> "${GITHUB_OUTPUT}"
           fi
 
       # workerもapiと同じECRリポジトリを使い、worker-*タグのイメージへ更新する
@@ -108,3 +112,49 @@ jobs:
           else
             echo "bootstrap: ${WORKER_FUNCTION_NAME} does not exist; push only"
           fi
+
+      # デプロイ後スモーク(ADR 0017 決定5 の E2E-P)。
+      # SSMの値は公開アプリにも埋まっているため秘密ではない。認証情報だけがsecret。
+      - name: Read smoke configuration
+        if: steps.update_api.outputs.updated == 'true'
+        id: smoke_config
+        run: |
+          set -euo pipefail
+
+          get_parameter() {
+            aws ssm get-parameter \
+              --name "$1" \
+              --query 'Parameter.Value' \
+              --output text 2>/dev/null || true
+          }
+
+          API_BASE_URL="$(get_parameter /app/aws-mon/prod/api-base-url)"
+          COGNITO_USER_POOL_ID="$(get_parameter /app/aws-mon/prod/cognito-user-pool-id)"
+          COGNITO_CLIENT_ID="$(get_parameter /app/aws-mon/prod/cognito-client-id)"
+
+          for name in API_BASE_URL COGNITO_USER_POOL_ID COGNITO_CLIENT_ID; do
+            value="${!name}"
+            if [[ -z "${value}" || "${value}" == "None" ]]; then
+              echo "missing SSM parameter for ${name}" >&2
+              exit 1
+            fi
+          done
+
+          {
+            echo "api_base_url=${API_BASE_URL}"
+            echo "cognito_user_pool_id=${COGNITO_USER_POOL_ID}"
+            echo "cognito_client_id=${COGNITO_CLIENT_ID}"
+          } >> "${GITHUB_OUTPUT}"
+
+      # 読み取りのみ。書き込みも生成も行わない(prodデータの汚染とLLM課金の回避)。
+      # 失敗したらワークフローを赤にするだけで、自動ロールバックはしない(docs/cicd.md)。
+      - name: Smoke test (read-only)
+        if: steps.update_api.outputs.updated == 'true'
+        env:
+          API_BASE_URL: ${{ steps.smoke_config.outputs.api_base_url }}
+          EXPECTED_SHA: ${{ github.sha }}
+          COGNITO_USER_POOL_ID: ${{ steps.smoke_config.outputs.cognito_user_pool_id }}
+          COGNITO_CLIENT_ID: ${{ steps.smoke_config.outputs.cognito_client_id }}
+          SMOKE_USERNAME: ${{ secrets.SMOKE_USERNAME }}
+          SMOKE_PASSWORD: ${{ secrets.SMOKE_PASSWORD }}
+        run: node scripts/smoke-api.mjs

@@ -71,8 +71,17 @@ app.use("/dev/*", devOnly);
 app.use("/health/tables", devOnly);
 app.use("/health/dynamo", devOnly);
 
+// デプロイ後スモークが「今デプロイしたイメージが応答しているか」を判定するための版情報。
+// update-function-code が成功しても新イメージが起動できなければ Lambda は古いバージョンで
+// 応答し続けるため、200だけでは事故を検知できない(ADR 0017 決定6)。
+// GIT_SHA は apps/api/Dockerfile のビルド引数から入る。ローカル実行では unknown。
 app.get("/health", (c) =>
-	c.json({ status: "ok", service: "api", time: new Date().toISOString() }),
+	c.json({
+		status: "ok",
+		service: "api",
+		sha: process.env.GIT_SHA ?? "unknown",
+		time: new Date().toISOString(),
+	}),
 );
 
 // フロントが認証状態と生成権限(UI表示制御)を知るためのエンドポイント。

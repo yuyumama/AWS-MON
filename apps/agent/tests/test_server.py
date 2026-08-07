@@ -347,3 +347,52 @@ def test_runtime_stream_error_stays_http_200_and_ends_with_result(
     assert frames[-1]["type"] == "result"
     assert frames[-1]["status"] == "error"
     assert frames[-1]["message"] == "生成失敗"
+
+
+def test_runtime_do_post_ping_returns_ok_without_generating(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """デプロイ後スモーク用の疎通。生成もモデル呼び出しも起こさない(issue #103)。"""
+
+    def fail(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("ping で生成を呼んではいけない")
+
+    monkeypatch.setattr(
+        runtime_module, "_parse_body", lambda handler: {"action": "ping"}
+    )
+    monkeypatch.setattr(runtime_module, "build_generate_response", fail)
+
+    handler = _FakeHandler()
+    handler.path = "/invocations"
+    runtime_module.RuntimeHandler.do_POST(handler)
+
+    assert handler.sent is not None
+    status, body = handler.sent
+    assert status == HTTPStatus.OK
+    assert body["status"] == "ok"
+    assert body["action"] == "ping"
+    assert body["agent_version"] == runtime_module.AGENT_VERSION
+
+
+def test_runtime_do_post_without_ping_action_still_generates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ping判定が広すぎて通常の生成要求まで空応答にしないこと。"""
+    calls: list[dict[str, Any]] = []
+
+    def record(body: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        calls.append(body)
+        return {"status": "ok", "quiz": {}}
+
+    monkeypatch.setattr(
+        runtime_module,
+        "_parse_body",
+        lambda handler: {"cert": "aip", "action": "generate"},
+    )
+    monkeypatch.setattr(runtime_module, "build_generate_response", record)
+
+    handler = _FakeHandler()
+    handler.path = "/invocations"
+    runtime_module.RuntimeHandler.do_POST(handler)
+
+    assert len(calls) == 1

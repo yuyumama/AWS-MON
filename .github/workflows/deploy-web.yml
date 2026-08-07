@@ -103,15 +103,60 @@ jobs:
           npm run build -w @aws-mon/shared
           npm run build -w @aws-mon/web
 
+          # デプロイ後スモークが配信物の版を突き合わせるための出力(ADR 0017 決定6)。
+          # apiの GET /health が返す sha と一致していれば版ずれが無いことも分かる。
+          printf '{"sha":"%s"}' "${GITHUB_SHA}" > apps/web/dist/version.json
+
       # S3にはビルド成果物のみを同期し、削除済みファイルは--deleteで消す
       - name: Sync to S3
         if: steps.config.outputs.ready == 'true'
-        run: aws s3 sync apps/web/dist/ "s3://${{ steps.config.outputs.web_bucket }}/" --delete
+        run: |
+          set -euo pipefail
+          aws s3 sync apps/web/dist/ "s3://${{ steps.config.outputs.web_bucket }}/" --delete
+          # version.json はキャッシュされると版の判定に使えないので上書きで no-cache にする
+          aws s3 cp apps/web/dist/version.json \
+            "s3://${{ steps.config.outputs.web_bucket }}/version.json" \
+            --cache-control "no-cache, max-age=0"
 
       # SPAの全パスで新しいindex/assetsを見せるため、全体をinvalidationする
       - name: Invalidate CloudFront
         if: steps.config.outputs.ready == 'true'
         run: |
-          aws cloudfront create-invalidation \
+          set -euo pipefail
+          INVALIDATION_ID="$(aws cloudfront create-invalidation \
             --distribution-id "${{ steps.config.outputs.cloudfront_distribution_id }}" \
-            --paths "/*"
+            --paths "/*" \
+            --query 'Invalidation.Id' \
+            --output text)"
+          aws cloudfront wait invalidation-completed \
+            --distribution-id "${{ steps.config.outputs.cloudfront_distribution_id }}" \
+            --id "${INVALIDATION_ID}"
+
+      # デプロイ後スモーク(issue #103)。配信URLが200を返し、埋め込んだSHAが一致すること。
+      # 失敗したらワークフローを赤にするだけで、自動ロールバックはしない(docs/cicd.md)。
+      - name: Smoke test (delivered revision)
+        if: steps.config.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+          DOMAIN="$(aws cloudfront get-distribution \
+            --id "${{ steps.config.outputs.cloudfront_distribution_id }}" \
+            --query 'Distribution.DomainName' \
+            --output text)"
+
+          for attempt in {1..10}; do
+            STATUS="$(curl -s -o response.json -w '%{http_code}' "https://${DOMAIN}/version.json" || true)"
+            SERVED_SHA="$(python3 -c "import json;print(json.load(open('response.json')).get('sha',''))" 2>/dev/null || true)"
+
+            if [[ "${STATUS}" == "200" && "${SERVED_SHA}" == "${GITHUB_SHA}" ]]; then
+              echo "web smoke passed: ${DOMAIN} serves ${SERVED_SHA}"
+              # SPAの入口自体が配信されていることも見る(version.jsonだけ残る事故を弾く)
+              curl -fsS -o /dev/null "https://${DOMAIN}/"
+              exit 0
+            fi
+
+            echo "web smoke ${attempt}/10: status=${STATUS} sha=${SERVED_SHA:-none} (expected ${GITHUB_SHA})"
+            sleep 10
+          done
+
+          echo "配信中のwebが ${GITHUB_SHA} になっていない" >&2
+          exit 1

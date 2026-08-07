@@ -198,3 +198,42 @@ jobs:
 
           echo "AgentCore DEFAULT endpoint did not switch to ${UPDATED_VERSION} in time" >&2
           exit 1
+
+      # デプロイ後スモーク(issue #103)。Runtimeが要求を捌けることだけを確認する。
+      # ping は quiz_agent/runtime.py で早期returnし、モデルもGuardrailも呼ばない
+      # ため生成課金が発生しない。**生成を伴う疎通は行わない**。
+      - name: Smoke test (ping invoke)
+        if: steps.runtime.outputs.exists == 'true'
+        env:
+          RUNTIME_ID: ${{ steps.runtime.outputs.runtime_id }}
+        run: |
+          set -euo pipefail
+          RUNTIME_ARN="$(aws bedrock-agentcore-control get-agent-runtime \
+            --agent-runtime-id "${RUNTIME_ID}" \
+            --query 'agentRuntimeArn' \
+            --output text)"
+
+          # AgentCore の runtime-session-id は33文字以上が必要
+          aws bedrock-agentcore invoke-agent-runtime \
+            --agent-runtime-arn "${RUNTIME_ARN}" \
+            --qualifier DEFAULT \
+            --runtime-session-id "smoke-${GITHUB_SHA}-${GITHUB_RUN_ID}" \
+            --content-type application/json \
+            --accept application/json \
+            --cli-binary-format raw-in-base64-out \
+            --payload '{"action":"ping"}' \
+            ping-response.json
+
+          python3 - <<'PY'
+          import json
+          import sys
+
+          with open("ping-response.json", encoding="utf-8") as f:
+              body = json.load(f)
+
+          if body.get("status") != "ok" or body.get("action") != "ping":
+              print(f"unexpected ping response: {body}", file=sys.stderr)
+              sys.exit(1)
+
+          print(f"agent smoke passed: agent_version={body.get('agent_version')}")
+          PY

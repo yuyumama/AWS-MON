@@ -34,4 +34,9 @@ USER node
 ENV PORT=8080
 ENV AWS_LWA_PORT=8080
 
+# デプロイ後スモークが版を突き合わせるための git SHA。GET /health が返す。
+# レイヤキャッシュを壊さないよう、COPY より後(最終行の直前)に置く。
+ARG GIT_SHA=unknown
+ENV GIT_SHA=${GIT_SHA}
+
 CMD ["node", "apps/api/dist/index.js"]

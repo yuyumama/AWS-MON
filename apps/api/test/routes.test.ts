@@ -85,6 +85,7 @@ function json(body: unknown, headers: Record<string, string> = DEV_HEADERS) {
 beforeEach(() => {
 	vi.clearAllMocks();
 	process.env.AUTH_MODE = "dev";
+	delete process.env.GIT_SHA;
 	mocks.startSession.mockResolvedValue({
 		session: { sessionId: "s1" },
 		disposition: "CREATED_READY",
@@ -179,6 +180,38 @@ describe("GET /health", () => {
 			status: "ok",
 			service: "api",
 		});
+	});
+
+	// update-function-code が成功しても新イメージが起動できなければ、Lambdaは古い
+	// バージョンで応答し続ける。稼働中のリビジョンを返さないと、デプロイ後スモークは
+	// 「デプロイは成功したが動いていない」を素通りさせる(ADR 0017 決定6)。
+	it("稼働中のイメージのgit SHAを返す", async () => {
+		process.env.GIT_SHA = "0123456789abcdef0123456789abcdef01234567";
+
+		const response = await app.request("/health");
+
+		expect(await response.json()).toMatchObject({
+			sha: "0123456789abcdef0123456789abcdef01234567",
+		});
+	});
+
+	it("SHAが埋め込まれていなければ unknown を返す(ローカル実行)", async () => {
+		process.env.GIT_SHA = undefined;
+		delete process.env.GIT_SHA;
+
+		const response = await app.request("/health");
+
+		expect(await response.json()).toMatchObject({ sha: "unknown" });
+	});
+
+	it("再デプロイ後は新しいSHAを返す(値を焼き込まない)", async () => {
+		process.env.GIT_SHA = "aaaaaaa";
+		await app.request("/health");
+
+		process.env.GIT_SHA = "bbbbbbb";
+		const response = await app.request("/health");
+
+		expect(await response.json()).toMatchObject({ sha: "bbbbbbb" });
 	});
 });
 
