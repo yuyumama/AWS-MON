@@ -11,9 +11,9 @@ variable "agent_image_tag" {
 }
 
 variable "agent_model_id" {
-  description = "OpenRouter model id used for question generation (ADR 0016). Roll back by setting nvidia/nemotron-3-ultra-550b-a55b:free."
+  description = "OpenRouter model id used for question generation (ADR 0016, reverted 2026-08-08 after OpenRouter retired the ling-3.0-flash free tier). Forward path: switch to inclusionai/ling-3.0-flash (paid) once cost is acceptable."
   type        = string
-  default     = "inclusionai/ling-3.0-flash:free"
+  default     = "nvidia/nemotron-3-ultra-550b-a55b:free"
 
   validation {
     condition     = length(trimspace(var.agent_model_id)) > 0
