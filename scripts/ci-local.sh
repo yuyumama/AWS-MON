@@ -28,10 +28,19 @@ fi
 echo "==> Biome"
 npm run lint
 
-if command -v ruff >/dev/null 2>&1; then
+# ruff はリポジトリ内の venv に入っていることが多いのでそちらを優先する(pytest と同じ)
+if [ -x apps/agent/.venv/bin/ruff ]; then
+  RUFF_BIN="$(pwd)/apps/agent/.venv/bin/ruff"
+elif command -v ruff >/dev/null 2>&1; then
+  RUFF_BIN="ruff"
+else
+  RUFF_BIN=""
+fi
+
+if [ -n "$RUFF_BIN" ]; then
   echo "==> Ruff"
-  ruff check apps/agent
-  ruff format --check apps/agent
+  "$RUFF_BIN" check apps/agent
+  "$RUFF_BIN" format --check apps/agent
 else
   warn "ruff is not installed; skipping Python lint/format checks"
 fi
