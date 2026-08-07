@@ -37,7 +37,7 @@ AWSを経由しない。
 
 ```bash
 OPENROUTER_API_KEY=sk-or-v1-xxxx
-# AGENT_MODEL_ID=inclusionai/ling-3.0-flash:free   # 既定値
+# AGENT_MODEL_ID=nvidia/nemotron-3-ultra-550b-a55b:free   # 既定値
 ```
 
 - 既定の Nemotron 3 Ultra (free) は `response_format`（OpenAIネイティブ構造化出力）非対応のため、

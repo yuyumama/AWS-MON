@@ -199,8 +199,9 @@ def test_model_id_defaults_to_openrouter_free_model(
 ) -> None:
     monkeypatch.delenv("AGENT_MODEL_ID", raising=False)
 
-    # 既定モデルは ADR 0016 で ling-3.0-flash に切り替えた
-    assert model_id() == "inclusionai/ling-3.0-flash:free"
+    # ADR 0016 で ling-3.0-flash に切り替えたが、2026-08-08 に OpenRouter が
+    # 無料枠を廃止したため nemotron-3-ultra へ切り戻した
+    assert model_id() == "nvidia/nemotron-3-ultra-550b-a55b:free"
 
 
 def test_openrouter_api_key_prefers_environment(

@@ -71,3 +71,14 @@ Terraform 変数 `agent_model_id`（`infra/envs/prod/variables.tf`）を `AGENT_
 - 無料モデルは上流の混雑で 429 になることがある。[ADR 0014](0014-generation-retry-policy.md) の `rate_limited` は即 FAILED で、リトライしない方針のまま変えない。
 - 本ADRの計測は [ADR 0015](0015-display-and-grounding-data-separation.md) 適用後のコードを前提としている。プロンプトや `guard_content` の構成を変える場合は再計測が必要。
 - 生成が速くなったことで、[ADR 0014](0014-generation-retry-policy.md) の10分締切と種別ごとのリトライ回数には余裕が生まれる。締切の再チューニングは、prod 実績が蓄積されてから判断する。
+
+## 追記（2026-08-08）: nemotron-3-ultra へ切り戻し
+
+OpenRouter が `inclusionai/ling-3.0-flash:free` の無料枠を廃止し、リクエストが 404
+（`This model is unavailable for free. ... use this slug instead: inclusionai/ling-3.0-flash`）で
+即座に失敗するようになった。2026-08-07 04:10〜04:53 UTC の間に生成jobが5件連続で
+`research_failed` として失敗（トレースID `6a7564afbd3de3582e299ef139df773c` で確認）。
+モデル品質の問題ではなく無料版そのものの提供終了のため、上記の切り戻し手順に従って
+既定モデルを `nvidia/nemotron-3-ultra-550b-a55b:free` に戻した（`infra/envs/prod/variables.tf` /
+`apps/agent/quiz_agent/model_config.py`）。有料版 `inclusionai/ling-3.0-flash` への切替は
+費用対効果を検討したうえで別途判断する。
