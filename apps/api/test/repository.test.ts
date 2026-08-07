@@ -22,6 +22,7 @@ import { questionFixture, sessionFixture } from "./fixtures.js";
 const repositoryMocks = vi.hoisted(() => ({
 	documentClientFrom: vi.fn(),
 	dynamoSend: vi.fn(),
+	createAndRunPrefetchJob: vi.fn(),
 	findBankQuestion: vi.fn(),
 	generateAndSaveQuestion: vi.fn(),
 	getQuestion: vi.fn(),
@@ -48,6 +49,11 @@ vi.mock("../src/agentClient.js", () => ({
 vi.mock("../src/questionBankRepository.js", () => ({
 	findBankQuestion: repositoryMocks.findBankQuestion,
 	getQuestion: repositoryMocks.getQuestion,
+}));
+
+vi.mock("../src/jobRepository.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../src/jobRepository.js")>()),
+	createAndRunPrefetchJob: repositoryMocks.createAndRunPrefetchJob,
 }));
 
 const startInput = {
@@ -642,5 +648,57 @@ describe("nextSessionQuestion", () => {
 				([command]) => command instanceof UpdateCommand,
 			),
 		).toBe(false);
+	});
+
+	// 出題済みの除外は「同じ問題が連続して出ない」ことの唯一の担保。
+	// findBankQuestion は乱択なので、実DBに対する通しテストでは除外が壊れていても
+	// 偶然別の問題が出て緑になりうる。渡している引数そのものをここで固定する。
+	it("passes the seen question ids to the bank lookup and to the follow-up prefetch", async () => {
+		const current = questionFixture("q_current");
+		const nextQuestion = questionFixture("q_next");
+		const seen = ["q_older", current.questionId];
+		const meta = sessionFixture({
+			mode: "BANK",
+			current: {
+				sequence: 1,
+				questionId: current.questionId,
+				domain: "d1",
+				state: "ANSWERED",
+				selectedAnswers: ["A"],
+			},
+			// BANKモードで先読みがQUEUEDのままなら、その場でバンクを引く経路に入る。
+			prefetch: { sequence: 2, state: "QUEUED", domain: "d1" },
+			answeredCount: 1,
+			correctCount: 1,
+			lastSeenQuestionIds: seen,
+		});
+		repositoryMocks.getQuestion.mockResolvedValue(nextQuestion);
+		repositoryMocks.findBankQuestion.mockResolvedValue(nextQuestion);
+		repositoryMocks.createAndRunPrefetchJob.mockResolvedValue({
+			sequence: 3,
+			state: "QUEUED",
+			domain: "d1",
+			updatedAt: "2026-08-08T00:00:00.000Z",
+		});
+		repositoryMocks.dynamoSend.mockImplementation(async (command: unknown) => {
+			if (command instanceof GetCommand) return { Item: meta };
+			return {};
+		});
+
+		await nextSessionQuestion({
+			userId: meta.userId,
+			sessionId: meta.sessionId,
+			canGenerateQuestions: false,
+		});
+
+		expect(repositoryMocks.findBankQuestion).toHaveBeenCalledWith(
+			expect.objectContaining({ excludeQuestionIds: seen }),
+		);
+		// さらに先の問題を先読みするときは、いま出した問題も除外対象に含める。
+		expect(repositoryMocks.createAndRunPrefetchJob).toHaveBeenCalledWith(
+			expect.objectContaining({
+				excludeQuestionIds: [...seen, nextQuestion.questionId],
+			}),
+		);
 	});
 });
