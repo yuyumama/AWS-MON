@@ -1,6 +1,7 @@
 import {
 	bankKeys,
 	bucketCounts,
+	domainStatKey,
 	type QuestionItem,
 	questionStateKey,
 	randomSort,
@@ -13,6 +14,11 @@ import {
 	findBankQuestion,
 	getQuestion,
 } from "../../src/questionBankRepository.js";
+import {
+	answerSession,
+	nextSessionQuestion,
+	startSession,
+} from "../../src/repository.js";
 import {
 	getReviewState,
 	listReviewItems,
@@ -404,6 +410,88 @@ describe.skipIf(!dynamoLocalAvailable)("repository層 (DynamoDB Local)", () => {
 			});
 
 			expect(await listReviewItems({ userId: other })).toEqual([]);
+		});
+	});
+
+	// 出題済みの記録は「同じ問題が連続して出ない」ことの唯一の担保である。
+	// 記録が漏れても、バンクに複数問あれば偶然別の問題が出ることがあるため、
+	// 通しの導線テストでは検知が確率的になる。ここでは記録そのものを確認する。
+	describe("出題済みの記録 (lastSeenQuestionIds)", () => {
+		async function readMeta(sessionId: string) {
+			const out = await dynamoDoc.send(
+				new GetCommand({
+					TableName: tables.sessions,
+					Key: { sessionId, itemKey: "META" },
+					ConsistentRead: true,
+				}),
+			);
+			return out.Item;
+		}
+
+		it("セッション作成時に初問を記録する", async () => {
+			const cert = uniqueId("cert");
+			const question = await putBankQuestion({ cert, domain: "d1" });
+
+			const { session } = await startSession({
+				userId: uniqueId("user"),
+				cert,
+				domain: "d1",
+				mode: "BANK",
+				canGenerateQuestions: false,
+			});
+			items.track(tables.sessions, {
+				sessionId: session.sessionId,
+				itemKey: "META",
+			});
+
+			const meta = await readMeta(session.sessionId);
+			expect(meta?.lastSeenQuestionIds).toEqual([question.questionId]);
+		});
+
+		it("次問へ進むたびに追記する", async () => {
+			const userId = uniqueId("user");
+			const cert = uniqueId("cert");
+			const a = await putBankQuestion({ cert, domain: "d1" });
+			const b = await putBankQuestion({ cert, domain: "d1" });
+
+			const { session } = await startSession({
+				userId,
+				cert,
+				domain: "d1",
+				mode: "BANK",
+				canGenerateQuestions: false,
+			});
+			const sessionId = session.sessionId;
+			items.track(tables.sessions, { sessionId, itemKey: "META" });
+			items.track(tables.sessions, { sessionId, itemKey: "ATTEMPT#000001" });
+			const firstId = session.current?.question.questionId;
+
+			await answerSession({
+				userId,
+				sessionId,
+				sequence: 1,
+				selectedAnswers: ["A"],
+			});
+			items.track(tables.userActivity, {
+				userId,
+				itemKey: questionStateKey(firstId as string),
+			});
+			items.track(tables.userActivity, {
+				userId,
+				itemKey: domainStatKey({ cert, domain: "d1" }),
+			});
+
+			await nextSessionQuestion({
+				userId,
+				sessionId,
+				canGenerateQuestions: false,
+			});
+
+			const meta = await readMeta(sessionId);
+			expect(meta?.lastSeenQuestionIds).toHaveLength(2);
+			expect(meta?.lastSeenQuestionIds).toEqual(
+				expect.arrayContaining([a.questionId, b.questionId]),
+			);
 		});
 	});
 
