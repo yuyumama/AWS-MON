@@ -4,15 +4,16 @@ import { errorMessage, getQuestion, listQuestions } from "../lib/api";
 import { mutateCache, useCachedResource } from "../lib/cache";
 import { aipDomains, certName, certOptions, domainLabel } from "../lib/certs";
 import {
+	appendQuestionPage,
+	mergeQuestionPage,
+	type QuestionListCache,
+} from "../lib/questionList";
+import {
 	usePersistedViewState,
 	useRouteScrollPosition,
 } from "../lib/viewState";
 
 type Filters = { cert: string; domain: string };
-type QuestionListCache = {
-	items: QuestionListItemDto[];
-	nextCursor?: string;
-};
 
 function initialFilters(): Filters {
 	const params = new URLSearchParams(window.location.search);
@@ -81,29 +82,7 @@ export function QuestionListView() {
 				cert: filters.cert,
 				domain: filters.domain || undefined,
 			}),
-		{
-			merge: (cached, fresh) => {
-				if (!cached) return fresh;
-				const freshById = new Map(
-					fresh.items.map((item) => [item.questionId, item]),
-				);
-				const cachedIds = new Set(cached.items.map((item) => item.questionId));
-				const newItems = fresh.items.filter(
-					(item) => !cachedIds.has(item.questionId),
-				);
-				// 先頭ページから消えた問題が ARCHIVED / REJECTED になったかは判別できないため、
-				// 再検証では既存項目を残し、同じIDは最新データへ置換して、未知のIDだけを先頭へ追加する。
-				return {
-					items: [
-						...newItems,
-						...cached.items.map(
-							(item) => freshById.get(item.questionId) ?? item,
-						),
-					],
-					nextCursor: cached.nextCursor,
-				};
-			},
-		},
+		{ merge: mergeQuestionPage },
 	);
 	const items = page?.items ?? [];
 	const nextCursor = page?.nextCursor;
@@ -143,22 +122,9 @@ export function QuestionListView() {
 				cursor: requestedCursor,
 			});
 			if (currentFilterKey.current !== requestedFilterKey) return;
-			mutateCache<QuestionListCache>(cacheKey, (current) => {
-				if (current?.nextCursor !== requestedCursor) {
-					return current ?? { items: [] };
-				}
-				const currentItems = current?.items ?? [];
-				const existingIds = new Set(
-					currentItems.map((item) => item.questionId),
-				);
-				return {
-					items: [
-						...currentItems,
-						...result.items.filter((item) => !existingIds.has(item.questionId)),
-					],
-					nextCursor: result.nextCursor,
-				};
-			});
+			mutateCache<QuestionListCache>(cacheKey, (current) =>
+				appendQuestionPage(current, requestedCursor, result),
+			);
 		} catch (cause) {
 			if (currentFilterKey.current === requestedFilterKey) {
 				setLoadMoreError(errorMessage(cause));

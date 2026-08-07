@@ -24,7 +24,7 @@ import {
 	setReviewMark,
 	submitAnswer,
 } from "../lib/api";
-import { invalidateCache } from "../lib/cache";
+import { invalidateFor } from "../lib/cacheKeys";
 import { certName, domainLabel, modeLabel } from "../lib/certs";
 import { useElapsedSeconds } from "../lib/useElapsedSeconds";
 
@@ -155,9 +155,9 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 
 	useEffect(() => {
 		const questionId = session?.current?.question.questionId;
-		if (!questionId || session.mode === "BANK") return;
+		if (!questionId) return;
 		// GENERATE / MIXED で新しい問題を受け取った時点で一覧を再検証対象にする。
-		invalidateCache("questions:");
+		invalidateFor({ type: "questionShown", mode: session.mode });
 	}, [session?.current?.question.questionId, session?.mode]);
 
 	const reload = useCallback(async () => {
@@ -339,7 +339,7 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 		try {
 			const state = await setReviewMark(answeredQuestionId, !reviewMarked);
 			setReviewMarked(state.reviewMarked);
-			invalidateCache("reviews:");
+			invalidateFor({ type: "reviewMarkChanged" });
 		} catch (error) {
 			setActionError(errorMessage(error));
 		} finally {
@@ -369,8 +369,7 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 				version: session.version,
 				elapsedMs: Date.now() - shownAtRef.current,
 			});
-			invalidateCache("reviews:");
-			invalidateCache("sessions:ACTIVE");
+			invalidateFor({ type: "answerSubmitted" });
 			setSession(result.session);
 		} catch (error) {
 			setActionError(errorMessage(error));
@@ -389,7 +388,7 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 		nextFromSequenceRef.current = current.sequence;
 		try {
 			const result = await nextQuestion(session.sessionId, session.version);
-			invalidateCache("sessions:ACTIVE");
+			invalidateFor({ type: "sessionAdvanced" });
 			setSession(result.session);
 			if (result.preparing) {
 				setNextWaiting(true);
@@ -442,7 +441,7 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 					fresh.current.sequence > fromSequence
 						? fresh.current
 						: null;
-				if (advancedCurrent) invalidateCache("sessions:ACTIVE");
+				if (advancedCurrent) invalidateFor({ type: "sessionAdvanced" });
 				if (cancelled) return;
 				setSession(fresh);
 
@@ -473,7 +472,7 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 				if (fresh.prefetch?.state !== "QUEUED") {
 					if (cancelled || !isPresentRef.current) return;
 					const result = await nextQuestion(fresh.sessionId, fresh.version);
-					invalidateCache("sessions:ACTIVE");
+					invalidateFor({ type: "sessionAdvanced" });
 					if (cancelled) return;
 					setSession(result.session);
 					if (!result.preparing) {
