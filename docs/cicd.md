@@ -107,9 +107,39 @@ infra/
 | ワークフロー | トリガー（mainへのpush + パス） | 内容 |
 |---|---|---|
 | deploy-infra | `infra/**` | plan（可視化）→ **手動承認（Environment: prod）** → 承認後に再plan+apply |
-| deploy-web | `apps/web/**`, `packages/shared/**` | build → S3 sync → CloudFront invalidation |
-| deploy-api | `apps/api/**`, `packages/shared/**` | イメージbuild → ECR push → `lambda update-function-code` |
-| deploy-agent | `apps/agent/**` | イメージbuild → ECR push → AgentCore Runtime 更新（`update-agent-runtime` のみ。DEFAULTエンドポイントは自動追従し、明示的な `update-agent-runtime-endpoint` は ConflictException で拒否されるため呼ばない。ワークフローは追従完了をポーリングで待つ） |
+| deploy-web | `apps/web/**`, `packages/shared/**` | build → S3 sync → CloudFront invalidation（完了待ち）→ **スモーク** |
+| deploy-api | `apps/api/**`, `packages/shared/**` | イメージbuild → ECR push → `lambda update-function-code` → **スモーク** |
+| deploy-agent | `apps/agent/**` | イメージbuild → ECR push → AgentCore Runtime 更新（`update-agent-runtime` のみ。DEFAULTエンドポイントは自動追従し、明示的な `update-agent-runtime-endpoint` は ConflictException で拒否されるため呼ばない。ワークフローは追従完了をポーリングで待つ）→ **スモーク** |
+
+### デプロイ後スモーク（ADR 0017 決定5・決定6）
+
+イメージのpushとLambda/Runtimeの更新が成功しただけでは「デプロイは成功したが動いていない」を
+検知できない。**マージゲートではなくデプロイ後ゲート**であり、CI（PR時）には含めない。
+
+| ワークフロー | 確認内容 |
+|---|---|
+| deploy-api | `GET /health` が200かつ `sha == github.sha` → Cognito SRPログイン → `GET /me` が200 → `GET /questions` が200 |
+| deploy-web | 配信URLの `/version.json` が200かつ `sha == github.sha`、`/` が200 |
+| deploy-agent | `invoke-agent-runtime` に `{"action":"ping"}` を渡し、`status: "ok"` が返ること |
+
+- **`GET /health` は稼働中の git SHA を返す。** `update-function-code` が成功しても新イメージが
+  起動できなければLambdaは古いバージョンで応答し続けるため、200だけでは事故が素通りする。
+  SHAはイメージビルド時に `--build-arg GIT_SHA` で焼き込む。
+- **api のスモークは読み取りのみ**（`scripts/smoke-api.mjs`）。書き込みも生成も行わないため、
+  prodデータの汚染とLLM課金がいずれも発生しない。`GET /me` が200を返す時点で
+  Lambda起動・JWKS取得・グループ認可・SSM設定解決が通ったことになる。
+- **agent のスモークは生成を伴わない。** `{"action":"ping"}` は `quiz_agent/runtime.py` で
+  早期returnし、モデルもGuardrailも呼ばない。
+- **版ずれ検知は副産物として得る。** deploy-api と deploy-web は `packages/shared/**` の変更で
+  同時に発火し独立に承認されるため数分の版ずれ窓がある。両者のSHAを突き合わせれば検知できる
+  （ワークフロー統合は行わない。ADR 0017 の却下した代替案）。
+- **失敗時はワークフローを赤にするだけで、自動ロールバックはしない。** ロールバックには既知良
+  イメージの特定が要り、その処理自体が失敗しうる経路になる。現在の規模では、赤で気付いて
+  revert PR を出す方が確実である。
+- スモークには Cognito のテストユーザーが必要で、self-signup が無い（[ADR 0006](adr/0006-auth-cognito-cloud-only.md)）ため
+  手動作成する。**利用許可グループのみを付与し、生成権限グループは付与しない**
+  （漏洩時の被害を問題の閲覧に限定する）。スモークは `canGenerateQuestions === false` を
+  表明するので、権限が意図せず増えたらそこで落ちる。
 
 ### Terraform とアプリデプロイの境界（規約）
 
@@ -136,6 +166,19 @@ infra/
 
 **注意**: prodスタックは `data.aws_ssm_parameter` で手動作成分を参照するため、
 オーナーがパラメータを作成するまで `terraform plan`（PRの tf-plan ジョブ含む）は失敗する。
+
+### GitHub secrets（Environment `prod`）
+
+| 名前 | 用途 |
+|---|---|
+| `SMOKE_USERNAME` / `SMOKE_PASSWORD` | デプロイ後スモークのCognitoテストユーザー。**利用許可グループのみ**を付与する |
+
+Environment スコープに置くのは、承認を通った prod ジョブ以外（CIジョブなど）から
+参照させないためである。User Pool ID / Client ID は公開アプリにも埋まっているため
+secret にせず、SSMから取得する。
+
+**このリポジトリは public であり Actions のログも公開される。** スモークの出力には
+ユーザー名・`sub`・問題文の類を出さない（件数と真偽値のみ）。
 
 ### 初回立ち上げ（二段階apply）
 

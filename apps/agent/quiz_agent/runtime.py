@@ -75,6 +75,15 @@ class RuntimeHandler(BaseHTTPRequestHandler):
             )
             return
 
+        # デプロイ後スモーク用の疎通(issue #103)。Runtimeが起動し要求を捌けることだけを
+        # 確認する。モデルもGuardrailも呼ばないため、LLM課金が発生しない。
+        if body.get("action") == "ping":
+            self._send_json(
+                HTTPStatus.OK,
+                {"status": "ok", "action": "ping", "agent_version": AGENT_VERSION},
+            )
+            return
+
         started = time.perf_counter()
         if body.get("stream") is True:
             self._send_stream(body, started=started)
