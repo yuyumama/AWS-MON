@@ -10,7 +10,11 @@ import {
 } from "@aws-sdk/lib-dynamodb";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../src/errors.js";
-import { jobExecutionBudgetMs, runRunnableJobs } from "../src/jobRepository.js";
+import {
+	createInitialJob,
+	jobExecutionBudgetMs,
+	runRunnableJobs,
+} from "../src/jobRepository.js";
 import { generationJobFixture, questionFixture } from "./fixtures.js";
 
 const jobMocks = vi.hoisted(() => ({
@@ -872,4 +876,80 @@ describe("runRunnableJobs", () => {
 		});
 		expect(progressWrite?.input.UpdateExpression).not.toContain("version");
 	});
+});
+
+// createInitialJob は DynamoDB に触らない純粋な組み立て関数。job本体と、
+// セッションに載せる initial の2つを同時に返すため、両者の整合が崩れると
+// 「jobは走っているのにセッションからは追えない」状態になる。
+describe("createInitialJob", () => {
+	const input = {
+		sessionId: "s-1",
+		userId: "user-1",
+		cert: "aip",
+		domainSelection: "d1",
+		domain: "d1",
+		mode: "GENERATE" as const,
+	};
+
+	it("初回生成用のjobをQUEUEDで組み立てる", () => {
+		const { job } = createInitialJob(input);
+
+		expect(job).toMatchObject({
+			kind: "INITIAL",
+			state: "QUEUED",
+			userId: "user-1",
+			sessionId: "s-1",
+			cert: "aip",
+			domainSelection: "d1",
+			domain: "d1",
+			mode: "GENERATE",
+			attemptCount: 0,
+		});
+		expect(job.maxAttempts).toBeGreaterThan(0);
+	});
+
+	// 初回生成は必ず1問目。ここがずれると回答済みの問題を上書きしうる。
+	it("targetSequence は常に1にする", () => {
+		expect(createInitialJob(input).job.targetSequence).toBe(1);
+	});
+
+	it("jobIdは呼び出しごとに異なる", () => {
+		const a = createInitialJob(input).job.jobId;
+		const b = createInitialJob(input).job.jobId;
+
+		expect(a).not.toBe(b);
+	});
+
+	// runPk/runSk が欠けるとGSI1_Runnableに載らず、workerに永久に拾われない。
+	it("実行索引のキーを state と runAfter から組み立てる", () => {
+		const { job } = createInitialJob(input);
+
+		expect(job).toMatchObject(
+			jobRunKeys({
+				jobId: job.jobId,
+				state: "QUEUED",
+				runAfter: job.runAfter,
+			}),
+		);
+		expect(job.runAfter).toBe(job.createdAt);
+	});
+
+	// セッション側の initial と job が同じ jobId を指していないと、
+	// 完了通知をセッションに反映できなくなる。
+	it("セッションに載せる initial が同じjobIdを指す", () => {
+		const { job, initial } = createInitialJob(input);
+
+		expect(initial).toEqual({
+			state: "QUEUED",
+			jobId: job.jobId,
+			updatedAt: job.createdAt,
+		});
+	});
+
+	it.each(["BANK", "MIXED", "GENERATE"] as const)(
+		"モード %s をそのまま持ち回る",
+		(mode) => {
+			expect(createInitialJob({ ...input, mode }).job.mode).toBe(mode);
+		},
+	);
 });
