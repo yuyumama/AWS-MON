@@ -85,6 +85,8 @@ def _stub_quiz(cert: str, domain: str | None) -> QuizItem:
 def _generate_quiz(
     cert: str,
     domain: str | None,
+    domain_label: str | None = None,
+    domain_label_en: str | None = None,
     *,
     on_phase: Callable[[str, dict[str, int]], None] | None = None,
 ) -> tuple[QuizItem, GateResult]:
@@ -95,7 +97,13 @@ def _generate_quiz(
 
     from .agent import generate_quiz
 
-    result = generate_quiz(cert=cert, domain=domain, on_phase=on_phase)
+    result = generate_quiz(
+        cert=cert,
+        domain=domain,
+        domain_label=domain_label,
+        domain_label_en=domain_label_en,
+        on_phase=on_phase,
+    )
     return result.item, result.gate
 
 
@@ -173,11 +181,20 @@ def build_generate_response(
     cert = _str_value(body.get("cert"), "aip")
     domain = _str_value(body.get("domain"))
     domain_selection = _str_value(body.get("domainSelection"), domain)
+    domain_label = _str_value(body.get("domainLabel"))
+    domain_label_en = _str_value(body.get("domainLabelEn"))
     session_id = _str_value(body.get("sessionId"))
     with _otel_session(session_id):
-        item, gate = _generate_quiz(
-            cert=cert or "aip", domain=domain, on_phase=on_phase
-        )
+        generate_kwargs: dict[str, Any] = {
+            "cert": cert or "aip",
+            "domain": domain,
+            "on_phase": on_phase,
+        }
+        if domain_label is not None or domain_label_en is not None:
+            generate_kwargs.update(
+                domain_label=domain_label, domain_label_en=domain_label_en
+            )
+        item, gate = _generate_quiz(**generate_kwargs)
     generated_at = _now_iso()
     latency_ms = int((time.perf_counter() - started) * 1000)
     source = item.explanation.source

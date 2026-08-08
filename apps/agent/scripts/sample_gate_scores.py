@@ -15,6 +15,7 @@ import argparse
 import importlib.metadata
 import json
 import os
+import random
 import statistics as stats
 import sys
 import time
@@ -44,6 +45,52 @@ DEPENDENCIES = (
     "openai",
     "awslabs.aws-documentation-mcp-server",
 )
+
+# 実験用ハーネスの省略時抽選だけに使うローカル定義。
+# 本番経路の定義の正は packages/shared/src/certs.ts にある。
+AIP_HARNESS_DOMAINS = {
+    "d1": (
+        "基盤モデル統合・データ管理・コンプライアンス",
+        "Foundation Model Integration, Data Management, and Compliance",
+        31,
+    ),
+    "d2": ("実装と統合", "Implementation and Integration", 26),
+    "d3": (
+        "AIの安全性・セキュリティ・ガバナンス",
+        "AI Safety, Security, and Governance",
+        20,
+    ),
+    "d4": (
+        "運用効率と最適化",
+        "Operational Efficiency and Optimization for GenAI Applications",
+        12,
+    ),
+    "d5": (
+        "テスト・検証・トラブルシューティング",
+        "Testing, Validation, and Troubleshooting",
+        11,
+    ),
+}
+
+
+def _resolve_harness_domain(
+    cert: str, domain: str | None
+) -> tuple[str | None, str | None, str | None]:
+    if cert != "aip":
+        return domain, None, None
+    resolved = domain
+    if resolved is None or resolved == "all":
+        values = list(AIP_HARNESS_DOMAINS)
+        resolved = random.choices(
+            values,
+            weights=[AIP_HARNESS_DOMAINS[value][2] for value in values],
+            k=1,
+        )[0]
+    info = AIP_HARNESS_DOMAINS.get(resolved)
+    if info is None:
+        return resolved, None, None
+    label, label_en, _weight = info
+    return resolved, label, label_en
 
 
 def sampling_metadata() -> dict[str, Any]:
@@ -139,7 +186,15 @@ def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
 def _sample_once(cert: str, domain: str | None) -> dict[str, Any]:
     started = time.monotonic()
     try:
-        result = generate_quiz(cert, domain)
+        resolved_domain, domain_label, domain_label_en = _resolve_harness_domain(
+            cert, domain
+        )
+        result = generate_quiz(
+            cert,
+            resolved_domain,
+            domain_label,
+            domain_label_en,
+        )
     except Exception as e:  # noqa: BLE001 - 1回分の失敗として記録して継続する
         return {
             "status": "error",

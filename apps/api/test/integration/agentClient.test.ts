@@ -135,10 +135,15 @@ describe.skipIf(!dynamoLocalAvailable)("agentClient (HTTP経路)", () => {
 
 			expect(received).toHaveLength(1);
 			expect(received[0]?.url).toBe("/generate");
+			// #123: ドメイン抽選は API 側で済ませ、エージェントには決まったドメインの
+			// ラベルまで渡す(エージェントはドメイン表を持たない)。
 			expect(received[0]?.payload).toEqual({
 				cert: "aip",
 				domain: "d1",
 				domainSelection: "all",
+				domainLabel: "基盤モデル統合・データ管理・コンプライアンス",
+				domainLabelEn:
+					"Foundation Model Integration, Data Management, and Compliance",
 				sessionId: "s-1",
 				stream: true,
 			});

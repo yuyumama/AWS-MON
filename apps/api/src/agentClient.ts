@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { QuestionItem } from "@aws-mon/shared";
+import { findDomain, type QuestionItem } from "@aws-mon/shared";
 import {
 	BedrockAgentCoreClient,
 	InvokeAgentRuntimeCommand,
@@ -126,13 +126,19 @@ function agentGeneratePayload(input: GenerateAndSaveQuestionInput): {
 	cert: string;
 	domain: string;
 	domainSelection: string;
+	domainLabel?: string;
+	domainLabelEn?: string;
 	sessionId?: string;
 	stream: true;
 } {
+	const domain = findDomain(input.cert, input.domain);
 	return {
 		cert: input.cert,
 		domain: input.domain,
 		domainSelection: input.domainSelection,
+		...(domain
+			? { domainLabel: domain.label, domainLabelEn: domain.labelEn }
+			: {}),
 		sessionId: input.sessionId,
 		stream: true,
 	};
