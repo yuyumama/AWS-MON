@@ -28,7 +28,7 @@ function listedQuestion(
 	const item = { ...questionFixture(questionId), ...overrides };
 	return {
 		...item,
-		listPk: `QLIST#CERT#${item.cert}`,
+		listPk: "QLIST#ALL",
 		listSk: `${item.createdAt}#Q#${item.questionId}`,
 	};
 }
@@ -63,6 +63,10 @@ describe("listQuestionItems", () => {
 			if (command instanceof QueryCommand) {
 				queryCount += 1;
 				if (queryCount === 1) {
+					expect(command.input.FilterExpression).toContain("#cert = :cert");
+					expect(command.input.ExpressionAttributeValues?.[":cert"]).toBe(
+						"aip",
+					);
 					expect(command.input.FilterExpression).toContain("#domain = :domain");
 					expect(command.input.ExpressionAttributeValues?.[":domain"]).toBe(
 						"d1",
@@ -126,7 +130,7 @@ describe("listQuestionItems", () => {
 		const questions = ["q5", "q3", "q2", "q1"].map((id) => listedQuestion(id));
 		const keys = (id: string) => ({
 			questionId: id,
-			listPk: "QLIST#CERT#aip",
+			listPk: "QLIST#ALL",
 			listSk: `${questionFixture(id).createdAt}#Q#${id}`,
 		});
 		const pages = [

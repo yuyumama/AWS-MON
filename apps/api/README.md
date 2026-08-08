@@ -63,7 +63,7 @@ docker build -f apps/api/Dockerfile.worker -t aws-mon-worker .  # worker Lambda
 | GET | `/sessions/:sessionId` | セッション再開 |
 | POST | `/sessions/:sessionId/answers` | 現在問題への回答記録。不正解の場合は同一トランザクションで復習リストへ自動追加 |
 | POST | `/sessions/:sessionId/next` | 回答済みcurrentから次の問題へ進む。`GENERATE`/`MIXED` セッションは生成権限が無いと403 |
-| GET | `/reviews?cert=aip&limit=50` | 復習マーク済み問題の一覧（AP-06。問題本体+解説を含むanswered DTOを返す） |
+| GET | `/reviews?cert=aip&domain=d1&limit=50` | 復習マーク済み問題の一覧（AP-06。資格・ドメインは任意。要約と回答集計の軽量DTOを返す） |
 | GET | `/reviews/:questionId` | ユーザー×問題の復習マーク状態を取得（AP-07） |
 | PUT | `/reviews/:questionId` | 復習マークの設定/解除。body `{"marked": true|false}`。回答済み問題のみ対象（未回答は404）。不正解時の自動追加の解除もここで行う |
 | POST | `/dev/jobs/run` | `AwsMonGenerationJobs` の実行可能job(QUEUED/RETRY_WAIT)を処理する開発用worker tick。bodyの `limit` で最大処理件数を指定可 |

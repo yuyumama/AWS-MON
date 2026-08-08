@@ -11,6 +11,7 @@ locals {
   ]
 
   question_list_projection = [
+    "cert",
     "domain",
     "status",
   ]

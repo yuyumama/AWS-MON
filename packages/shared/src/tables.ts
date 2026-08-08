@@ -163,12 +163,11 @@ export function staleKeys(input: { questionId: string; validUntil: string }) {
 
 // GSI4_QuestionList 用キー。ACTIVE / STALE のときだけ設定する(sparse GSI)。
 export function questionListKeys(input: {
-	cert: string;
 	createdAt: string;
 	questionId: string;
 }) {
 	return {
-		listPk: `QLIST#CERT#${input.cert}`,
+		listPk: "QLIST#ALL",
 		listSk: `${input.createdAt}#Q#${input.questionId}`,
 	};
 }

@@ -185,7 +185,7 @@ describe.skipIf(!dynamoLocalAvailable)("agentClient (HTTP経路)", () => {
 			expect(saved.Item?.bankPk).toContain("CERT#aip#DOMAIN#d1");
 			expect(saved.Item?.bankSk).toMatch(/^R#\d{12}#Q#/);
 			expect(saved.Item?.hashPk).toBeDefined();
-			expect(saved.Item?.listPk).toBe("QLIST#CERT#aip");
+			expect(saved.Item?.listPk).toBe("QLIST#ALL");
 			expect(saved.Item?.validUntil).toBeDefined();
 			// どのjobが生成したかを追えること
 			expect(saved.Item?.generation).toMatchObject({ jobId: "job-42" });

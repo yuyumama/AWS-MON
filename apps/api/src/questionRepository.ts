@@ -426,7 +426,7 @@ export async function saveGeneratedQuestion(
 	const bank = bankKeys({ cert, domain, questionId, randomSort: sort });
 	const stale = staleKeys({ questionId, validUntil });
 	const contentHashKeys = hashKeys(contentHash, questionId);
-	const listKeys = questionListKeys({ cert, createdAt, questionId });
+	const listKeys = questionListKeys({ createdAt, questionId });
 
 	const item: QuestionItem = {
 		questionId,

@@ -1,6 +1,7 @@
 // 資格・ドメイン・出題モードの表示用定義。
 import {
 	type CertLevel,
+	certDomains,
 	findCert,
 	findDomain,
 	type SessionMode,
@@ -22,6 +23,17 @@ export function certLevel(code: string): CertLevel | undefined {
 export function certOptionLabel(code: string): string {
 	const cert = findCert(code);
 	return cert ? `${cert.examCode} ${cert.shortName} - ${cert.level}` : code;
+}
+
+export type DomainOption = { value: string; label: string; weight?: number };
+
+/** 資格に属するドメインの選択肢。未知の資格では空になる。 */
+export function domainOptionsForCert(code: string): DomainOption[] {
+	return certDomains(code).map(({ value, label, weight }) => ({
+		value,
+		label,
+		weight,
+	}));
 }
 
 export function domainLabel(cert: string, domain: string): string {

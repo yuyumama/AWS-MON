@@ -103,6 +103,12 @@ describe("リクエストの組み立て", () => {
 			"/api/reviews?cert=aip",
 			undefined,
 		],
+		[
+			"復習一覧(cert・domain指定)",
+			() => api.listReviews("aip", "d2"),
+			"/api/reviews?cert=aip&domain=d2",
+			undefined,
+		],
 		["問題取得", () => api.getQuestion("q-1"), "/api/questions/q-1", undefined],
 	])("%s は %s を叩く", async (_label, call, expectedUrl, method) => {
 		fetchMock.mockResolvedValue(

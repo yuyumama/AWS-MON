@@ -91,7 +91,7 @@ describe("saveGeneratedQuestion", () => {
 		});
 
 		expect(result.item).toMatchObject({
-			listPk: "QLIST#CERT#aip",
+			listPk: "QLIST#ALL",
 			listSk: expect.stringMatching(/#Q#q_/),
 		});
 	});

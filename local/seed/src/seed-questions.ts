@@ -188,7 +188,6 @@ function toQuestionItem(
 	const stale = staleKeys({ questionId, validUntil });
 	const contentHashKeys = hashKeys(contentHash, questionId);
 	const listKeys = questionListKeys({
-		cert: fixture.cert,
 		createdAt,
 		questionId,
 	});

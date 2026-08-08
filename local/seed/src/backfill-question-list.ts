@@ -48,8 +48,7 @@ export async function backfillQuestionList(input: {
 		const page = await input.client.send(
 			new ScanCommand({
 				TableName: input.tableName,
-				ProjectionExpression:
-					"questionId, #status, cert, createdAt, listPk, listSk",
+				ProjectionExpression: "questionId, #status, createdAt, listPk, listSk",
 				ExpressionAttributeNames: { "#status": "status" },
 				ExclusiveStartKey: exclusiveStartKey,
 			}),
@@ -58,7 +57,7 @@ export async function backfillQuestionList(input: {
 		for (const raw of page.Items ?? []) {
 			const item = raw as Pick<
 				QuestionItem,
-				"questionId" | "status" | "cert" | "createdAt" | "listPk" | "listSk"
+				"questionId" | "status" | "createdAt" | "listPk" | "listSk"
 			>;
 			scanned += 1;
 			const action = questionListBackfillAction(item);

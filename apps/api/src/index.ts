@@ -228,6 +228,7 @@ app.get("/reviews", async (c) => {
 		const items = await listReviewItems({
 			userId: getAuth(c).userId,
 			cert: asString(c.req.query("cert")),
+			domain: asString(c.req.query("domain")),
 			limit: asNumber(Number(c.req.query("limit"))),
 		});
 		return c.json({ status: "ok", items });

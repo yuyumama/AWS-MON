@@ -186,9 +186,15 @@ export async function nextQuestion(
 	};
 }
 
-export async function listReviews(cert?: string): Promise<ReviewItemDto[]> {
-	const query = cert ? `?cert=${encodeURIComponent(cert)}` : "";
-	const body = await request<{ items: ReviewItemDto[] }>(`/reviews${query}`);
+export async function listReviews(
+	cert?: string,
+	domain?: string,
+): Promise<ReviewItemDto[]> {
+	const query = new URLSearchParams();
+	if (cert) query.set("cert", cert);
+	if (domain) query.set("domain", domain);
+	const suffix = query.size > 0 ? `?${query.toString()}` : "";
+	const body = await request<{ items: ReviewItemDto[] }>(`/reviews${suffix}`);
 	return body.items;
 }
 
@@ -202,19 +208,21 @@ export async function getQuestion(
 }
 
 export async function listQuestions(input: {
-	cert: string;
+	cert?: string;
 	domain?: string;
 	status?: "ACTIVE" | "STALE";
 	limit?: number;
 	cursor?: string;
 }): Promise<{ items: QuestionListItemDto[]; nextCursor?: string }> {
-	const query = new URLSearchParams({ cert: input.cert });
+	const query = new URLSearchParams();
+	if (input.cert) query.set("cert", input.cert);
 	if (input.domain) query.set("domain", input.domain);
 	if (input.status) query.set("status", input.status);
 	if (input.limit) query.set("limit", String(input.limit));
 	if (input.cursor) query.set("cursor", input.cursor);
+	const suffix = query.size > 0 ? `?${query.toString()}` : "";
 	return request<{ items: QuestionListItemDto[]; nextCursor?: string }>(
-		`/questions?${query.toString()}`,
+		`/questions${suffix}`,
 	);
 }
 
