@@ -139,19 +139,25 @@ export async function setReviewMark(input: {
 export async function listReviewItems(input: {
 	userId: string;
 	cert?: string;
+	domain?: string;
 	limit?: number;
 }): Promise<ReviewItemDto[]> {
 	const limit = Math.max(1, Math.min(50, Math.floor(input.limit ?? 50)));
+	const skPrefix = input.cert
+		? input.domain
+			? `CERT#${input.cert}#DOMAIN#${input.domain}#`
+			: `CERT#${input.cert}#`
+		: undefined;
 	const out = await dynamoDoc.send(
 		new QueryCommand({
 			TableName: tables.userActivity,
 			IndexName: gsiNames.userActivity.reviewList,
-			KeyConditionExpression: input.cert
+			KeyConditionExpression: skPrefix
 				? "reviewPk = :pk AND begins_with(reviewSk, :skPrefix)"
 				: "reviewPk = :pk",
 			ExpressionAttributeValues: {
 				":pk": `USER#${input.userId}#REVIEW#MARKED`,
-				...(input.cert ? { ":skPrefix": `CERT#${input.cert}#` } : {}),
+				...(skPrefix ? { ":skPrefix": skPrefix } : {}),
 			},
 			Limit: limit,
 		}),

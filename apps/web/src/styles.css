@@ -1291,6 +1291,12 @@ button.option:hover:not(:disabled) {
 	padding: 8px 10px;
 }
 
+.review-filters {
+	display: flex;
+	gap: 12px;
+	flex-wrap: wrap;
+}
+
 .review-list {
 	list-style: none;
 	margin: 0;
@@ -1334,14 +1340,34 @@ button.option:hover:not(:disabled) {
 }
 
 .review-summary {
+	width: 100%;
 	margin: 0;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	color: inherit;
+	font-family: inherit;
 	font-size: 15px;
 	font-weight: 600;
 	line-height: 1.6;
+	text-align: left;
+	cursor: pointer;
 	display: -webkit-box;
 	-webkit-line-clamp: 2;
 	-webkit-box-orient: vertical;
 	overflow: hidden;
+}
+
+.review-summary:hover:not(:disabled),
+.review-summary:focus-visible {
+	color: var(--accent-deep);
+	text-decoration: underline;
+	text-decoration-thickness: 1px;
+	text-underline-offset: 3px;
+}
+
+.review-summary:disabled {
+	cursor: default;
 }
 
 .review-detail {

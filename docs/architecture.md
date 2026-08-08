@@ -84,7 +84,7 @@ flowchart TB
 | `POST /sessions/:sessionId/next` | 次問への遷移 |
 | `GET /reviews` | 復習マーク済み問題の軽量一覧（要約・集計・状態） |
 | `GET /reviews/:questionId` / `PUT /reviews/:questionId` | 復習状態の取得・更新 |
-| `GET /questions` | 生成済み問題の資格・ドメイン・状態別一覧（要約のみ、cursorページング） |
+| `GET /questions` | 生成済み問題の資格横断・資格/ドメイン/状態別一覧（要約のみ、cursorページング） |
 | `GET /questions/:questionId` | 問題単体の回答済みビュー（問題本文・選択肢・正解・解説） |
 
 上記はすべて認証必須である。問題リストと復習一覧は問題全文を含めず、項目を展開したときだけ問題単体を取得する。問題リストは全ユーザー共通の問題バンクだけを扱い、セッション・回答・復習状態を返さない。
@@ -256,7 +256,7 @@ job の失敗時は `errorCode` ごとの試行上限とbackoffを使う（[ADR 
 - 問題本文はセッションに埋め込まず`questionId`参照のみ保持する。source of truthは`AwsMonQuestions`（`apps/api/src/questionBankRepository.ts`の`getQuestion`）。
 - 未回答の問題を返すAPIは必ず`toQuestionDto(item, visibility)`を通し、`answering`時は`correct`/`explanation`を落とす（`packages/shared`）。
 - 復習一覧（`GET /reviews`）は要約と集計だけの軽量DTOを返し、問題全文は`GET /questions/:questionId`で必要時に回答済みビューとして取得する。
-- 問題リスト（`GET /questions`）は`GSI4_QuestionList`を資格単位でQueryし、ドメイン・状態のFilterExpressionを内部ページ補充しながら適用する。一覧DTOにはユーザー固有情報を混ぜない。
+- 問題リスト（`GET /questions`）は`GSI4_QuestionList`の共通パーティションをQueryし、資格・ドメイン・状態のFilterExpressionを内部ページ補充しながら適用する。一覧DTOにはユーザー固有情報を混ぜない。
 - 先読みは`Session.prefetch`に問題本体を埋め込まず、`GenerationJob`と`questionId`参照で表現する（`apps/api/src/jobRepository.ts`の`reflectJobOnSession`）。
 - 認証・認可は `apps/api/src/auth.ts` に実装。`AUTH_MODE=dev`（既定）は `x-dev-user-id` devシム（なければ `dev-user`）、`AUTH_MODE=cognito` は別AWSアカウントの既存 Cognito User Pool の access token を `aws-jwt-verify` で検証（issuer / client_id / token_use / 署名）して `sub` を `userId` にする。生成権限 `canGenerateQuestions` は `cognito:groups` に `COGNITO_GENERATE_GROUP` が含まれるかで判定し、`GENERATE` / `MIXED`（セッション開始・`next` の生成フォールバック・prefetch job 作成）は権限がないと403。**クラウド配備は `AUTH_MODE=cognito` を必須とし、devシムは信用しない**（[ADR 0006](adr/0006-auth-cognito-cloud-only.md)）。
 

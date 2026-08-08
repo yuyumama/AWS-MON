@@ -14,6 +14,7 @@ import {
 	certName,
 	certOptionLabel,
 	domainLabel,
+	domainOptionsForCert,
 } from "../lib/certs";
 import {
 	appendQuestionPage,
@@ -29,24 +30,29 @@ type Filters = { cert: string; domain: string };
 
 function initialFilters(): Filters {
 	const params = new URLSearchParams(window.location.search);
-	const requestedCert = params.get("cert") ?? "aip";
-	const cert = findCert(requestedCert) ? requestedCert : "aip";
+	const requestedCert = params.get("cert") ?? "";
+	const cert =
+		requestedCert === "" || findCert(requestedCert) ? requestedCert : "";
 	const requestedDomain = params.get("domain") ?? "";
-	const domain = certDomains(cert).some(
-		(option) => option.value === requestedDomain,
-	)
-		? requestedDomain
-		: "";
+	const domain =
+		cert !== "" &&
+		domainOptionsForCert(cert).some(
+			(option) => option.value === requestedDomain,
+		)
+			? requestedDomain
+			: "";
 	return { cert, domain };
 }
 
 function replaceFilterUrl(filters: Filters) {
-	const params = new URLSearchParams({ cert: filters.cert });
+	const params = new URLSearchParams();
+	if (filters.cert) params.set("cert", filters.cert);
 	if (filters.domain) params.set("domain", filters.domain);
+	const query = params.size > 0 ? `?${params.toString()}` : "";
 	window.history.replaceState(
 		null,
 		"",
-		`${window.location.pathname}?${params.toString()}${window.location.hash}`,
+		`${window.location.pathname}${query}${window.location.hash}`,
 	);
 }
 
@@ -94,6 +100,7 @@ export function QuestionListView() {
 		{ merge: mergeQuestionPage },
 	);
 	const items = page?.items ?? [];
+	const domainOptions = domainOptionsForCert(filters.cert);
 	const nextCursor = page?.nextCursor;
 	const error =
 		loadMoreError ?? (resourceError ? errorMessage(resourceError) : null);
@@ -169,6 +176,7 @@ export function QuestionListView() {
 								changeFilters({ cert: event.target.value, domain: "" })
 							}
 						>
+							<option value="">すべて</option>
 							{certDefinitions.map((definition) => (
 								<option key={definition.code} value={definition.code}>
 									{certOptionLabel(definition.code)}
@@ -177,26 +185,28 @@ export function QuestionListView() {
 						</select>
 					</label>
 
-					<label className="question-list-filter">
-						<span className="field-label">出題ドメイン</span>
-						<select
-							className="select"
-							value={filters.domain}
-							onChange={(event) =>
-								changeFilters({
-									...filters,
-									domain: event.target.value,
-								})
-							}
-						>
-							<option value="">すべて</option>
-							{domains.map((option) => (
-								<option key={option.value} value={option.value}>
-									{option.label}
-								</option>
-							))}
-						</select>
-					</label>
+					{filters.cert !== "" && (
+						<label className="question-list-filter">
+							<span className="field-label">出題ドメイン</span>
+							<select
+								className="select"
+								value={filters.domain}
+								onChange={(event) =>
+									changeFilters({
+										...filters,
+										domain: event.target.value,
+									})
+								}
+							>
+								<option value="">すべて</option>
+								{domainOptions.map((option) => (
+									<option key={option.value} value={option.value}>
+										{option.label}
+									</option>
+								))}
+							</select>
+						</label>
+					)}
 				</div>
 			</div>
 
@@ -234,103 +244,114 @@ export function QuestionListView() {
 									<span className="tag tag-soft">
 										{domainLabel(item.cert, item.domain)}
 									</span>
-									<span
-										className={
-											item.status === "STALE" ? "tag tag-stale" : "tag"
-										}
-									>
-										{item.status}
-									</span>
+									{item.status === "STALE" && (
+										<span className="tag tag-stale">STALE</span>
+									)}
 									<span className="question-list-date">{formatDate(item)}</span>
 								</div>
-								<p className="review-summary">{item.summary}</p>
+								<button
+									type="button"
+									className="review-summary"
+									aria-expanded={expanded}
+									aria-controls={`question-detail-${item.questionId}`}
+									onClick={() => toggleDetail(item.questionId)}
+								>
+									{item.summary}
+								</button>
 
-								{expanded && loading && (
-									<p className="notice" role="status">
-										問題と解説を読み込み中…
-									</p>
-								)}
-								{expanded && detailError !== undefined && (
-									<p className="notice notice-error">
-										{errorMessage(detailError)}
-									</p>
-								)}
-								{expanded && question && (
-									<div className="review-detail">
-										<p className="review-detail-question">
-											{question.question}
+								<div id={`question-detail-${item.questionId}`}>
+									{expanded && loading && (
+										<p className="notice" role="status">
+											問題と解説を読み込み中…
 										</p>
-										<ul className="options">
-											{question.options.map((option) => {
-												const correct = correctSet.has(
-													option.label.toUpperCase(),
-												);
-												return (
-													<li key={option.label}>
-														<div
-															className="option option-static"
-															data-state={correct ? "correct" : "muted"}
-														>
-															<span className="option-label">
-																{option.label}
-															</span>
-															<span className="option-text">{option.text}</span>
-															{correct && (
-																<span className="option-mark option-mark-ok">
-																	○
-																</span>
-															)}
-														</div>
-													</li>
-												);
-											})}
-										</ul>
-										<dl className="explanation">
-											<dt>概要</dt>
-											<dd>{question.explanation.overview}</dd>
-											<dt>正解の理由</dt>
-											<dd>{question.explanation.correct_reason}</dd>
-											<dt>各選択肢</dt>
-											<dd>
-												<ul className="option-reasons">
-													{question.explanation.option_reasons.map((reason) => (
-														<li key={reason.label}>
-															<span
-																className="option-label"
-																data-ok={correctSet.has(
-																	reason.label.toUpperCase(),
-																)}
+									)}
+									{expanded && detailError !== undefined && (
+										<p className="notice notice-error">
+											{errorMessage(detailError)}
+										</p>
+									)}
+									{expanded && question && (
+										<div className="review-detail">
+											<p className="review-detail-question">
+												{question.question}
+											</p>
+											<ul className="options">
+												{question.options.map((option) => {
+													const correct = correctSet.has(
+														option.label.toUpperCase(),
+													);
+													return (
+														<li key={option.label}>
+															<div
+																className="option option-static"
+																data-state={correct ? "correct" : "muted"}
 															>
-																{reason.label}
-															</span>
-															<span>{reason.reason}</span>
+																<span className="option-label">
+																	{option.label}
+																</span>
+																<span className="option-text">
+																	{option.text}
+																</span>
+																{correct && (
+																	<span className="option-mark option-mark-ok">
+																		○
+																	</span>
+																)}
+															</div>
 														</li>
-													))}
-												</ul>
-											</dd>
-											<dt>出典</dt>
-											<dd>
-												{/^https?:\/\//.test(question.explanation.source) ? (
-													<a
-														href={question.explanation.source}
-														target="_blank"
-														rel="noreferrer"
-													>
-														{question.explanation.source}
-													</a>
-												) : (
-													question.explanation.source
-												)}
-											</dd>
-										</dl>
-									</div>
-								)}
+													);
+												})}
+											</ul>
+											<dl className="explanation">
+												<dt>概要</dt>
+												<dd>{question.explanation.overview}</dd>
+												<dt>正解の理由</dt>
+												<dd>{question.explanation.correct_reason}</dd>
+												<dt>各選択肢</dt>
+												<dd>
+													<ul className="option-reasons">
+														{question.explanation.option_reasons.map(
+															(reason) => (
+																<li key={reason.label}>
+																	<span
+																		className="option-label"
+																		data-ok={correctSet.has(
+																			reason.label.toUpperCase(),
+																		)}
+																	>
+																		{reason.label}
+																	</span>
+																	<span>{reason.reason}</span>
+																</li>
+															),
+														)}
+													</ul>
+												</dd>
+												<dt>出典</dt>
+												<dd>
+													{/^https?:\/\//.test(question.explanation.source) ? (
+														<a
+															href={question.explanation.source}
+															target="_blank"
+															rel="noreferrer"
+														>
+															{question.explanation.source}
+														</a>
+													) : (
+														question.explanation.source
+													)}
+												</dd>
+											</dl>
+										</div>
+									)}
+								</div>
 
 								<div className="review-item-actions">
 									<button
 										type="button"
 										className="button button-ghost"
 										aria-expanded={expanded}
+										aria-controls={`question-detail-${item.questionId}`}
 										onClick={() => toggleDetail(item.questionId)}
 									>
 										{expanded ? "閉じる" : "問題と解説を見る"}

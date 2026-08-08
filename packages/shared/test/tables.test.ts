@@ -199,44 +199,38 @@ describe("staleKeys", () => {
 });
 
 describe("questionListKeys", () => {
-	it("cert ごとにPKが分かれ、SKは createdAt の新しい順で引ける", () => {
+	it("全資格でPKを共有し、SKは createdAt の新しい順で引ける", () => {
 		const older = questionListKeys({
-			cert: "aip",
 			createdAt: "2026-08-01T00:00:00Z",
 			questionId: "q-1",
 		});
 		const newer = questionListKeys({
-			cert: "aip",
 			createdAt: "2026-08-05T00:00:00Z",
 			questionId: "q-2",
 		});
-		expect(older.listPk).toBe("QLIST#CERT#aip");
+		expect(older.listPk).toBe("QLIST#ALL");
 		expect(older.listPk).toBe(newer.listPk);
 		expect(older.listSk < newer.listSk).toBe(true);
 	});
 
-	it("cert が違えばPKが分かれる", () => {
+	it("入力に資格を必要としない", () => {
 		const a = questionListKeys({
-			cert: "aip",
 			createdAt: "2026-08-01T00:00:00Z",
 			questionId: "q-1",
 		});
 		const b = questionListKeys({
-			cert: "sap",
 			createdAt: "2026-08-01T00:00:00Z",
 			questionId: "q-1",
 		});
-		expect(a.listPk).not.toBe(b.listPk);
+		expect(a.listPk).toBe(b.listPk);
 	});
 
 	it("同じ createdAt でも questionId でSKが一意になる", () => {
 		const a = questionListKeys({
-			cert: "aip",
 			createdAt: "2026-08-01T00:00:00Z",
 			questionId: "q-1",
 		});
 		const b = questionListKeys({
-			cert: "aip",
 			createdAt: "2026-08-01T00:00:00Z",
 			questionId: "q-2",
 		});

@@ -24,7 +24,7 @@ type QuestionListCursorKey = {
 };
 
 export type QuestionListQuery = {
-	cert: string;
+	cert?: string;
 	domain?: string;
 	status?: ListableStatus;
 	limit: number;
@@ -79,8 +79,9 @@ export function parseQuestionListQuery(input: {
 	limit?: string;
 	cursor?: string;
 }): QuestionListQuery {
-	if (!input.cert || !(certs as readonly string[]).includes(input.cert)) {
-		throw new ApiError("cert is required and must be known", 400);
+	const cert = input.cert || undefined;
+	if (cert !== undefined && !(certs as readonly string[]).includes(cert)) {
+		throw new ApiError("cert must be known", 400);
 	}
 	if (
 		input.status !== undefined &&
@@ -101,9 +102,9 @@ export function parseQuestionListQuery(input: {
 		}
 	}
 
-	const listPk = `QLIST#CERT#${input.cert}`;
+	const listPk = "QLIST#ALL";
 	return {
-		cert: input.cert,
+		cert,
 		domain: input.domain || undefined,
 		status: input.status,
 		limit,
@@ -163,7 +164,7 @@ async function batchGetQuestions(
 export async function listQuestionItems(
 	input: QuestionListQuery,
 ): Promise<{ items: QuestionListItemDto[]; nextCursor?: string }> {
-	const listPk = `QLIST#CERT#${input.cert}`;
+	const listPk = "QLIST#ALL";
 	const questionIds: string[] = [];
 	const seen = new Set<string>();
 	let lastEvaluatedKey: Record<string, unknown> | undefined =
@@ -175,6 +176,7 @@ export async function listQuestionItems(
 			input.status
 				? "#status = :status"
 				: "#status IN (:activeStatus, :staleStatus)",
+			...(input.cert ? ["#cert = :cert"] : []),
 			...(input.domain ? ["#domain = :domain"] : []),
 		];
 		const page = await dynamoDoc.send(
@@ -185,6 +187,7 @@ export async function listQuestionItems(
 				FilterExpression: filters.join(" AND "),
 				ExpressionAttributeNames: {
 					"#status": "status",
+					...(input.cert ? { "#cert": "cert" } : {}),
 					...(input.domain ? { "#domain": "domain" } : {}),
 				},
 				ExpressionAttributeValues: {
@@ -192,6 +195,7 @@ export async function listQuestionItems(
 					...(input.status
 						? { ":status": input.status }
 						: { ":activeStatus": "ACTIVE", ":staleStatus": "STALE" }),
+					...(input.cert ? { ":cert": input.cert } : {}),
 					...(input.domain ? { ":domain": input.domain } : {}),
 				},
 				ScanIndexForward: false,
@@ -220,7 +224,7 @@ export async function listQuestionItems(
 		if (
 			!item ||
 			(item.status !== "ACTIVE" && item.status !== "STALE") ||
-			String(item.cert) !== input.cert ||
+			(input.cert !== undefined && String(item.cert) !== input.cert) ||
 			(input.domain !== undefined && item.domain !== input.domain) ||
 			(input.status !== undefined && item.status !== input.status)
 		) {

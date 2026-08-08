@@ -29,17 +29,29 @@ describe("GET /questions", () => {
 		httpMocks.listQuestionItems.mockResolvedValue({ items: [] });
 	});
 
-	it.each(["/questions", "/questions?cert=unknown"])(
-		"cert未指定・未知の値は400を返す: %s",
-		async (path) => {
-			const response = await app.request(path, {
-				headers: { "x-dev-user-id": "user-test" },
-			});
+	it("未知のcertは400を返す", async () => {
+		const response = await app.request("/questions?cert=unknown", {
+			headers: { "x-dev-user-id": "user-test" },
+		});
 
-			expect(response.status).toBe(400);
-			expect(httpMocks.listQuestionItems).not.toHaveBeenCalled();
-		},
-	);
+		expect(response.status).toBe(400);
+		expect(httpMocks.listQuestionItems).not.toHaveBeenCalled();
+	});
+
+	it("cert未指定なら資格横断の条件をrepositoryへ渡す", async () => {
+		const response = await app.request("/questions", {
+			headers: { "x-dev-user-id": "user-test" },
+		});
+
+		expect(response.status).toBe(200);
+		expect(httpMocks.listQuestionItems).toHaveBeenCalledWith({
+			cert: undefined,
+			domain: undefined,
+			status: undefined,
+			limit: 20,
+			exclusiveStartKey: undefined,
+		});
+	});
 
 	it("フィルタと既定値をrepositoryへ渡す", async () => {
 		await app.request("/questions?cert=aip&domain=d1&status=STALE", {

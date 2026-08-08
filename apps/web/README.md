@@ -7,7 +7,7 @@ Vite + React + TypeScript のSPA。ビルド成果物は S3 + CloudFront で配�
 
 - **ホーム**: 資格(12種)・出題ドメイン(AIP-C01のみ)・出題モード(BANK / MIXED / GENERATE)を選んでセッション開始。進行中セッションの一覧と再開。
 - **出題 → 採点 → 解説**: 単一/複数選択、API側採点(`correct` は回答後にしか返らない)、解説(概要・正解の理由・各選択肢・出典)、次の問題へ。ヘッダに正答率メーター。
-- **復習/チェック**: 間違えた問題は回答時に自動で復習リストへ入る。正解した問題も解説画面の「☆ 復習リストに追加」トグルでマークでき、`#/review` の復習リストで一覧・資格フィルタ・正解/解説の展開・マーク解除ができる(`/reviews` API、AP-06/AP-07)。
+- **復習/チェック**: 間違えた問題は回答時に自動で復習リストへ入る。正解した問題も解説画面の「☆ 復習リストに追加」トグルでマークでき、`#/review` の復習リストで一覧・資格/ドメインフィルタ・正解/解説の展開・マーク解除ができる(`/reviews` API、AP-06/AP-07)。
 - ルーティングはハッシュベース(`#/review`, `#/session/:id`)の最小実装。リロードすると `GET /sessions/:id` で復元する。
 - レスポンスDTOの型は `@aws-mon/shared`(`SessionDto` / `SessionSummaryDto` / `AnswerResultDto` / `ReviewItemDto` 等)を api と共有。
 - **Cognito 認証/認可**(`src/lib/auth.ts`, `src/views/LoginView.tsx`): `VITE_AUTH_MODE` で切替([ADR 0006](../../docs/adr/0006-auth-cognito-cloud-only.md))。

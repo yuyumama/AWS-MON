@@ -1,6 +1,6 @@
 # data-model — DynamoDB データモデル（確定版）
 
-最終更新: 2026-08-04
+最終更新: 2026-08-08
 
 > **ステータス: 確定。** Phase 1 の次工程は、この設計に沿って `local/seed/` のテーブル作成スクリプトと `apps/api` の CRUD ルートを実装する。
 
@@ -52,7 +52,7 @@ DynamoDB は **単一テーブルではなく、責務別の4テーブル**で�
 | AP-12 | 長期間更新されていない active セッションを abandoned 化する | `AwsMonSessions.GSI2_AbandonDue` |
 | AP-13 | `questionId` で問題単体の回答済みビュー（問題本文・選択肢・正解・解説）を取得する | `AwsMonQuestions` primary key |
 | AP-14 | 所有するセッションと回答履歴を削除し、関連する生成待ちを停止する | `AwsMonSessions` primary key Query + BatchWrite、`AwsMonGenerationJobs` primary key Update |
-| AP-15 | 資格×任意のドメイン×状態で生成済み問題を作成日時の降順に一覧する | `AwsMonQuestions.GSI4_QuestionList` + `BatchGetItem` |
+| AP-15 | 任意の資格×任意のドメイン×状態で生成済み問題を作成日時の降順に一覧する | `AwsMonQuestions.GSI4_QuestionList` + `BatchGetItem` |
 
 ## GSI projection 方針
 
@@ -63,7 +63,7 @@ GSI は必要属性だけを投影する。特に `correct` と `explanation` �
 | `AwsMonQuestions.GSI1_BankRandom` | `INCLUDE` | `cert`, `domain`, `domainSelection`, `type`, `question`, `options`, `validUntil`, `status` |
 | `AwsMonQuestions.GSI2_StaleDue` | `KEYS_ONLY` | なし |
 | `AwsMonQuestions.GSI3_ContentHash` | `KEYS_ONLY` | なし |
-| `AwsMonQuestions.GSI4_QuestionList` | `INCLUDE` | `domain`, `status` |
+| `AwsMonQuestions.GSI4_QuestionList` | `INCLUDE` | `cert`, `domain`, `status` |
 | `AwsMonSessions.GSI1_UserStatus` | `INCLUDE` | `userId`, `status`, `cert`, `domainSelection`, `mode`, `current`, `prefetch`, `answeredCount`, `correctCount`, `startedAt`, `updatedAt`, `completedAt` |
 | `AwsMonSessions.GSI2_AbandonDue` | `KEYS_ONLY` | なし |
 | `AwsMonUserActivity.GSI1_ReviewList` | `INCLUDE` | `questionId`, `cert`, `domain`, `reviewMarked`, `reviewMarkedAt`, `answerCount`, `correctCount`, `lastCorrect`, `lastAnsweredAt`, `weaknessScore`, `updatedAt` |
@@ -168,26 +168,26 @@ Projection: `KEYS_ONLY`。
 
 #### `GSI4_QuestionList`
 
-生成・保存済み問題を資格ごとに作成日時の降順で一覧するための sparse index。
+生成・保存済み問題を資格横断で作成日時の降順に一覧するための sparse index。
 
 | Key | 値 |
 |---|---|
-| `listPk` | `QLIST#CERT#<cert>` |
+| `listPk` | `QLIST#ALL` |
 | `listSk` | `<createdAt>#Q#<questionId>` |
 
-Projection: `INCLUDE`。FilterExpression に必要な `domain`, `status` だけを追加投影する。
+Projection: `INCLUDE`。FilterExpression に必要な `cert`, `domain`, `status` を追加投影する。
 一覧 DTO の要約は、GSI で得た `questionId` を最大100件ずつ BatchGet し、既存の
 `deriveQuestionSummary`（保存済み `summary`、解説概要、問題文の順）で作る。
 
-資格ごとに1パーティションとしたのは、ドメインを跨ぐ「すべて」の一覧でもファンアウトや
-複合カーソルを不要にし、全ケースで `createdAt` 降順という一貫した順序を保つためである。
-ドメインと状態は FilterExpression で絞り込む。DynamoDB の `Limit` はフィルタ前の評価件数に
+全資格を1パーティションに集約し、資格横断の一覧でもファンアウトや複合カーソルを不要にして、
+全ケースで `createdAt` 降順という一貫した順序を保つ。資格、ドメイン、状態は
+FilterExpression で絞り込む。DynamoDB の `Limit` はフィルタ前の評価件数に
 適用されるため、要求件数に満たない間は `LastEvaluatedKey` から内部 Query を継続する。
 無限ループを避けるため、API は1リクエスト最大25回で打ち切り、続きがあれば不透明化した
 cursor を返す。Scan は一覧取得には使わない。
 
-バケット分割をしないため、将来は資格単位のパーティションが大きくなり得る。ただし資格単位で
-分散されることと当面のデータ量を踏まえ、現時点では複数バケットを採らない。必要になれば
+バケット分割をしないため、将来は一覧パーティションが大きくなり得る。ただし当面のデータ量を
+踏まえ、現時点では複数バケットを採らない。必要になれば
 新しい key version / GSI でバケット化する余地を残す。
 
 `listPk/listSk` は `status=ACTIVE` または `STALE` のときだけ設定し、`REJECTED` / `ARCHIVED`
@@ -761,7 +761,7 @@ worker は session を更新するとき、必ず次の条件を condition に�
 2. マーク時は `reviewPk/reviewSk` を設定。
 3. 解除時は `reviewPk/reviewSk` を削除。
 4. **不正解の回答は自動でマークする**: 回答記録トランザクションの `QUESTION#` Update 内で、`isCorrect=false` のときだけ `reviewMarked=true` と `reviewPk/reviewSk` を設定する。正解時は既存のマーク状態に触らない。解除は常に手動。
-5. 一覧取得（AP-06）は問題本体を BatchGet して `summary`（未設定なら解説概要・問題文から導出）と `questionStatus` を付けるが、問題本文・選択肢・正解・解説は返さない軽量DTOとする。
+5. 一覧取得（AP-06）は `cert` と `domain` の両方が指定された場合に `reviewSk` のプレフィックスで絞り込み、問題本体を BatchGet して `summary`（未設定なら解説概要・問題文から導出）と `questionStatus` を付けるが、問題本文・選択肢・正解・解説は返さない軽量DTOとする。`cert` なしの `domain` 単独指定は絞り込みに使わない。
 6. ユーザーが「正解と解説を見る」を開いたときだけ、`GET /questions/:questionId`（AP-13）で回答済みビューを取得する。
 7. 問題が `STALE` でも復習 state は残す。表示時に stale 表示し、必要なら再生成導線を出す。問題本体が欠落している場合は一覧に日本語の代替要約を返し、詳細取得は行わない。
 
@@ -774,8 +774,8 @@ worker は session を更新するとき、必ず次の条件を condition に�
 
 ### 生成済み問題一覧（AP-15）
 
-1. API が `cert` を必須検証し、`GSI4_QuestionList` の資格パーティションを降順 Query する。
-2. `domain`（任意）と `status`（`ACTIVE` / `STALE`、省略時は両方）を FilterExpression で絞る。
+1. API が指定された `cert` を検証し、`GSI4_QuestionList` の共通パーティションを降順 Query する。`cert` は省略できる。
+2. `cert`、`domain`（いずれも任意）と `status`（`ACTIVE` / `STALE`、省略時は両方）を FilterExpression で絞る。
 3. フィルタ後の件数が要求 `limit` に満たなければ、`LastEvaluatedKey` から内部 Query を続ける。
 4. 一覧 DTO は要約・資格・ドメイン・状態・作成/更新日時だけを返し、問題全文、回答履歴、
    セッション、復習状態などユーザー固有情報を含めない。

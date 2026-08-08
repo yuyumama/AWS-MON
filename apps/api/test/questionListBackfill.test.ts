@@ -10,7 +10,7 @@ const base = {
 describe("questionListBackfillAction", () => {
 	it("ACTIVEとSTALEへキーを設定し、同じキーなら更新しないため冪等", () => {
 		const expected = {
-			listPk: "QLIST#CERT#aip",
+			listPk: "QLIST#ALL",
 			listSk: "2026-08-04T00:00:00.000Z#Q#q_test",
 		};
 		for (const status of ["ACTIVE", "STALE"] as const) {
@@ -30,7 +30,7 @@ describe("questionListBackfillAction", () => {
 				questionListBackfillAction({
 					...base,
 					status,
-					listPk: "QLIST#CERT#aip",
+					listPk: "QLIST#ALL",
 					listSk: "old",
 				}),
 			).toEqual({ type: "remove" });

@@ -2,7 +2,7 @@ import { type QuestionItem, questionListKeys } from "@aws-mon/shared";
 
 type BackfillQuestion = Pick<
 	QuestionItem,
-	"questionId" | "status" | "cert" | "createdAt" | "listPk" | "listSk"
+	"questionId" | "status" | "createdAt" | "listPk" | "listSk"
 >;
 
 export type QuestionListBackfillAction =

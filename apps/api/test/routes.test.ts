@@ -533,8 +533,8 @@ describe("POST /sessions/:sessionId/next", () => {
 });
 
 describe("/reviews", () => {
-	it("一覧はcertとlimitを渡す", async () => {
-		const response = await app.request("/reviews?cert=aip&limit=10", {
+	it("一覧はcert、domain、limitを渡す", async () => {
+		const response = await app.request("/reviews?cert=aip&domain=d2&limit=10", {
 			headers: DEV_HEADERS,
 		});
 
@@ -542,6 +542,7 @@ describe("/reviews", () => {
 		expect(mocks.listReviewItems).toHaveBeenCalledWith({
 			userId: "user-test",
 			cert: "aip",
+			domain: "d2",
 			limit: 10,
 		});
 	});
