@@ -11,4 +11,4 @@ awslabs.aws-documentation-mcp-server>=1.1.28
 # scripts/run_server_otel.sh から opentelemetry-instrument 経由で起動したときだけ有効。
 aws-opentelemetry-distro>=0.19.0
 # Guardrails ApplyGuardrail 呼び出し(フェーズ3-3)
-boto3>=1.43.59
+boto3>=1.43.64
