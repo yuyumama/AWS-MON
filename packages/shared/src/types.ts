@@ -146,6 +146,7 @@ export type SessionMetaItem = {
 		jobId: string;
 		errorCode?: string;
 		progress?: GenerationProgress;
+		startedAt: string;
 		updatedAt: string;
 	};
 	current?: {
@@ -165,6 +166,7 @@ export type SessionMetaItem = {
 		domain?: string;
 		errorCode?: string;
 		progress?: GenerationProgress;
+		startedAt?: string;
 		updatedAt?: string;
 	};
 	answeredCount: number;

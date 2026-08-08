@@ -28,6 +28,7 @@ export type SessionDto = {
 		jobId: string;
 		errorCode?: string;
 		progress?: GenerationProgress;
+		startedAt: string;
 	};
 	current?: {
 		sequence: number;
@@ -43,6 +44,7 @@ export type SessionDto = {
 		domain?: string;
 		errorCode?: string;
 		progress?: GenerationProgress;
+		startedAt?: string;
 	};
 };
 
@@ -53,6 +55,11 @@ export type SessionSummaryDto = {
 	domainSelection: string;
 	mode: SessionMode;
 	stats: SessionStatsDto;
+	preparing?: {
+		state: "QUEUED" | "FAILED";
+		errorCode?: string;
+		startedAt: string;
+	};
 	current?: {
 		sequence: number;
 		state: CurrentQuestionState;

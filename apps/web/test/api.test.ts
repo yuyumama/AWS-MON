@@ -369,4 +369,29 @@ describe("セッション作成/次問の準備中判定", () => {
 
 		expect((await api.nextQuestion("s-1")).preparing).toBe(true);
 	});
+
+	it("初回生成の再試行はretryへPOSTし202とセッションを返す", async () => {
+		fetchMock.mockResolvedValue(
+			jsonResponse({ status: "ok", session: { sessionId: "s-1" } }, 202),
+		);
+
+		const result = await api.retrySession("s/1");
+
+		expect(lastCall().url).toBe("/api/sessions/s%2F1/retry");
+		expect(lastCall().init.method).toBe("POST");
+		expect(result.httpStatus).toBe(202);
+		expect(result.session.sessionId).toBe("s-1");
+		expect(result.preparing).toBe(true);
+	});
+
+	it("再試行の200応答は別セッション判定用にステータスを保つ", async () => {
+		fetchMock.mockResolvedValue(
+			jsonResponse({ status: "ok", session: { sessionId: "s-2" } }, 200),
+		);
+
+		const result = await api.retrySession("s-1");
+
+		expect(result.httpStatus).toBe(200);
+		expect(result.session.sessionId).toBe("s-2");
+	});
 });
