@@ -1,6 +1,6 @@
 # architecture — システム構成とフロー（完全版）
 
-最終更新: 2026-08-04
+最終更新: 2026-08-08
 
 `README.md` は概要、`docs/data-model.md` はDynamoDB設計の詳細を示す。本書は **コンポーネント間の関係** と **代表的なリクエストフロー** を図で示す完全版である。個々の決定の背景は `docs/adr/` を参照。
 
@@ -38,7 +38,7 @@ flowchart TB
         end
 
         CFS3["CloudFront + S3<br/>apps/web 配信"]
-        Scheduler["EventBridge Scheduler<br/>rate(1 minute)"]
+        Scheduler["EventBridge Scheduler<br/>job: rate(1 minute)<br/>stale sweep: rate(1 day)"]
         Worker["worker Lambda<br/>apps/api src/worker.ts"]
     end
 
@@ -49,6 +49,7 @@ flowchart TB
     Browser -. "静的アセット取得（本番はCloudFront。ローカルはvite dev serverが/apiをプロキシ）" .-> CFS3
     Scheduler -- "定期起動" --> Worker
     Worker -- "runRunnableJobs" --> TJobs
+    Worker -- "markExpiredQuestionsStale" --> TQuestions
 
     API -- "JWT検証(JWKS) + 生成権限検証（AUTH_MODE=cognito）" --> UserPool
     API -- "CRUD / TransactWrite" --> DDB
@@ -232,7 +233,7 @@ sequenceDiagram
     API-->>Dev: {processed, succeeded, retried, failed}
 ```
 
-`BANK` のPREFETCH jobは同一リクエスト内でinline実行される。`GENERATE/MIXED` は不要なLLM呼び出しを避けるため、QUEUEDのまま保存し、ローカルでは`/dev/jobs/run`で明示的に実行する。本番では EventBridge Scheduler（rate 1分）が worker Lambda（`apps/api/src/worker.ts`、同じ `runRunnableJobs`）を起動する（[ADR 0008](adr/0008-prod-deployment-shape.md)。`/dev/*` は本番では404）。
+`BANK` のPREFETCH jobは同一リクエスト内でinline実行される。`GENERATE/MIXED` は不要なLLM呼び出しを避けるため、QUEUEDのまま保存し、ローカルでは`/dev/jobs/run`で明示的に実行する。本番では EventBridge Scheduler（rate 1分）が worker Lambda（`apps/api/src/worker.ts`、同じ `runRunnableJobs`）を起動する（[ADR 0008](adr/0008-prod-deployment-shape.md)。`/dev/*` は本番では404）。同じ worker Lambda は日次スケジュールから `{ task: "stale" }` を受け取ると、期限切れの `ACTIVE` 問題を `STALE` へ遷移させる。再生成jobは発行しない。
 
 job の排他と回収は次のとおり（[ADR 0013](adr/0013-async-initial-generation.md) 決定6・7）。
 
@@ -272,7 +273,7 @@ job の失敗時は `errorCode` ごとの試行上限とbackoffを使う（[ADR 
 | spaced repetition（復習期限） | 未実装。`GSI2_DueList` の属性予約のみ（復習マーク/一覧のAP-06/07は実装済み: `/reviews`） | `docs/data-model.md` |
 | `apps/web` のS3+CloudFront配備 | デプロイ済み（2026-07-06、二段階apply完了）。CloudFront経由のログインE2E・GENERATE ともに確認済み（GENERATE は 2026-08-02、OpenRouter 経路。[ADR 0009](adr/0009-openrouter-default-provider.md)） | [ADR 0008](adr/0008-prod-deployment-shape.md)、`docs/cicd.md` |
 | prod worker（GENERATE/MIXED job） | デプロイ済み（EventBridge Scheduler rate 1分 + worker Lambda稼働中） | [ADR 0008](adr/0008-prod-deployment-shape.md) |
-| stale化 / abandoned化 job | 未実装（GSI設計のみ存在） | `docs/data-model.md` AP-08, AP-12 |
+| stale化 / abandoned化 job | stale化は実装済み（日次schedule + 既存worker Lambda）。abandoned化は未実装 | `docs/data-model.md` AP-08, AP-12 |
 | `ops/`（readonlyポリシー・スケジューラ） | 未着手 | [ADR 0003](adr/0003-monorepo-and-terraform-envs.md) |
 | `.claude/skills/`（監視・issue発行） | 未着手 | [ADR 0003](adr/0003-monorepo-and-terraform-envs.md) |
 | オブザーバビリティ（フェーズ3） | 実装・ライブ確認済み（2026-07-03）。残りはコンソールでの X-Ray Trace Map と GenAI Observability ダッシュボードの見え方比較のみ | [ADR 0007](adr/0007-observability-stack.md)、`docs/research/genai-observability-vs-xray.md` |

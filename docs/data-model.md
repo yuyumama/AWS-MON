@@ -291,6 +291,10 @@ type QuestionItem = {
 - TTL で即削除しないことで、復習履歴・回答履歴・品質評価の参照整合性を保つ。
 - stale 化後の再生成は別 `questionId` で作成し、古い問題は履歴用に残す。
 
+実装状況: issue #127 で、既存 worker Lambda を日次起動して期限切れの `ACTIVE` 問題を
+`STALE` へ遷移させる sweep を実装済み。無人の LLM 課金を避けるため、
+`REGENERATE_STALE` job の発行は意図的に実装しない。
+
 ## `AwsMonSessions`
 
 セッション状態と、そのセッション内の回答履歴を同じ partition に置く。
