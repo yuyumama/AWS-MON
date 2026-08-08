@@ -422,6 +422,25 @@ resource "aws_scheduler_schedule" "worker" {
   depends_on = [aws_iam_role_policy.scheduler]
 }
 
+resource "aws_scheduler_schedule" "stale_worker" {
+  count = local.app_enabled ? 1 : 0
+
+  name                = "${local.name_prefix}-stale-worker-schedule"
+  schedule_expression = "rate(1 day)"
+
+  flexible_time_window {
+    mode = "OFF"
+  }
+
+  target {
+    arn      = aws_lambda_function.worker[0].arn
+    role_arn = aws_iam_role.scheduler.arn
+    input    = jsonencode({ task = "stale" })
+  }
+
+  depends_on = [aws_iam_role_policy.scheduler]
+}
+
 data "aws_iam_policy_document" "agent_runtime_assume_role" {
   statement {
     sid     = "AssumeRolePolicy"

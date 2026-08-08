@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const workerMocks = vi.hoisted(() => ({
 	runRunnableJobs: vi.fn(),
+	markExpiredQuestionsStale: vi.fn(),
 }));
 
 vi.mock("../src/jobRepository.js", async (importOriginal) => ({
@@ -13,9 +14,14 @@ vi.mock("../src/jobRepository.js", async (importOriginal) => ({
 	runRunnableJobs: workerMocks.runRunnableJobs,
 }));
 
-const { handler } = await import("../src/worker.js");
+vi.mock("../src/staleRepository.js", () => ({
+	markExpiredQuestionsStale: workerMocks.markExpiredQuestionsStale,
+}));
+
+const { handler, workerTask } = await import("../src/worker.js");
 
 const SUMMARY = { processed: 2, succeeded: 1, retried: 1, failed: 0 };
+const STALE_SUMMARY = { staled: 3 };
 
 function context(remainingMs: number) {
 	return { getRemainingTimeInMillis: () => remainingMs };
@@ -28,6 +34,7 @@ beforeEach(() => {
 	savedLimit = process.env.WORKER_JOBS_LIMIT;
 	delete process.env.WORKER_JOBS_LIMIT;
 	workerMocks.runRunnableJobs.mockResolvedValue(SUMMARY);
+	workerMocks.markExpiredQuestionsStale.mockResolvedValue(STALE_SUMMARY);
 	vi.spyOn(console, "log").mockImplementation(() => undefined);
 });
 
@@ -40,7 +47,32 @@ afterEach(() => {
 	}
 });
 
+describe("workerTask", () => {
+	it("task=stale を stale sweep と判定する", () => {
+		expect(workerTask({ task: "stale" })).toBe("stale");
+	});
+
+	it.each([undefined, null, {}, [], { task: "unknown" }])(
+		"それ以外のイベント %# は runnable jobs と判定する",
+		(event) => {
+			expect(workerTask(event)).toBe("runnable-jobs");
+		},
+	);
+});
+
 describe("worker handler", () => {
+	it("task=stale なら stale sweep だけを実行する", async () => {
+		const result = await handler({ task: "stale" }, context(300_000));
+
+		expect(result).toEqual(STALE_SUMMARY);
+		expect(workerMocks.markExpiredQuestionsStale).toHaveBeenCalledOnce();
+		expect(workerMocks.runRunnableJobs).not.toHaveBeenCalled();
+		expect(console.log).toHaveBeenCalledWith(
+			"worker stale questions summary",
+			STALE_SUMMARY,
+		);
+	});
+
 	it("実行結果のサマリをそのまま返す", async () => {
 		const result = await handler({}, context(300_000));
 
