@@ -4,6 +4,7 @@ import type {
 	SessionMetaItem,
 } from "@aws-mon/shared";
 import {
+	BatchGetCommand,
 	BatchWriteCommand,
 	GetCommand,
 	QueryCommand,
@@ -185,13 +186,78 @@ describe("listSessions", () => {
 			updatedAt: meta.updatedAt,
 			deleteAt: 1_800_000_000,
 		};
-		repositoryMocks.dynamoSend.mockResolvedValue({ Items: [guard, meta] });
+		repositoryMocks.dynamoSend.mockImplementation(async (command: unknown) => {
+			if (command instanceof QueryCommand) return { Items: [guard, meta] };
+			if (command instanceof BatchGetCommand) {
+				return { Responses: { "aws-mon-test-sessions": [meta] } };
+			}
+			throw new Error(`unexpected command: ${String(command)}`);
+		});
 
 		const sessions = await listSessions({ userId: meta.userId });
 
 		expect(guard).not.toHaveProperty("userStatusPk");
 		expect(sessions).toHaveLength(1);
 		expect(sessions[0]?.sessionId).toBe(meta.sessionId);
+	});
+
+	// GSI1_UserStatus は initial を投影しないため、初回生成中のセッションだけは
+	// ベーステーブルを引き直す。current があるセッションは initial と排他なので
+	// (生成成功時に REMOVE #initial する)、引き直してはならない。
+	// ここを常時 BatchGet に戻すと、一覧のたびに読み取りが倍になる。
+	it("current を持つセッションではベーステーブルを引き直さない", async () => {
+		const meta: SessionMetaItem = {
+			...sessionFixture(),
+			current: {
+				sequence: 1,
+				questionId: "q_test",
+				domain: "d1",
+				state: "ANSWERING",
+			},
+		};
+		repositoryMocks.dynamoSend.mockImplementation(async (command: unknown) => {
+			if (command instanceof QueryCommand) return { Items: [meta] };
+			throw new Error(`unexpected command: ${String(command)}`);
+		});
+
+		const sessions = await listSessions({ userId: meta.userId });
+
+		expect(sessions).toHaveLength(1);
+		expect(
+			repositoryMocks.dynamoSend.mock.calls.filter(
+				([command]) => command instanceof BatchGetCommand,
+			),
+		).toHaveLength(0);
+	});
+
+	it("初回生成中のセッションでは initial を読むためにベーステーブルを引く", async () => {
+		const base = sessionFixture();
+		const indexed: SessionMetaItem = { ...base };
+		// GSIの投影に initial は含まれない。
+		delete (indexed as { initial?: unknown }).initial;
+		const full: SessionMetaItem = {
+			...base,
+			initial: {
+				state: "QUEUED",
+				jobId: "job-1",
+				startedAt: base.startedAt,
+				updatedAt: base.updatedAt,
+			},
+		};
+		repositoryMocks.dynamoSend.mockImplementation(async (command: unknown) => {
+			if (command instanceof QueryCommand) return { Items: [indexed] };
+			if (command instanceof BatchGetCommand) {
+				return { Responses: { "aws-mon-test-sessions": [full] } };
+			}
+			throw new Error(`unexpected command: ${String(command)}`);
+		});
+
+		const sessions = await listSessions({ userId: base.userId });
+
+		expect(sessions[0]?.preparing).toEqual({
+			state: "QUEUED",
+			startedAt: base.startedAt,
+		});
 	});
 });
 

@@ -22,9 +22,11 @@ import {
 	getSession,
 	isConflict,
 	nextQuestion,
+	retrySession,
 	setReviewMark,
 	submitAnswer,
 } from "../lib/api";
+import { invalidateCache } from "../lib/cache";
 import { invalidateFor } from "../lib/cacheKeys";
 import { certFullName, certName, domainLabel, modeLabel } from "../lib/certs";
 import { useElapsedSeconds } from "../lib/useElapsedSeconds";
@@ -34,6 +36,7 @@ type Props = {
 	// セッション開始直後はAppから受け取り、リロード時はnull(自分でGETする)
 	initialSession: SessionDto | null;
 	onExit: () => void;
+	onResume: (sessionId: string) => void;
 };
 
 const pollIntervalMs = 3_000;
@@ -42,7 +45,7 @@ const prefetchPollIntervalMs = 5_000;
 
 function generationFailureMessage(
 	errorCode?: string,
-	recovery = "ホームに戻ってもう一度お試しください。",
+	recovery = "「再生成」を押してもう一度お試しください。",
 ): string {
 	const cause =
 		errorCode === "generation_timeout"
@@ -127,7 +130,12 @@ function GenerationStages({ progress }: { progress?: GenerationProgress }) {
 	);
 }
 
-export function QuizView({ sessionId, initialSession, onExit }: Props) {
+export function QuizView({
+	sessionId,
+	initialSession,
+	onExit,
+	onResume,
+}: Props) {
 	const isPresent = useIsPresent();
 	const isPresentRef = useRef(isPresent);
 	isPresentRef.current = isPresent;
@@ -139,6 +147,9 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 	const [conflicted, setConflicted] = useState(false);
 	const [initialPollError, setInitialPollError] = useState<string | null>(null);
 	const [nextWaiting, setNextWaiting] = useState(false);
+	const [retrying, setRetrying] = useState(false);
+	const [retryError, setRetryError] = useState<string | null>(null);
+	const [retryTargetId, setRetryTargetId] = useState<string | null>(null);
 	const reducedMotion = useReducedMotion();
 	// 出題からの経過時間(elapsedMs)計測用
 	const shownAtRef = useRef(Date.now());
@@ -150,9 +161,13 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 		!session.current &&
 		session.preparing?.state === "QUEUED" &&
 		initialPollError === null;
-	const initialElapsed = useElapsedSeconds(initialPreparing);
+	const initialElapsed = useElapsedSeconds(
+		initialPreparing ? session.preparing?.startedAt : undefined,
+	);
 	const generatingNext = pending === "next" && session?.mode !== "BANK";
-	const nextElapsed = useElapsedSeconds(generatingNext);
+	const nextElapsed = useElapsedSeconds(
+		generatingNext ? session?.prefetch?.startedAt : undefined,
+	);
 
 	useEffect(() => {
 		const questionId = session?.current?.question.questionId;
@@ -409,6 +424,31 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 		}
 	};
 
+	const retryInitialGeneration = async () => {
+		if (!isPresent || !session || retrying) return;
+		setRetrying(true);
+		setRetryError(null);
+		setRetryTargetId(null);
+		try {
+			const result = await retrySession(session.sessionId);
+			invalidateCache("sessions:ACTIVE");
+			if (
+				result.httpStatus === 200 &&
+				result.session.sessionId !== session.sessionId
+			) {
+				setRetryTargetId(result.session.sessionId);
+				return;
+			}
+			setInitialPollError(null);
+			initialWaitStartedAtRef.current = null;
+			setSession(result.session);
+		} catch (error) {
+			setRetryError(`再生成できませんでした。${errorMessage(error)}`);
+		} finally {
+			setRetrying(false);
+		}
+	};
+
 	useEffect(() => {
 		if (!isPresent || !nextWaiting) return;
 		let cancelled = false;
@@ -549,11 +589,38 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 						<strong>生成を続けられません</strong>
 						<span>{preparingFailure}</span>
 					</div>
+					{retryError && (
+						<p className="notice notice-error" role="alert">
+							{retryError}
+						</p>
+					)}
+					{retryTargetId && (
+						<div className="notice" role="status">
+							<p>別のセッションで同じ条件の生成が進行中です</p>
+							<button
+								type="button"
+								className="button button-primary"
+								onClick={() => onResume(retryTargetId)}
+							>
+								進行中のセッションを開く →
+							</button>
+						</div>
+					)}
 					<div className="actions">
 						<button
 							type="button"
 							className="button button-primary"
+							onClick={() => void retryInitialGeneration()}
+							disabled={retrying || retryTargetId !== null}
+						>
+							{retrying && <ButtonSpinner />}
+							{retrying ? "再生成中…" : "再生成"}
+						</button>
+						<button
+							type="button"
+							className="button button-ghost"
 							onClick={onExit}
+							disabled={retrying}
 						>
 							ホームへ戻る
 						</button>

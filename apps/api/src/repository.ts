@@ -22,6 +22,7 @@ import {
 	userStatusKeys,
 } from "@aws-mon/shared";
 import {
+	BatchGetCommand,
 	BatchWriteCommand,
 	type BatchWriteCommandInput,
 	GetCommand,
@@ -77,6 +78,17 @@ export type NextInput = {
 export type NextSessionQuestionResult = {
 	session: SessionDto;
 	preparing: boolean;
+};
+
+export type RetryInitialInput = {
+	userId: string;
+	sessionId: string;
+	canGenerateQuestions: boolean;
+};
+
+export type RetryInitialResult = {
+	session: SessionDto;
+	disposition: "RETRIED" | "EXISTING_PREPARING";
 };
 
 export type ListSessionsInput = {
@@ -207,6 +219,7 @@ function toSessionDto(
 			jobId: meta.initial.jobId,
 			errorCode: meta.initial.errorCode,
 			progress: meta.initial.progress,
+			startedAt: meta.initial.startedAt,
 		};
 	}
 
@@ -230,6 +243,7 @@ function toSessionDto(
 			domain: meta.prefetch.domain,
 			errorCode: meta.prefetch.errorCode,
 			progress: meta.prefetch.progress,
+			startedAt: meta.prefetch.startedAt,
 		};
 	}
 
@@ -247,6 +261,13 @@ function toSessionSummaryDto(meta: SessionMetaItem): SessionSummaryDto {
 			answeredCount: meta.answeredCount,
 			correctCount: meta.correctCount,
 		},
+		preparing: meta.initial
+			? {
+					state: meta.initial.state,
+					errorCode: meta.initial.errorCode,
+					startedAt: meta.initial.startedAt,
+				}
+			: undefined,
 		current: meta.current
 			? {
 					sequence: meta.current.sequence,
@@ -353,9 +374,43 @@ export async function listSessions(
 		}),
 	);
 
-	return (out.Items ?? [])
-		.filter(isSessionMetaItem)
-		.map((item) => toSessionSummaryDto(item));
+	const indexedMetas = (out.Items ?? []).filter(isSessionMetaItem);
+
+	// GSI1_UserStatus は initial を投影しない。ただし initial と current は排他で
+	// (生成成功時に REMOVE #initial して current を入れる)、current があるセッションは
+	// 初回生成中ではありえない。そのため current を持たないものだけベーステーブルを引く。
+	// 通常はこれが0件になり、一覧のたびに全件を読み直すことを避けられる。
+	const needsInitial = indexedMetas.filter((meta) => !meta.current);
+	const fullById = new Map<string, SessionMetaItem>();
+	let keys = needsInitial.map(({ sessionId }) => ({
+		sessionId,
+		itemKey: "META",
+	}));
+
+	for (let attempt = 0; keys.length > 0 && attempt < 3; attempt += 1) {
+		const result = await dynamoDoc.send(
+			new BatchGetCommand({
+				RequestItems: {
+					[tables.sessions]: { Keys: keys, ConsistentRead: true },
+				},
+			}),
+		);
+		for (const item of result.Responses?.[tables.sessions] ?? []) {
+			if (isSessionMetaItem(item)) fullById.set(item.sessionId, item);
+		}
+		keys = (result.UnprocessedKeys?.[tables.sessions]?.Keys ?? []) as Array<{
+			sessionId: string;
+			itemKey: string;
+		}>;
+	}
+	if (keys.length > 0) {
+		throw new Error("failed to read all session list items");
+	}
+
+	return indexedMetas
+		.map((meta) => fullById.get(meta.sessionId) ?? meta)
+		.filter((meta) => meta.userId === input.userId && meta.status === status)
+		.map(toSessionSummaryDto);
 }
 
 async function deleteSessionAttempts(
@@ -799,6 +854,135 @@ export async function startSession(
 	return {
 		session: toSessionDto(meta, question),
 		disposition: "CREATED_READY",
+	};
+}
+
+export async function retryInitialSession(
+	input: RetryInitialInput,
+): Promise<RetryInitialResult> {
+	const meta = await getSessionMeta(input.sessionId);
+	if (meta.userId !== input.userId) {
+		throw new ApiError("session not found", 404);
+	}
+	assertGenerationAllowed(meta.mode, input.canGenerateQuestions);
+	if (meta.initial?.state !== "FAILED") {
+		throw new ApiError("initial generation is not failed", 409);
+	}
+
+	const domain = nextDomain(meta);
+	const { job, initial } = createInitialJob({
+		sessionId: meta.sessionId,
+		userId: meta.userId,
+		cert: meta.cert,
+		domainSelection: meta.domainSelection,
+		domain,
+		mode: meta.mode,
+	});
+	const updatedAt = job.createdAt;
+	const abandonAfter = addDaysIso(updatedAt, policy.abandonAfterDays);
+	const statusKeys = userStatusKeys({
+		userId: meta.userId,
+		status: meta.status,
+		updatedAt,
+		sessionId: meta.sessionId,
+	});
+	const activeAbandonKeys = abandonKeys({
+		sessionId: meta.sessionId,
+		abandonAfter,
+	});
+	const guard: InitialSessionGuardItem = {
+		...initialSessionGuardKey(meta),
+		schemaVersion: 1,
+		preparingSessionId: meta.sessionId,
+		userId: meta.userId,
+		cert: meta.cert,
+		domainSelection: meta.domainSelection,
+		mode: meta.mode,
+		createdAt: updatedAt,
+		updatedAt,
+		deleteAt: Math.floor(Date.now() / 1000) + policy.initialGuardTtlSeconds,
+	};
+
+	try {
+		await dynamoDoc.send(
+			new TransactWriteCommand({
+				TransactItems: [
+					{
+						Update: {
+							TableName: tables.sessions,
+							Key: { sessionId: meta.sessionId, itemKey: "META" },
+							ConditionExpression:
+								"#initial.#state = :failed AND userId = :userId AND attribute_not_exists(#current)",
+							UpdateExpression:
+								"SET #initial = :initial, version = version + :one, updatedAt = :updatedAt, userStatusPk = :userStatusPk, userStatusSk = :userStatusSk, abandonAfter = :abandonAfter, abandonPk = :abandonPk, abandonSk = :abandonSk",
+							ExpressionAttributeNames: {
+								"#initial": "initial",
+								"#state": "state",
+								"#current": "current",
+							},
+							ExpressionAttributeValues: {
+								":failed": "FAILED",
+								":userId": meta.userId,
+								":initial": initial,
+								":one": 1,
+								":updatedAt": updatedAt,
+								":userStatusPk": statusKeys.userStatusPk,
+								":userStatusSk": statusKeys.userStatusSk,
+								":abandonAfter": abandonAfter,
+								":abandonPk": activeAbandonKeys.abandonPk,
+								":abandonSk": activeAbandonKeys.abandonSk,
+							},
+						},
+					},
+					{
+						Put: {
+							TableName: tables.generationJobs,
+							Item: job,
+							ConditionExpression: "attribute_not_exists(jobId)",
+						},
+					},
+					{
+						Put: {
+							TableName: tables.sessions,
+							Item: guard,
+							ConditionExpression:
+								"attribute_not_exists(sessionId) AND attribute_not_exists(itemKey)",
+						},
+					},
+				],
+			}),
+		);
+	} catch (error) {
+		if (!isTransactionCanceled(error)) {
+			throw error;
+		}
+
+		let existing: SessionMetaItem | undefined;
+		try {
+			existing = await findGuardedInitialSession({
+				userId: meta.userId,
+				cert: meta.cert,
+				domainSelection: meta.domainSelection,
+				mode: meta.mode,
+			});
+		} catch (lookupError) {
+			if (lookupError instanceof ApiError && lookupError.status === 404) {
+				throw error;
+			}
+			throw lookupError;
+		}
+		if (!existing) {
+			throw error;
+		}
+		return {
+			session: toSessionDto(existing),
+			disposition: "EXISTING_PREPARING",
+		};
+	}
+
+	return {
+		session: toSessionDto(await getSessionMeta(meta.sessionId)),
+		disposition: "RETRIED",
 	};
 }
 

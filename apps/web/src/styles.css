@@ -737,6 +737,29 @@ a {
 	font-weight: 600;
 }
 
+.session-primary {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+}
+
+.session-primary .button-spinner {
+	flex: none;
+}
+
+.session-list[data-reduced-motion="true"] .button-spinner {
+	animation: none;
+}
+
+.session-separator {
+	white-space: pre;
+}
+
+.session-elapsed {
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+
 .session-sub {
 	font-size: 12px;
 	font-weight: 400;

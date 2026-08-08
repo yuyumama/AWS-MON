@@ -33,6 +33,7 @@ import {
 	getSession,
 	listSessions,
 	nextSessionQuestion,
+	retryInitialSession,
 	startSession,
 } from "./repository.js";
 import {
@@ -216,6 +217,24 @@ app.post("/sessions/:sessionId/next", async (c) => {
 		return c.json(
 			{ status: "ok", session: result.session },
 			result.preparing ? 202 : 200,
+		);
+	} catch (e) {
+		return errorResponse(c, e);
+	}
+});
+
+app.post("/sessions/:sessionId/retry", async (c) => {
+	try {
+		const auth = getAuth(c);
+		const result = await retryInitialSession({
+			userId: auth.userId,
+			sessionId: c.req.param("sessionId"),
+			canGenerateQuestions: auth.canGenerateQuestions,
+		});
+
+		return c.json(
+			{ status: "ok", session: result.session },
+			result.disposition === "RETRIED" ? 202 : 200,
 		);
 	} catch (e) {
 		return errorResponse(c, e);

@@ -143,6 +143,23 @@ export async function getSession(sessionId: string): Promise<SessionDto> {
 	return body.session;
 }
 
+export async function retrySession(
+	sessionId: string,
+): Promise<SessionMutationResult> {
+	const { body, httpStatus } = await requestWithStatus<{
+		session: SessionDto;
+	}>(`/sessions/${encodeURIComponent(sessionId)}/retry`, {
+		method: "POST",
+	});
+	return {
+		session: body.session,
+		preparing:
+			httpStatus === 202 ||
+			(!body.session.current && body.session.preparing?.state === "QUEUED"),
+		httpStatus,
+	};
+}
+
 export async function deleteSession(sessionId: string): Promise<void> {
 	await requestWithStatus<void>(`/sessions/${encodeURIComponent(sessionId)}`, {
 		method: "DELETE",

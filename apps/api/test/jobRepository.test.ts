@@ -942,6 +942,7 @@ describe("createInitialJob", () => {
 		expect(initial).toEqual({
 			state: "QUEUED",
 			jobId: job.jobId,
+			startedAt: job.createdAt,
 			updatedAt: job.createdAt,
 		});
 	});

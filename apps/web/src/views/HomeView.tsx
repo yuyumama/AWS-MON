@@ -4,9 +4,10 @@ import type {
 	SessionSummaryDto,
 } from "@aws-mon/shared";
 import { allDomains, certDefinitions, certDomains } from "@aws-mon/shared";
+import { useReducedMotion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import { CertLevelBadge } from "../components/CertLevelBadge";
-import { SessionListSkeleton } from "../components/Loading";
+import { ButtonSpinner, SessionListSkeleton } from "../components/Loading";
 import {
 	ApiClientError,
 	deleteSession,
@@ -22,6 +23,8 @@ import {
 	modeLabel,
 	modeOptions,
 } from "../lib/certs";
+import { shouldPollSessions } from "../lib/sessionPolling";
+import { useElapsedSeconds } from "../lib/useElapsedSeconds";
 import { useRouteScrollPosition } from "../lib/viewState";
 
 type Props = {
@@ -34,16 +37,127 @@ type Props = {
 function formatUpdatedAt(iso: string): string {
 	const date = new Date(iso);
 	if (Number.isNaN(date.getTime())) return iso;
-	return date.toLocaleString("ja-JP", {
-		month: "numeric",
-		day: "numeric",
+	return date.toLocaleTimeString("ja-JP", {
 		hour: "2-digit",
 		minute: "2-digit",
 	});
 }
 
+function formatElapsed(elapsedSeconds: number): string {
+	if (elapsedSeconds < 60) return `${elapsedSeconds}秒`;
+	const minutes = Math.floor(elapsedSeconds / 60);
+	const seconds = elapsedSeconds % 60;
+	return seconds === 0 ? `${minutes}分` : `${minutes}分${seconds}秒`;
+}
+
+function accuracy(session: SessionSummaryDto): string {
+	return session.stats.answeredCount > 0
+		? `${Math.round((session.stats.correctCount / session.stats.answeredCount) * 100)}%`
+		: "—";
+}
+
+function SessionRow({
+	session,
+	onResume,
+	onDelete,
+}: {
+	session: SessionSummaryDto;
+	onResume: () => void;
+	onDelete: (trigger: HTMLButtonElement) => void;
+}) {
+	const initialQueued =
+		!session.current && session.preparing?.state === "QUEUED";
+	const initialFailed =
+		!session.current && session.preparing?.state === "FAILED";
+	const prefetchQueued = session.prefetch?.state === "QUEUED";
+	const elapsed = useElapsedSeconds(
+		initialQueued ? session.preparing?.startedAt : undefined,
+	);
+	const answered = `${session.stats.answeredCount}問回答`;
+	const rate = `正答率 ${accuracy(session)}`;
+
+	return (
+		<li className="session-item">
+			<button type="button" className="session-row" onClick={onResume}>
+				<span className="cert-display">
+					<span className="session-cert" title={certFullName(session.cert)}>
+						{certName(session.cert)}
+					</span>
+					<CertLevelBadge cert={session.cert} />
+				</span>
+				<span className="session-main">
+					<span className="session-primary">
+						{initialQueued ? (
+							<>
+								<ButtonSpinner />
+								最初の問題を生成中
+								<span className="session-separator"> ・ </span>
+								<span className="session-elapsed">
+									{formatElapsed(elapsed)}
+								</span>
+							</>
+						) : initialFailed ? (
+							"問題を準備できませんでした"
+						) : prefetchQueued ? (
+							<>
+								{answered}
+								<span className="session-separator"> ・ </span>
+								<ButtonSpinner />
+								次の問題を生成中
+							</>
+						) : (
+							<>
+								{answered}
+								<span className="session-separator"> ・ </span>
+								{rate}
+							</>
+						)}
+					</span>
+					<span className="session-sub">
+						{initialQueued ? (
+							modeLabel(session.mode)
+						) : initialFailed ? (
+							<>
+								{modeLabel(session.mode)} ・{" "}
+								{formatUpdatedAt(session.updatedAt)}
+							</>
+						) : prefetchQueued ? (
+							<>
+								{modeLabel(session.mode)} ・ {rate} ・{" "}
+								{formatUpdatedAt(session.updatedAt)}
+							</>
+						) : (
+							<>
+								{modeLabel(session.mode)} ・{" "}
+								{formatUpdatedAt(session.updatedAt)}
+							</>
+						)}
+					</span>
+				</span>
+				<span className="session-resume">
+					{initialQueued || initialFailed ? "開く →" : "再開 →"}
+				</span>
+			</button>
+			<button
+				type="button"
+				className="session-delete"
+				aria-label={`${certName(session.cert)}のセッションを削除`}
+				onClick={(event) => {
+					event.stopPropagation();
+					onDelete(event.currentTarget);
+				}}
+			>
+				削除
+			</button>
+		</li>
+	);
+}
+
+const sessionsPollIntervalMs = 3_000;
+
 export function HomeView({ canGenerate, onOpenSession, onResume }: Props) {
 	useRouteScrollPosition("home");
+	const reducedMotion = useReducedMotion();
 	const availableModes = canGenerate
 		? modeOptions
 		: modeOptions.filter((option) => option.value === "BANK");
@@ -58,9 +172,11 @@ export function HomeView({ canGenerate, onOpenSession, onResume }: Props) {
 		data: sessions,
 		error: sessionsResourceError,
 		isLoading: sessionsLoading,
+		revalidate: revalidateSessions,
 	} = useCachedResource<SessionSummaryDto[]>("sessions:ACTIVE", () =>
 		listSessions("ACTIVE"),
 	);
+	const [documentHidden, setDocumentHidden] = useState(document.hidden);
 	const sessionsError = sessionsResourceError
 		? errorMessage(sessionsResourceError)
 		: null;
@@ -72,6 +188,36 @@ export function HomeView({ canGenerate, onOpenSession, onResume }: Props) {
 	const cancelButtonRef = useRef<HTMLButtonElement>(null);
 	const deleteTriggerRef = useRef<HTMLButtonElement | null>(null);
 	const resumeHeadingRef = useRef<HTMLHeadingElement>(null);
+
+	useEffect(() => {
+		const onVisibilityChange = () => setDocumentHidden(document.hidden);
+		document.addEventListener("visibilitychange", onVisibilityChange);
+		return () =>
+			document.removeEventListener("visibilitychange", onVisibilityChange);
+	}, []);
+
+	useEffect(() => {
+		if (!shouldPollSessions(sessions, documentHidden)) return;
+		let cancelled = false;
+		let timer: number | undefined;
+
+		const poll = async () => {
+			try {
+				await revalidateSessions();
+			} catch {
+				// 一時的な取得失敗で生成状態の追跡を止めない。
+			}
+			if (!cancelled) {
+				timer = window.setTimeout(() => void poll(), sessionsPollIntervalMs);
+			}
+		};
+
+		timer = window.setTimeout(() => void poll(), sessionsPollIntervalMs);
+		return () => {
+			cancelled = true;
+			if (timer !== undefined) window.clearTimeout(timer);
+		};
+	}, [documentHidden, revalidateSessions, sessions]);
 
 	useEffect(() => {
 		if (!confirmSession) return;
@@ -263,50 +409,21 @@ export function HomeView({ canGenerate, onOpenSession, onResume }: Props) {
 				)}
 
 				{sessions !== undefined && sessions.length > 0 && (
-					<ul className="session-list">
+					<ul
+						className="session-list"
+						data-reduced-motion={reducedMotion ? "true" : undefined}
+					>
 						{sessions.map((session) => (
-							<li className="session-item" key={session.sessionId}>
-								<button
-									type="button"
-									className="session-row"
-									onClick={() => onResume(session.sessionId)}
-								>
-									<span className="cert-display">
-										<span
-											className="session-cert"
-											title={certFullName(session.cert)}
-										>
-											{certName(session.cert)}
-										</span>
-										<CertLevelBadge cert={session.cert} />
-									</span>
-									<span className="session-main">
-										第{session.current?.sequence ?? "—"}問
-										{session.current?.state === "ANSWERED" ? "(回答済み)" : ""}
-										<span className="session-sub">
-											{modeLabel(session.mode)} ・ 正答率{" "}
-											{session.stats.answeredCount > 0
-												? `${Math.round((session.stats.correctCount / session.stats.answeredCount) * 100)}%(${session.stats.correctCount}/${session.stats.answeredCount}問)`
-												: "—"}{" "}
-											・ {formatUpdatedAt(session.updatedAt)}
-										</span>
-									</span>
-									<span className="session-resume">再開 →</span>
-								</button>
-								<button
-									type="button"
-									className="session-delete"
-									aria-label={`${certName(session.cert)}のセッションを削除`}
-									onClick={(event) => {
-										event.stopPropagation();
-										deleteTriggerRef.current = event.currentTarget;
-										setDeleteError(null);
-										setConfirmSession(session);
-									}}
-								>
-									削除
-								</button>
-							</li>
+							<SessionRow
+								key={session.sessionId}
+								session={session}
+								onResume={() => onResume(session.sessionId)}
+								onDelete={(trigger) => {
+									deleteTriggerRef.current = trigger;
+									setDeleteError(null);
+									setConfirmSession(session);
+								}}
+							/>
 						))}
 					</ul>
 				)}

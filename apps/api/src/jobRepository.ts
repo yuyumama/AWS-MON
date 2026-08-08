@@ -585,7 +585,12 @@ export function createInitialJob(input: CreateInitialJobInput): {
 
 	return {
 		job,
-		initial: { state: "QUEUED", jobId, updatedAt: createdAt },
+		initial: {
+			state: "QUEUED",
+			jobId,
+			startedAt: createdAt,
+			updatedAt: createdAt,
+		},
 	};
 }
 
@@ -625,6 +630,7 @@ function preparePrefetchJob(input: CreatePrefetchJobInput): {
 			state: "QUEUED",
 			jobId,
 			domain: input.domain,
+			startedAt: createdAt,
 			updatedAt: createdAt,
 		},
 	};
@@ -866,6 +872,7 @@ async function completePrefetchJob(
 					jobId: job.jobId,
 					questionId: terminal.questionId,
 					domain: job.domain,
+					startedAt: job.createdAt,
 					updatedAt,
 				}
 			: {
@@ -874,6 +881,7 @@ async function completePrefetchJob(
 					jobId: job.jobId,
 					domain: job.domain,
 					errorCode: terminal.errorCode,
+					startedAt: job.createdAt,
 					updatedAt,
 				};
 	const jobUpdate =
@@ -1012,6 +1020,7 @@ export async function createAndRunPrefetchJob(
 			state: "QUEUED",
 			jobId: job.jobId,
 			domain: input.domain,
+			startedAt: job.createdAt,
 			updatedAt,
 		};
 	}
@@ -1023,6 +1032,7 @@ export async function createAndRunPrefetchJob(
 			jobId: job.jobId,
 			domain: input.domain,
 			errorCode: outcome.job.errorCode,
+			startedAt: job.createdAt,
 			updatedAt,
 		};
 	}
@@ -1033,6 +1043,7 @@ export async function createAndRunPrefetchJob(
 		jobId: job.jobId,
 		questionId: outcome.job.questionId,
 		domain: input.domain,
+		startedAt: job.createdAt,
 		updatedAt,
 	};
 }

@@ -212,6 +212,7 @@ export function App() {
 										onExit={() => {
 											window.location.hash = "";
 										}}
+										onResume={resumeSession}
 									/>
 								)}
 							</ViewTransition>
