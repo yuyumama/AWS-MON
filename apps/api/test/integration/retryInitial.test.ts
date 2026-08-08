@@ -437,6 +437,44 @@ describe.skipIf(!dynamoLocalAvailable)(
 			);
 		});
 
+		it("ACTIVE でないセッションは受け付けない(409)", async () => {
+			// 初回生成に失敗したまま7日放置され、abandon worker に ABANDONED にされた
+			// セッションを、再生成で復活させられてはならない。
+			const userId = uniqueId("u");
+			const cert = uniqueId("cert").slice(0, 20);
+			const sessionId = await startPreparingSession({
+				userId,
+				cert,
+				domainSelection: "all",
+			});
+			await markInitialFailed({
+				sessionId,
+				userId,
+				cert,
+				domainSelection: "all",
+			});
+			await dynamoDoc.send(
+				new UpdateCommand({
+					TableName: tables.sessions,
+					Key: { sessionId, itemKey: "META" },
+					UpdateExpression: "SET #status = :abandoned",
+					ExpressionAttributeNames: { "#status": "status" },
+					ExpressionAttributeValues: { ":abandoned": "ABANDONED" },
+				}),
+			);
+
+			await expect(
+				retryInitialSession({ userId, sessionId, canGenerateQuestions: true }),
+			).rejects.toMatchObject({ status: 409 });
+
+			// 拒否したときは新しい job もガードitemも作らない。
+			const meta = await readMeta(sessionId);
+			expect(meta.initial?.state).toBe("FAILED");
+			expect(
+				await readGuard({ userId, cert, domainSelection: "all" }),
+			).toBeUndefined();
+		});
+
 		it("他人のセッションは404にする(存在を漏らさない)", async () => {
 			const userId = uniqueId("u");
 			const cert = uniqueId("cert").slice(0, 20);

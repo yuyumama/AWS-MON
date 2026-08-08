@@ -865,6 +865,11 @@ export async function retryInitialSession(
 		throw new ApiError("session not found", 404);
 	}
 	assertGenerationAllowed(meta.mode, input.canGenerateQuestions);
+	// 放棄・完了したセッションを再生成で復活させない。初回生成に失敗したまま
+	// abandon worker に ABANDONED にされたセッションが対象になりうる。
+	if (meta.status !== "ACTIVE") {
+		throw new ApiError("session is not active", 409);
+	}
 	if (meta.initial?.state !== "FAILED") {
 		throw new ApiError("initial generation is not failed", 409);
 	}
@@ -882,7 +887,8 @@ export async function retryInitialSession(
 	const abandonAfter = addDaysIso(updatedAt, policy.abandonAfterDays);
 	const statusKeys = userStatusKeys({
 		userId: meta.userId,
-		status: meta.status,
+		// 上の検査と下の条件式で ACTIVE が保証される。
+		status: "ACTIVE",
 		updatedAt,
 		sessionId: meta.sessionId,
 	});
@@ -912,16 +918,18 @@ export async function retryInitialSession(
 							TableName: tables.sessions,
 							Key: { sessionId: meta.sessionId, itemKey: "META" },
 							ConditionExpression:
-								"#initial.#state = :failed AND userId = :userId AND attribute_not_exists(#current)",
+								"#initial.#state = :failed AND userId = :userId AND attribute_not_exists(#current) AND #status = :active",
 							UpdateExpression:
 								"SET #initial = :initial, version = version + :one, updatedAt = :updatedAt, userStatusPk = :userStatusPk, userStatusSk = :userStatusSk, abandonAfter = :abandonAfter, abandonPk = :abandonPk, abandonSk = :abandonSk",
 							ExpressionAttributeNames: {
 								"#initial": "initial",
 								"#state": "state",
 								"#current": "current",
+								"#status": "status",
 							},
 							ExpressionAttributeValues: {
 								":failed": "FAILED",
+								":active": "ACTIVE",
 								":userId": meta.userId,
 								":initial": initial,
 								":one": 1,
