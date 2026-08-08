@@ -3,7 +3,9 @@ import type {
 	SessionMode,
 	SessionSummaryDto,
 } from "@aws-mon/shared";
+import { allDomains, certDefinitions, certDomains } from "@aws-mon/shared";
 import { useEffect, useRef, useState } from "react";
+import { CertLevelBadge } from "../components/CertLevelBadge";
 import { SessionListSkeleton } from "../components/Loading";
 import {
 	ApiClientError,
@@ -14,9 +16,9 @@ import {
 } from "../lib/api";
 import { invalidateCache, mutateCache, useCachedResource } from "../lib/cache";
 import {
-	aipDomains,
+	certFullName,
 	certName,
-	certOptions,
+	certOptionLabel,
 	modeLabel,
 	modeOptions,
 } from "../lib/certs";
@@ -46,7 +48,8 @@ export function HomeView({ canGenerate, onOpenSession, onResume }: Props) {
 		? modeOptions
 		: modeOptions.filter((option) => option.value === "BANK");
 	const [cert, setCert] = useState("aip");
-	const [domainSelection, setDomainSelection] = useState("all");
+	const [domainSelection, setDomainSelection] = useState(allDomains);
+	const domains = certDomains(cert);
 	const [mode, setMode] = useState<SessionMode>("BANK");
 	const [starting, setStarting] = useState(false);
 	const [startError, setStartError] = useState<string | null>(null);
@@ -110,7 +113,7 @@ export function HomeView({ canGenerate, onOpenSession, onResume }: Props) {
 		try {
 			const { session } = await startSession({
 				cert,
-				domainSelection: cert === "aip" ? domainSelection : undefined,
+				domainSelection,
 				mode,
 			});
 			invalidateCache("sessions:ACTIVE");
@@ -176,36 +179,37 @@ export function HomeView({ canGenerate, onOpenSession, onResume }: Props) {
 						id="cert-select"
 						className="select"
 						value={cert}
-						onChange={(e) => setCert(e.target.value)}
+						onChange={(e) => {
+							setCert(e.target.value);
+							setDomainSelection(allDomains);
+						}}
 					>
-						{certOptions.map((option) => (
-							<option key={option.code} value={option.code}>
-								{option.name}
+						{certDefinitions.map((definition) => (
+							<option key={definition.code} value={definition.code}>
+								{certOptionLabel(definition.code)}
 							</option>
 						))}
 					</select>
 				</div>
 
-				{cert === "aip" && (
-					<div className="field">
-						<label className="field-label" htmlFor="domain-select">
-							出題ドメイン
-						</label>
-						<select
-							id="domain-select"
-							className="select"
-							value={domainSelection}
-							onChange={(e) => setDomainSelection(e.target.value)}
-						>
-							{aipDomains.map((domain) => (
-								<option key={domain.value} value={domain.value}>
-									{domain.label}
-									{domain.weight ? `(${domain.weight}%)` : ""}
-								</option>
-							))}
-						</select>
-					</div>
-				)}
+				<div className="field">
+					<label className="field-label" htmlFor="domain-select">
+						出題ドメイン
+					</label>
+					<select
+						id="domain-select"
+						className="select"
+						value={domainSelection}
+						onChange={(e) => setDomainSelection(e.target.value)}
+					>
+						<option value={allDomains}>全ドメイン(重み付きランダム)</option>
+						{domains.map((domain) => (
+							<option key={domain.value} value={domain.value}>
+								{domain.label}({domain.weight}%)
+							</option>
+						))}
+					</select>
+				</div>
 
 				<fieldset className="field mode-field">
 					<legend className="field-label">出題モード</legend>
@@ -267,7 +271,15 @@ export function HomeView({ canGenerate, onOpenSession, onResume }: Props) {
 									className="session-row"
 									onClick={() => onResume(session.sessionId)}
 								>
-									<span className="session-cert">{session.cert}</span>
+									<span className="cert-display">
+										<span
+											className="session-cert"
+											title={certFullName(session.cert)}
+										>
+											{certName(session.cert)}
+										</span>
+										<CertLevelBadge cert={session.cert} />
+									</span>
 									<span className="session-main">
 										第{session.current?.sequence ?? "—"}問
 										{session.current?.state === "ANSWERED" ? "(回答済み)" : ""}
@@ -313,8 +325,13 @@ export function HomeView({ canGenerate, onOpenSession, onResume }: Props) {
 						<p className="confirm-dialog-kicker">SESSION DELETE</p>
 						<h2 id="delete-dialog-title">このセッションを削除しますか？</h2>
 						<div id="delete-dialog-description" className="delete-target">
-							<strong>{certName(confirmSession.cert)}</strong>
-							<span>
+							<div className="cert-display">
+								<strong title={certFullName(confirmSession.cert)}>
+									{certName(confirmSession.cert)}
+								</strong>
+								<CertLevelBadge cert={confirmSession.cert} />
+							</div>
+							<span className="delete-target-progress">
 								進捗: 第{confirmSession.current?.sequence ?? "—"}問 ・{" "}
 								{confirmSession.stats.answeredCount}問回答済み
 							</span>

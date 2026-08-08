@@ -1,68 +1,32 @@
 // 資格・ドメイン・出題モードの表示用定義。
-// 正式名称とAIP-C01ドメインは apps/agent/quiz_agent/certs.py と対応させる。
-import type { SessionMode } from "@aws-mon/shared";
-
-export type CertOption = { code: string; name: string };
-
-export const certOptions: CertOption[] = [
-	{ code: "clf", name: "AWS Certified Cloud Practitioner (CLF-C02)" },
-	{ code: "aif", name: "AWS Certified AI Practitioner (AIF-C01)" },
-	{
-		code: "saa",
-		name: "AWS Certified Solutions Architect - Associate (SAA-C03)",
-	},
-	{ code: "dva", name: "AWS Certified Developer - Associate (DVA-C02)" },
-	{
-		code: "soa",
-		name: "AWS Certified CloudOps Engineer - Associate (SOA-C03)",
-	},
-	{ code: "dea", name: "AWS Certified Data Engineer - Associate (DEA-C01)" },
-	{
-		code: "mla",
-		name: "AWS Certified Machine Learning Engineer - Associate (MLA-C01)",
-	},
-	{
-		code: "sap",
-		name: "AWS Certified Solutions Architect - Professional (SAP-C02)",
-	},
-	{
-		code: "dop",
-		name: "AWS Certified DevOps Engineer - Professional (DOP-C02)",
-	},
-	{
-		code: "aip",
-		name: "AWS Certified Generative AI Developer - Professional (AIP-C01)",
-	},
-	{
-		code: "ans",
-		name: "AWS Certified Advanced Networking - Specialty (ANS-C01)",
-	},
-	{ code: "scs", name: "AWS Certified Security - Specialty (SCS-C03)" },
-];
+import {
+	type CertLevel,
+	findCert,
+	findDomain,
+	type SessionMode,
+} from "@aws-mon/shared";
 
 export function certName(code: string): string {
-	return certOptions.find((c) => c.code === code)?.name ?? code;
+	const cert = findCert(code);
+	return cert ? `${cert.examCode} ${cert.shortName}` : code;
 }
 
-export type DomainOption = { value: string; label: string; weight?: number };
+export function certFullName(code: string): string {
+	return findCert(code)?.fullName ?? code;
+}
 
-// AIP-C01 のみドメイン別出題に対応(公式試験ガイドの重み)
-export const aipDomains: DomainOption[] = [
-	{ value: "all", label: "全ドメイン(重み付きランダム)" },
-	{
-		value: "d1",
-		label: "基盤モデル統合・データ管理・コンプライアンス",
-		weight: 31,
-	},
-	{ value: "d2", label: "実装と統合", weight: 26 },
-	{ value: "d3", label: "AIの安全性・セキュリティ・ガバナンス", weight: 20 },
-	{ value: "d4", label: "運用効率と最適化", weight: 12 },
-	{ value: "d5", label: "テスト・検証・トラブルシューティング", weight: 11 },
-];
+export function certLevel(code: string): CertLevel | undefined {
+	return findCert(code)?.level;
+}
 
-export function domainLabel(domain: string): string {
+export function certOptionLabel(code: string): string {
+	const cert = findCert(code);
+	return cert ? `${cert.examCode} ${cert.shortName} - ${cert.level}` : code;
+}
+
+export function domainLabel(cert: string, domain: string): string {
 	if (domain === "general") return "全般";
-	return aipDomains.find((d) => d.value === domain)?.label ?? domain;
+	return findDomain(cert, domain)?.label ?? domain;
 }
 
 export type ModeOption = {

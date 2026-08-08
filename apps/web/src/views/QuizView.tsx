@@ -10,6 +10,7 @@ import {
 	useReducedMotion,
 } from "motion/react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { CertLevelBadge } from "../components/CertLevelBadge";
 import {
 	ButtonSpinner,
 	GenerationWaitingPanel,
@@ -25,7 +26,7 @@ import {
 	submitAnswer,
 } from "../lib/api";
 import { invalidateFor } from "../lib/cacheKeys";
-import { certName, domainLabel, modeLabel } from "../lib/certs";
+import { certFullName, certName, domainLabel, modeLabel } from "../lib/certs";
 import { useElapsedSeconds } from "../lib/useElapsedSeconds";
 
 type Props = {
@@ -573,8 +574,11 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 					>
 						← ホーム
 					</button>
-					<span className="quiz-cert">
-						{session.cert} / {modeLabel(session.mode)}
+					<span className="quiz-cert-group">
+						<span className="quiz-cert" title={certFullName(session.cert)}>
+							{certName(session.cert)} / {modeLabel(session.mode)}
+						</span>
+						<CertLevelBadge cert={session.cert} />
 					</span>
 				</div>
 				<article className="sheet">
@@ -616,8 +620,11 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 					← ホーム
 				</button>
 				<div className="quiz-bar-meta">
-					<span className="quiz-cert" title={certName(session.cert)}>
-						{session.cert} / {modeLabel(session.mode)}
+					<span className="quiz-cert-group">
+						<span className="quiz-cert" title={certFullName(session.cert)}>
+							{certName(session.cert)} / {modeLabel(session.mode)}
+						</span>
+						<CertLevelBadge cert={session.cert} />
 					</span>
 					{/* biome-ignore lint/a11y/useSemanticElements: 既存デザインのDOM構造(div+CSS)を維持するため meter 要素にはしない */}
 					<div
@@ -654,7 +661,9 @@ export function QuizView({ sessionId, initialSession, onExit }: Props) {
 						<span className="tag">
 							{question.type === "multiple" ? "複数選択" : "単一選択"}
 						</span>
-						<span className="tag tag-soft">{domainLabel(question.domain)}</span>
+						<span className="tag tag-soft">
+							{domainLabel(session.cert, question.domain)}
+						</span>
 					</div>
 				</header>
 
