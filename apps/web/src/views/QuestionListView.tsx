@@ -1,8 +1,20 @@
-import type { AnsweredQuestionDto, QuestionListItemDto } from "@aws-mon/shared";
+import {
+	type AnsweredQuestionDto,
+	certDefinitions,
+	certDomains,
+	findCert,
+	type QuestionListItemDto,
+} from "@aws-mon/shared";
 import { useEffect, useRef, useState } from "react";
+import { CertLevelBadge } from "../components/CertLevelBadge";
 import { errorMessage, getQuestion, listQuestions } from "../lib/api";
 import { mutateCache, useCachedResource } from "../lib/cache";
-import { aipDomains, certName, certOptions, domainLabel } from "../lib/certs";
+import {
+	certFullName,
+	certName,
+	certOptionLabel,
+	domainLabel,
+} from "../lib/certs";
 import {
 	appendQuestionPage,
 	mergeQuestionPage,
@@ -18,17 +30,13 @@ type Filters = { cert: string; domain: string };
 function initialFilters(): Filters {
 	const params = new URLSearchParams(window.location.search);
 	const requestedCert = params.get("cert") ?? "aip";
-	const cert = certOptions.some((option) => option.code === requestedCert)
-		? requestedCert
-		: "aip";
+	const cert = findCert(requestedCert) ? requestedCert : "aip";
 	const requestedDomain = params.get("domain") ?? "";
-	const domain =
-		cert === "aip" &&
-		aipDomains.some(
-			(option) => option.value !== "all" && option.value === requestedDomain,
-		)
-			? requestedDomain
-			: "";
+	const domain = certDomains(cert).some(
+		(option) => option.value === requestedDomain,
+	)
+		? requestedDomain
+		: "";
 	return { cert, domain };
 }
 
@@ -63,6 +71,7 @@ export function QuestionListView() {
 	const [filters, setFilters] = useState<Filters>(initialFilters);
 	const [loadingMore, setLoadingMore] = useState(false);
 	const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
+	const domains = certDomains(filters.cert);
 	const [expandedId, setExpandedId] = usePersistedViewState<string | null>(
 		"questions:expandedId",
 		null,
@@ -160,38 +169,34 @@ export function QuestionListView() {
 								changeFilters({ cert: event.target.value, domain: "" })
 							}
 						>
-							{certOptions.map((option) => (
-								<option key={option.code} value={option.code}>
-									{option.name}
+							{certDefinitions.map((definition) => (
+								<option key={definition.code} value={definition.code}>
+									{certOptionLabel(definition.code)}
 								</option>
 							))}
 						</select>
 					</label>
 
-					{filters.cert === "aip" && (
-						<label className="question-list-filter">
-							<span className="field-label">出題ドメイン</span>
-							<select
-								className="select"
-								value={filters.domain}
-								onChange={(event) =>
-									changeFilters({
-										...filters,
-										domain: event.target.value,
-									})
-								}
-							>
-								<option value="">すべて</option>
-								{aipDomains
-									.filter((option) => option.value !== "all")
-									.map((option) => (
-										<option key={option.value} value={option.value}>
-											{option.label}
-										</option>
-									))}
-							</select>
-						</label>
-					)}
+					<label className="question-list-filter">
+						<span className="field-label">出題ドメイン</span>
+						<select
+							className="select"
+							value={filters.domain}
+							onChange={(event) =>
+								changeFilters({
+									...filters,
+									domain: event.target.value,
+								})
+							}
+						>
+							<option value="">すべて</option>
+							{domains.map((option) => (
+								<option key={option.value} value={option.value}>
+									{option.label}
+								</option>
+							))}
+						</select>
+					</label>
 				</div>
 			</div>
 
@@ -219,11 +224,15 @@ export function QuestionListView() {
 						return (
 							<li key={item.questionId} className="review-item">
 								<div className="review-item-head">
-									<span className="session-cert" title={certName(item.cert)}>
-										{item.cert}
+									<span
+										className="session-cert"
+										title={certFullName(item.cert)}
+									>
+										{certName(item.cert)}
 									</span>
+									<CertLevelBadge cert={item.cert} />
 									<span className="tag tag-soft">
-										{domainLabel(item.domain)}
+										{domainLabel(item.cert, item.domain)}
 									</span>
 									<span
 										className={

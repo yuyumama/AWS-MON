@@ -1,5 +1,10 @@
-import type { AnsweredQuestionDto, ReviewItemDto } from "@aws-mon/shared";
+import {
+	type AnsweredQuestionDto,
+	certDefinitions,
+	type ReviewItemDto,
+} from "@aws-mon/shared";
 import { useState } from "react";
+import { CertLevelBadge } from "../components/CertLevelBadge";
 import { ButtonSpinner } from "../components/Loading";
 import {
 	errorMessage,
@@ -8,7 +13,12 @@ import {
 	setReviewMark,
 } from "../lib/api";
 import { invalidateCache, mutateCache, useCachedResource } from "../lib/cache";
-import { certOptions, domainLabel } from "../lib/certs";
+import {
+	certFullName,
+	certName,
+	certOptionLabel,
+	domainLabel,
+} from "../lib/certs";
 import {
 	usePersistedViewState,
 	useRouteScrollPosition,
@@ -107,9 +117,9 @@ export function ReviewView() {
 					}}
 				>
 					<option value="">すべての資格</option>
-					{certOptions.map((option) => (
-						<option key={option.code} value={option.code}>
-							{option.name}
+					{certDefinitions.map((definition) => (
+						<option key={definition.code} value={definition.code}>
+							{certOptionLabel(definition.code)}
 						</option>
 					))}
 				</select>
@@ -138,9 +148,15 @@ export function ReviewView() {
 						return (
 							<li key={item.questionId} className="review-item">
 								<div className="review-item-head">
-									<span className="session-cert">{item.cert}</span>
+									<span
+										className="session-cert"
+										title={certFullName(item.cert)}
+									>
+										{certName(item.cert)}
+									</span>
+									<CertLevelBadge cert={item.cert} />
 									<span className="tag tag-soft">
-										{domainLabel(item.domain)}
+										{domainLabel(item.cert, item.domain)}
 									</span>
 									{item.questionStatus === "STALE" && (
 										<span className="tag tag-stale">期限切れ</span>

@@ -716,12 +716,19 @@ a {
 .session-cert {
 	font-family: var(--font-mono);
 	font-size: 12px;
-	letter-spacing: 0.14em;
-	text-transform: uppercase;
+	letter-spacing: 0.04em;
 	padding: 3px 9px;
 	border-radius: 999px;
 	background: var(--panel-dim);
 	color: var(--ink-soft);
+}
+
+.cert-display,
+.quiz-cert-group {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex-wrap: wrap;
 }
 
 .session-main {
@@ -812,7 +819,7 @@ a {
 	font-size: 14px;
 }
 
-.delete-target span,
+.delete-target-progress,
 .confirm-dialog-note {
 	font-size: 12px;
 	color: var(--ink-soft);
@@ -879,8 +886,7 @@ a {
 	font-family: var(--font-mono);
 	font-size: 12px;
 	color: var(--ink-soft);
-	text-transform: uppercase;
-	letter-spacing: 0.1em;
+	letter-spacing: 0.04em;
 }
 
 /* 正答率メーター(単一値・塗りはaccent 1色、数値はインク色のテキストで併記) */
@@ -967,6 +973,36 @@ a {
 .tag-soft {
 	background: var(--panel-dim);
 	color: var(--ink-soft);
+}
+
+.cert-level-badge {
+	border: 1px solid var(--line-strong);
+	font-family: var(--font-mono);
+	font-weight: 600;
+	letter-spacing: 0.02em;
+}
+
+.cert-level-badge[data-level="Foundational"] {
+	background: var(--panel-dim);
+	color: var(--ink-soft);
+}
+
+.cert-level-badge[data-level="Associate"] {
+	border-color: var(--accent);
+	background: var(--accent-bg);
+	color: var(--accent-deep);
+}
+
+.cert-level-badge[data-level="Professional"] {
+	border-color: var(--ok);
+	background: var(--ok-bg);
+	color: var(--ok);
+}
+
+.cert-level-badge[data-level="Specialty"] {
+	border-color: var(--ng);
+	background: var(--ng-bg);
+	color: var(--ng);
 }
 
 .question-text {
