@@ -7,14 +7,58 @@
 
 import argparse
 import json
+import random
 import sys
 
 from dotenv import load_dotenv
 
 from .agent import generate_quiz
-from .certs import AIP_DOMAINS, CERT_FULL_NAMES
+from .certs import CERT_FULL_NAMES
 from .log_filters import suppress_duplicate_strands_warnings
 from .schema import Explanation, Question
+
+# 実験用 CLI の --domain 互換と省略時抽選だけに使うローカル定義。
+# 本番経路の定義の正は packages/shared/src/certs.ts にある。
+AIP_HARNESS_DOMAINS = {
+    "d1": (
+        "基盤モデル統合・データ管理・コンプライアンス",
+        "Foundation Model Integration, Data Management, and Compliance",
+        31,
+    ),
+    "d2": ("実装と統合", "Implementation and Integration", 26),
+    "d3": (
+        "AIの安全性・セキュリティ・ガバナンス",
+        "AI Safety, Security, and Governance",
+        20,
+    ),
+    "d4": (
+        "運用効率と最適化",
+        "Operational Efficiency and Optimization for GenAI Applications",
+        12,
+    ),
+    "d5": (
+        "テスト・検証・トラブルシューティング",
+        "Testing, Validation, and Troubleshooting",
+        11,
+    ),
+}
+
+
+def _resolve_harness_domain(
+    cert: str, domain: str
+) -> tuple[str, str | None, str | None]:
+    if cert != "aip":
+        return domain, None, None
+    resolved = domain
+    if domain == "all":
+        values = list(AIP_HARNESS_DOMAINS)
+        resolved = random.choices(
+            values,
+            weights=[AIP_HARNESS_DOMAINS[value][2] for value in values],
+            k=1,
+        )[0]
+    label, label_en, _weight = AIP_HARNESS_DOMAINS[resolved]
+    return resolved, label, label_en
 
 
 def _print_question(q: Question) -> None:
@@ -61,7 +105,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--domain",
         default="all",
-        choices=[d.value for d in AIP_DOMAINS],
+        choices=["all", *AIP_HARNESS_DOMAINS],
         help="AIP-C01 のドメイン（既定: all。AIP以外では無視）",
     )
     parser.add_argument(
@@ -73,7 +117,15 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         print(f"問題と解説を生成中... ({CERT_FULL_NAMES[args.cert]})", file=sys.stderr)
-        result = generate_quiz(args.cert, args.domain)
+        domain, domain_label, domain_label_en = _resolve_harness_domain(
+            args.cert, args.domain
+        )
+        result = generate_quiz(
+            args.cert,
+            domain,
+            domain_label=domain_label,
+            domain_label_en=domain_label_en,
+        )
         item = result.item
     except Exception as e:  # noqa: BLE001
         print(f"エラー: {e}", file=sys.stderr)

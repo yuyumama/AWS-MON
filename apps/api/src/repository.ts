@@ -3,10 +3,12 @@ import {
 	type AnswerResultDto,
 	type AttemptItem,
 	abandonKeys,
+	domainFallbackOrder,
 	domainStatKey,
 	gsiNames,
 	type InitialSessionGuardItem,
 	initialSessionGuardKey,
+	pickWeightedDomain,
 	policy,
 	type QuestionItem,
 	questionStateKey,
@@ -134,22 +136,23 @@ function resolveDomain(input: {
 		};
 	}
 
-	if (input.cert === "aip") {
-		const selection = input.domainSelection ?? "all";
-		return {
-			domainSelection: selection,
-			domain: selection === "all" ? "d1" : selection,
-		};
+	// 明示的に選ばれたドメインは、資格の定義有無に関わらずそのまま尊重する。
+	const domainSelection = input.domainSelection ?? "all";
+	if (domainSelection !== "all") {
+		return { domainSelection, domain: domainSelection };
 	}
 
+	// 「全ドメイン」は試験ガイドの重みで抽選する。
+	// 定義の無い資格コード(HTTP層は任意の文字列を許す)だけ general に落とす。
 	return {
-		domainSelection: input.domainSelection ?? "all",
-		domain: "general",
+		domainSelection,
+		domain: pickWeightedDomain(input.cert)?.value ?? "general",
 	};
 }
 
 async function selectInitialQuestion(input: {
 	cert: string;
+	domainSelection: string;
 	domain: string;
 	mode: SessionMode;
 }): Promise<QuestionItem | undefined> {
@@ -157,22 +160,29 @@ async function selectInitialQuestion(input: {
 		return undefined;
 	}
 
-	try {
-		return await findBankQuestion({
-			cert: input.cert,
-			domain: input.domain,
-			allowExcludedFallback: input.mode === "BANK",
-		});
-	} catch (error) {
-		if (
-			input.mode === "MIXED" &&
-			error instanceof ApiError &&
-			error.status === 404
-		) {
-			return undefined;
+	let notFoundError: ApiError | undefined;
+	const domains =
+		input.domainSelection === "all"
+			? domainFallbackOrder(input.cert, input.domain)
+			: [input.domain];
+
+	for (const domain of domains) {
+		try {
+			return await findBankQuestion({
+				cert: input.cert,
+				domain,
+				allowExcludedFallback: input.mode === "BANK",
+			});
+		} catch (error) {
+			if (!(error instanceof ApiError) || error.status !== 404) {
+				throw error;
+			}
+			notFoundError ??= error;
 		}
-		throw error;
 	}
+
+	if (input.mode === "MIXED") return undefined;
+	throw notFoundError ?? new ApiError("question not found", 404);
 }
 
 function toSessionDto(
@@ -313,10 +323,12 @@ async function getAttempt(
 }
 
 function nextDomain(meta: SessionMetaItem): string {
-	if (meta.cert === "aip" && meta.domainSelection !== "all") {
-		return meta.domainSelection;
-	}
-	return meta.current?.domain ?? (meta.cert === "aip" ? "d1" : "general");
+	if (meta.domainSelection !== "all") return meta.domainSelection;
+	// 「全ドメイン」は問題ごとに引き直す(1問目のドメインに固定されないように)。
+	// 定義の無い資格では抽選できないので、いま出している問題のドメインを引き継ぐ。
+	return (
+		pickWeightedDomain(meta.cert)?.value ?? meta.current?.domain ?? "general"
+	);
 }
 
 function appendLastSeen(ids: string[], nextQuestionId: string): string[] {
@@ -610,6 +622,7 @@ export async function startSession(
 	const { domainSelection, domain } = resolveDomain(input);
 	const question = await selectInitialQuestion({
 		cert: input.cert,
+		domainSelection,
 		domain,
 		mode,
 	});

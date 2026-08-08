@@ -745,6 +745,8 @@ def _generate_quiz_with_docs_and_gate(
 def generate_quiz(
     cert: str,
     domain: str | None = None,
+    domain_label: str | None = None,
+    domain_label_en: str | None = None,
     *,
     on_phase: PhaseCallback | None = None,
 ) -> GenerationResult:
@@ -754,8 +756,7 @@ def generate_quiz(
     AGENT_GUARDRAIL_ID が設定されていれば調査原文を根拠にグラウンディングチェックする。
     """
     retries = int(os.environ.get("AGENT_GENERATE_RETRIES", "3"))
-    # ドメイン抽選(all時)を1回に固定するため、プロンプトを先に確定させる
-    quiz_prompt = build_quiz_prompt(cert, domain)
+    quiz_prompt = build_quiz_prompt(cert, domain, domain_label, domain_label_en)
 
     if _docs_mcp_enabled():
         try:

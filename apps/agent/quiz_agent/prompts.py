@@ -5,40 +5,33 @@
 問題と解説は1回の生成でまとめて作る（build_quiz_prompt）。
 """
 
-from .certs import (
-    AIP_CONTEXT,
-    Domain,
-    find_domain,
-    get_cert_full_name,
-    pick_weighted_domain,
-)
+from .certs import AIP_CONTEXT, get_cert_full_name
 
 QUIZ_SYSTEM_PROMPT = "あなたはAWS認定試験の問題・解説作成の専門家です。"
 
 
-def build_quiz_prompt(cert: str, domain: str | None = None) -> str:
+def build_quiz_prompt(
+    cert: str,
+    domain: str | None = None,
+    domain_label: str | None = None,
+    domain_label_en: str | None = None,
+) -> str:
     """問題と解説を同時に生成するプロンプトを構築する。
 
     cert: 資格コード（例 'aip'）
-    domain: AIP-C01 のドメイン値（'all'/'d1'..'d5'）。AIP以外では無視される。
+    domain: API 側で解決済みのドメイン値（互換性のため受け取る）。
+    domain_label/domain_label_en: API 側で解決したドメインの表示名。
     """
     cert_name = get_cert_full_name(cert)
     is_aip = cert == "aip"
 
-    domain_info: Domain | None = None
-    if is_aip:
-        if domain in (None, "all"):
-            domain_info = pick_weighted_domain()
-        else:
-            domain_info = find_domain(domain)
-
     aip_context = AIP_CONTEXT if is_aip else ""
 
     domain_clause = ""
-    if domain_info:
-        en = f"（{domain_info.en}）" if domain_info.en else ""
+    if domain_label:
+        en = f"（{domain_label_en}）" if domain_label_en else ""
         domain_clause = (
-            f"\n\n【今回の出題ドメイン】{domain_info.label}{en}"
+            f"\n\n【今回の出題ドメイン】{domain_label}{en}"
             "\nこのドメインに該当する問題のみを作成すること。"
         )
 

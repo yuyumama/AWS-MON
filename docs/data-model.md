@@ -80,11 +80,11 @@ GSI は必要属性だけを投影する。特に `correct` と `explanation` �
 ### 資格・ドメイン
 
 - `cert`: `clf | aif | saa | dva | soa | dea | mla | sap | dop | aip | ans | scs`
-- `domainSelection`: ユーザーが選んだ値。AIP-C01 の `"all"` などをそのまま保持する。
+- `domainSelection`: ユーザーが選んだ値。各資格の `"all"` などをそのまま保持する。
 - `domain`: 実際に出題された正規化ドメイン。
-  - AIP-C01: `d1`〜`d5`
-  - AIP-C01 で `domainSelection="all"` の場合も、保存時の `domain` は重み付き抽選後の具体ドメイン。
-  - AIP-C01 以外: 当面 `"general"` を使う。
+  - 12資格すべてで `d1`〜`dN` を使う（資格ごとの定義の正は `packages/shared/src/certs.ts`）。
+  - `domainSelection="all"` の場合も、API側で重み付き抽選し、保存時の `domain` は具体ドメインにする。
+  - 定義のない資格コードだけは `"general"` にフォールバックする。
 
 ### ID
 

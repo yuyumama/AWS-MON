@@ -37,7 +37,7 @@ export const certOptions: CertOption[] = [
 		code: "ans",
 		name: "AWS Certified Advanced Networking - Specialty (ANS-C01)",
 	},
-	{ code: "scs", name: "AWS Certified Security - Specialty (SCS-C02)" },
+	{ code: "scs", name: "AWS Certified Security - Specialty (SCS-C03)" },
 ];
 
 export function certName(code: string): string {
