@@ -396,3 +396,95 @@ def test_runtime_do_post_without_ping_action_still_generates(
     runtime_module.RuntimeHandler.do_POST(handler)
 
     assert len(calls) == 1
+
+
+# --- sourceRefs のURL分割(#139) ----------------------------------------------
+# explanation.source は単一URLを想定した文字列だが、モデルは複数URLを区切り文字で
+# 連結して返すことがある。prod の q_msjvxu5d_92400f20 / q_msjw2k8h_21239b90 /
+# q_msjwjchz_e45e168f では sourceRefs[0].url に2〜3個のURLが入った値が保存されている。
+
+
+def _item_with_source(source: str) -> QuizItem:
+    return QuizItem.model_validate(
+        {
+            "summary": "テスト用の要約",
+            "question": {
+                "type": "single",
+                "question": "最も適切なものはどれか。",
+                "options": [
+                    {"label": "A", "text": "正解"},
+                    {"label": "B", "text": "不正解"},
+                ],
+                "correct": ["A"],
+            },
+            "explanation": {
+                "overview": "概要",
+                "correct_reason": "正解の理由",
+                "grounding_claim_en": (
+                    "The correct option matches the documented AWS behavior. "
+                    "It applies the capability described in the source."
+                ),
+                "option_reasons": [
+                    {"label": "A", "reason": "正しい"},
+                    {"label": "B", "reason": "誤り"},
+                ],
+                "source": source,
+            },
+        }
+    )
+
+
+def _response_for_source(
+    monkeypatch: pytest.MonkeyPatch, source: str
+) -> dict[str, Any]:
+    monkeypatch.setattr(
+        server_module,
+        "_generate_quiz",
+        lambda **kwargs: (
+            _item_with_source(source),
+            GateResult(status="not_run"),
+        ),
+    )
+    return server_module.build_generate_response({}, started=0)
+
+
+def test_source_refs_split_concatenated_urls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = _response_for_source(
+        monkeypatch,
+        "https://docs.aws.amazon.com/a.html, https://docs.aws.amazon.com/b.html; "
+        "https://docs.aws.amazon.com/c.html",
+    )
+
+    assert [ref["url"] for ref in response["sourceRefs"]] == [
+        "https://docs.aws.amazon.com/a.html",
+        "https://docs.aws.amazon.com/b.html",
+        "https://docs.aws.amazon.com/c.html",
+    ]
+    assert all(ref["retrievedAt"] for ref in response["sourceRefs"])
+
+
+def test_source_refs_keep_single_url_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = _response_for_source(monkeypatch, "https://docs.aws.amazon.com/a.html")
+
+    assert [ref["url"] for ref in response["sourceRefs"]] == [
+        "https://docs.aws.amazon.com/a.html"
+    ]
+
+
+def test_source_refs_fall_back_to_raw_source_without_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """URLが1つも取れない値は、空配列にせず従来どおりそのまま残す。
+
+    空配列にすると API 側の parseSourceRefs が空配列をそのまま採用し、
+    参照元の情報が失われる。壊れた値であっても捨てるのは本イシューの範囲外。
+    """
+    response = _response_for_source(monkeypatch, "AWS公式ドキュメントを参照")
+
+    assert [ref["url"] for ref in response["sourceRefs"]] == [
+        "AWS公式ドキュメントを参照"
+    ]

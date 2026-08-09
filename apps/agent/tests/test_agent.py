@@ -17,7 +17,7 @@ from quiz_agent.model_config import model_id
 from quiz_agent.schema import QuizItem
 
 
-def _quiz_item(question: str = "設問") -> QuizItem:
+def _quiz_item(question: str = "設問はどれか。") -> QuizItem:
     return QuizItem.model_validate(
         {
             "summary": "Bedrock Knowledge Basesの検索設計",
@@ -133,7 +133,10 @@ def test_gate_retry_reuses_research_and_only_repeats_structured_output(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client = _mock_research(monkeypatch)
-    FakeAgent.structured_results = [_quiz_item("初回"), _quiz_item("再生成")]
+    FakeAgent.structured_results = [
+        _quiz_item("初回はどれか。"),
+        _quiz_item("再生成はどれか。"),
+    ]
     gates = iter(
         [
             GateResult(status="failed", detail="grounding=0.1"),
@@ -146,7 +149,7 @@ def test_gate_retry_reuses_research_and_only_repeats_structured_output(
 
     result = agent_module._generate_quiz_with_docs_and_gate("問題生成プロンプト")
 
-    assert result.item.question.question == "再生成"
+    assert result.item.question.question == "再生成はどれか。"
     assert result.gate.status == "passed"
     assert client.enter_count == 1
     assert client.list_tools_count == 1
@@ -164,7 +167,7 @@ def test_structured_output_retry_keeps_research_history(
 
     item, source_texts = agent_module._generate_quiz_with_docs("問題生成プロンプト")
 
-    assert item.question.question == "設問"
+    assert item.question.question == "設問はどれか。"
     assert source_texts == ["調査済みAWSドキュメント原文"]
     assert client.enter_count == 1
     assert len(FakeAgent.instances) == 1
@@ -328,7 +331,7 @@ def test_research_transient_model_error_retries_with_fresh_agents(
 
     item, source_texts = agent_module._generate_quiz_with_docs("問題生成プロンプト")
 
-    assert item.question.question == "設問"
+    assert item.question.question == "設問はどれか。"
     assert source_texts == ["調査済みAWSドキュメント原文"]
     assert client.enter_count == 1
     assert client.list_tools_count == 1
@@ -643,7 +646,7 @@ def test_generate_quiz_with_docs_uses_read_documentation_result(
 
     item, source_texts = agent_module._generate_quiz_with_docs("問題生成プロンプト")
 
-    assert item.question.question == "設問"
+    assert item.question.question == "設問はどれか。"
     assert source_texts == ["調査済みAWSドキュメント原文"]
     assert client.enter_count == 1
 
@@ -864,7 +867,10 @@ def test_docs_mcp_disabled_result_is_logged_and_counted(
 
 def test_gate_retry_uses_feedback_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
     _mock_research(monkeypatch)
-    FakeAgent.structured_results = [_quiz_item("初回"), _quiz_item("再生成")]
+    FakeAgent.structured_results = [
+        _quiz_item("初回はどれか。"),
+        _quiz_item("再生成はどれか。"),
+    ]
     gates = iter(
         [
             GateResult(status="failed", detail="grounding=0.1"),
@@ -890,8 +896,8 @@ def test_content_violation_regenerates_once_after_gate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _mock_research(monkeypatch)
-    invalid = _quiz_item("設問<br>混入")
-    FakeAgent.structured_results = [invalid, _quiz_item("再生成した設問")]
+    invalid = _quiz_item("設問に<br>が混入したものはどれか。")
+    FakeAgent.structured_results = [invalid, _quiz_item("再生成した設問はどれか。")]
     gate_calls: list[dict[str, Any]] = []
     monkeypatch.setattr(agent_module, "gate_enabled", lambda: True)
     monkeypatch.setattr(agent_module, "gate_retries", lambda: 1)
@@ -909,7 +915,7 @@ def test_content_violation_regenerates_once_after_gate(
         on_phase=lambda phase, detail: events.append((phase, detail)),
     )
 
-    assert result.item.question.question == "再生成した設問"
+    assert result.item.question.question == "再生成した設問はどれか。"
     assert len(gate_calls) == 1
     assert FakeAgent.instances[0].structured_count == 2
     assert "保存前の内容検証" in FakeAgent.instances[0].structured_prompts[1]
@@ -923,8 +929,8 @@ def test_content_violation_fails_closed_after_retry(
 ) -> None:
     _mock_research(monkeypatch)
     FakeAgent.structured_results = [
-        _quiz_item("設問<br>混入"),
-        _quiz_item("再生成しても<strong>違反</strong>"),
+        _quiz_item("設問に<br>が混入したものはどれか。"),
+        _quiz_item("再生成しても<strong>違反</strong>があるのはどれか。"),
     ]
     gate_calls: list[dict[str, Any]] = []
     monkeypatch.setattr(agent_module, "gate_enabled", lambda: True)
@@ -947,12 +953,132 @@ def test_content_violation_fails_closed_after_retry(
     assert FakeAgent.instances[0].structured_count == 2
 
 
+# --- 決定的品質チェック(#139) -------------------------------------------------
+# 拾うのは「回答不能」「読めない」「ラベルが重複して画面が壊れる」といった
+# 出題価値がゼロの欠陥なので、content_policy と同じく再生成1回 → fail-closed。
+# 再生成の指示は欠陥を名指しする(ADR 0018: 汎用指示は設問を壊す)。
+
+
+def _defective_item(question: str = "要件は以下のとおりです。") -> QuizItem:
+    """問いかけが欠落した回答不能な設問。実測で7/54件observedした型。"""
+    return _quiz_item(question)
+
+
+def test_quality_defect_regenerates_once_with_named_defect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_research(monkeypatch)
+    FakeAgent.structured_results = [
+        _defective_item(),
+        _quiz_item("再生成した設問はどれか。"),
+    ]
+    monkeypatch.setattr(agent_module, "gate_enabled", lambda: False)
+    monkeypatch.setenv("AGENT_CONTENT_RETRIES", "1")
+    events: list[tuple[str, dict[str, int]]] = []
+
+    result = agent_module._generate_quiz_with_docs_and_gate(
+        "問題生成プロンプト",
+        on_phase=lambda phase, detail: events.append((phase, detail)),
+    )
+
+    assert result.item.question.question == "再生成した設問はどれか。"
+    assert FakeAgent.instances[0].structured_count == 2
+    feedback = FakeAgent.instances[0].structured_prompts[1]
+    # 欠陥を名指ししていること(汎用的な「作り直してください」にしない)
+    assert "問いかけ" in feedback
+    # ADR 0018 の教訓: シナリオを削らせない指示が入っていること
+    assert "短くしたり削ったり" in feedback
+    assert ("regeneration", {"attempt": 2, "totalAttempts": 2}) in events
+
+
+def test_quality_defect_fails_closed_after_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_research(monkeypatch)
+    FakeAgent.structured_results = [
+        _defective_item(),
+        _defective_item("要件は次のとおり。"),
+    ]
+    monkeypatch.setattr(agent_module, "gate_enabled", lambda: False)
+    monkeypatch.setenv("AGENT_CONTENT_RETRIES", "1")
+
+    with pytest.raises(
+        agent_module.QualityDefectError, match="missing_question_prompt"
+    ):
+        agent_module._generate_quiz_with_docs_and_gate("問題生成プロンプト")
+
+    assert FakeAgent.instances[0].structured_count == 2
+
+
+def test_quality_defect_error_code_is_content_invalid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ADR 0014 の写像テーブルに既にある content_invalid を流用する。"""
+    _mock_research(monkeypatch)
+    FakeAgent.structured_results = [_defective_item()]
+    monkeypatch.setattr(agent_module, "gate_enabled", lambda: False)
+    monkeypatch.setenv("AGENT_CONTENT_RETRIES", "0")
+
+    with pytest.raises(agent_module.QualityDefectError) as excinfo:
+        agent_module._generate_quiz_with_docs_and_gate("問題生成プロンプト")
+
+    assert excinfo.value.error_code == "content_invalid"
+
+
+def test_quality_defect_is_logged_with_defect_codes(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """どの欠陥で落ちたかを prod のログから追えること。"""
+    _mock_research(monkeypatch)
+    FakeAgent.structured_results = [_defective_item(), _defective_item()]
+    monkeypatch.setattr(agent_module, "gate_enabled", lambda: False)
+    monkeypatch.setenv("AGENT_CONTENT_RETRIES", "1")
+
+    with (
+        caplog.at_level(logging.WARNING, logger="quiz_agent.agent"),
+        pytest.raises(agent_module.QualityDefectError),
+    ):
+        agent_module._generate_quiz_with_docs_and_gate("問題生成プロンプト")
+
+    events = [
+        json.loads(record.message)
+        for record in caplog.records
+        if record.message.startswith("{")
+    ]
+    quality_events = [e for e in events if e.get("event") == "quality_defect"]
+    assert quality_events
+    assert quality_events[0]["codes"] == ["missing_question_prompt"]
+
+
+def test_content_policy_violation_takes_precedence_over_quality_defect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """HTML混入と問いかけ欠落が同時に起きたら、内容ポリシー側の指示を出す。
+
+    どちらの再生成指示も「日本語プレーンテキストで書き直す」を含むが、
+    品質欠陥側の指示は設問の維持を強く要求する。両方を1回の指示に混ぜると
+    どちらも中途半端になるため、順序を固定する。
+    """
+    _mock_research(monkeypatch)
+    FakeAgent.structured_results = [
+        _quiz_item("要件は<br>以下のとおりです。"),
+        _quiz_item("再生成した設問はどれか。"),
+    ]
+    monkeypatch.setattr(agent_module, "gate_enabled", lambda: False)
+    monkeypatch.setenv("AGENT_CONTENT_RETRIES", "1")
+
+    agent_module._generate_quiz_with_docs_and_gate("問題生成プロンプト")
+
+    feedback = FakeAgent.instances[0].structured_prompts[1]
+    assert "保存前の内容検証" in feedback
+
+
 def test_content_retry_without_docs_reuses_same_agent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     FakeAgent.structured_results = [
-        _quiz_item("設問<br>混入"),
-        _quiz_item("再生成した設問"),
+        _quiz_item("設問に<br>が混入したものはどれか。"),
+        _quiz_item("再生成した設問はどれか。"),
     ]
     monkeypatch.setattr(agent_module, "Agent", FakeAgent)
     monkeypatch.setattr(agent_module, "_model", lambda: object())
@@ -964,7 +1090,7 @@ def test_content_retry_without_docs_reuses_same_agent(
         "問題生成プロンプト",
     )
 
-    assert item.question.question == "再生成した設問"
+    assert item.question.question == "再生成した設問はどれか。"
     assert len(FakeAgent.instances) == 1
     assert FakeAgent.instances[0].structured_count == 2
 
@@ -1015,7 +1141,10 @@ def test_phase_events_follow_generation_and_gate_retry_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _mock_research(monkeypatch)
-    FakeAgent.structured_results = [_quiz_item("初回"), _quiz_item("再生成")]
+    FakeAgent.structured_results = [
+        _quiz_item("初回はどれか。"),
+        _quiz_item("再生成はどれか。"),
+    ]
     gates = iter([GateResult(status="failed"), GateResult(status="passed")])
     monkeypatch.setattr(agent_module, "gate_enabled", lambda: True)
     monkeypatch.setattr(agent_module, "gate_retries", lambda: 1)
@@ -1053,4 +1182,4 @@ def test_phase_callback_error_does_not_stop_generation(
         ),
     )
 
-    assert result.item.question.question == "設問"
+    assert result.item.question.question == "設問はどれか。"

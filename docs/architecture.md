@@ -188,7 +188,9 @@ sequenceDiagram
 
 SSEは `phase` イベントと、成功・失敗を格納した最後の `result` イベントからなる。無イベント区間では、20秒ごとのコメント行で接続を維持する。workerは内部フェーズを利用者向けの `researching` / `drafting` / `verifying` / `regenerating` に変換し、`SessionMeta.initial.progress` または `prefetch.progress` へ条件付きUpdateで保存する。同じフェーズ・試行番号は重複排除し、書き込み間隔は最短5秒とする。進捗更新では楽観ロック用の `version` を進めない。Webは既存の3秒ポーリングでこのフィールドを読み、「調査 → 作成 → 検証」の現在工程を表示する。
 
-agent は Guardrails のグラウンディングゲート後、保存前の生成境界で利用者向けフィールドが日本語のプレーンテキストかを検証する。違反時は構造化出力だけを再生成し、解消しなければ fail-closed で worker へエラーを返す。
+agent は Guardrails のグラウンディングゲート後、保存前の生成境界で2層の検証を行う。まず利用者向けフィールドが日本語のプレーンテキストかを検証し（`quiz_agent/content_policy.py`）、次に決定的な品質チェックで出題価値がゼロの構造欠陥（問いかけの欠落＝回答不能、カタカナ退化、選択肢ラベルの重複、URLエンコード混入）を検出する（`quiz_agent/quality_checks.py`、[ADR 0018](adr/0018-retire-grounding-gate-as-quality-judge.md)）。違反時は**欠陥を名指しした指示**で構造化出力だけを再生成し、解消しなければ fail-closed（`content_invalid`）で worker へエラーを返す。汎用的な「作り直してください」にしないのは、ADR 0018 の計測で汎用指示が設問のシナリオを削って回答不能にすることが分かっているため。
+
+`explanation.source` にモデルが複数URLを連結して返すことがあるため、`sourceRefs` は1URL = 1要素に分割して保存する。
 
 - `mode=GENERATE` は常にagent生成、`mode=MIXED` はbankを優先し候補がない場合だけagent生成にフォールバックする。
 - agent呼び出しのタイムアウトは `AGENT_REQUEST_TIMEOUT_MS` で環境ごとに設定する。超過は汎用の502ではなく `code: "generation_timeout"` の504として扱う。agentが返す `grounding_blocked` / `research_incomplete` / `research_failed` / `rate_limited` / `content_invalid` もHTTP・AgentCore両経路で `ApiError.code` からjobの `errorCode` まで保持する（[ADR 0014](adr/0014-generation-retry-policy.md)）。

@@ -27,6 +27,7 @@ from .content_policy import ContentPolicyViolationError
 from .guardrail import GateResult, GroundingBlockedError
 from .log_filters import suppress_duplicate_strands_warnings
 from .model_config import model_id as _model_id
+from .quality_checks import split_source_urls
 from .schema import Explanation, Option, OptionReason, Question, QuizItem
 
 AGENT_VERSION = "local-http-v1"
@@ -213,8 +214,19 @@ def build_generate_response(
             "latencyMs": latency_ms,
         },
         "quality": _quality(gate, generated_at),
-        "sourceRefs": [{"url": source, "retrievedAt": generated_at}],
+        "sourceRefs": _source_refs(source, generated_at),
     }
+
+
+def _source_refs(source: str, retrieved_at: str) -> list[dict[str, str]]:
+    """explanation.source を 1URL = 1要素の sourceRefs に展開する。
+
+    モデルは複数URLをカンマ/セミコロンで連結して返すことがあり、prod には
+    連結された値が sourceRefs[0].url に入ったアイテムが3件ある(#139)。
+    URLが1つも取れない値は、参照元の情報を落とさないため従来どおりそのまま残す。
+    """
+    urls = split_source_urls(source) or [source]
+    return [{"url": url, "retrievedAt": retrieved_at} for url in urls]
 
 
 def grounding_blocked_response(

@@ -40,8 +40,10 @@ from .prompts import (
     QUIZ_SYSTEM_PROMPT,
     build_content_regenerate_feedback_prompt,
     build_docs_research_prompt,
+    build_quality_regenerate_feedback_prompt,
     build_quiz_prompt,
 )
+from .quality_checks import QualityDefectError, validate_quality
 from .schema import QuizItem
 from .tool_limits import docs_tool_limiter
 
@@ -528,37 +530,71 @@ def _content_retries() -> int:
     return max(0, int(os.environ.get("AGENT_CONTENT_RETRIES", "1")))
 
 
+def _log_quality_defect(exc: QualityDefectError, attempt: int, attempts: int) -> None:
+    """どの欠陥で再生成/失敗したかをprodのログから追えるようにする。"""
+    logger.warning(
+        json.dumps(
+            {
+                "event": "quality_defect",
+                "codes": [defect.code for defect in exc.defects],
+                "detail": str(exc),
+                "attempt": attempt,
+                "attempts": attempts,
+            },
+            ensure_ascii=False,
+        )
+    )
+
+
 def _ensure_valid_content(
     agent: Agent,
     item: QuizItem,
     *,
     on_phase: PhaseCallback | None = None,
 ) -> QuizItem:
-    """内容違反時だけ、同じAgentで構造化出力を再生成する。"""
+    """内容違反・品質欠陥があるときだけ、同じAgentで構造化出力を再生成する。
+
+    検証は2層ある。どちらも違反したら再生成1回 → fail-closed(ADR 0018 の移行手順1)。
+
+    - content_policy: 日本語プレーンテキスト要件(ADR 0015)
+    - quality_checks: 回答不能・読めない・ラベル重複・URLエンコード混入(#139)
+
+    再生成の指示は層ごとに書き分ける。ADR 0018 の計測で、汎用的な再生成指示が
+    設問を壊すことが分かっているため、欠陥を名指しする。
+    """
     retries = _content_retries()
     for attempt in range(retries + 1):
         try:
+            # 内容ポリシーを先に見る。HTML混入は品質欠陥の判定(問いかけの有無など)を
+            # 巻き添えにしうるので、表記を正してから品質を見る順序にする。
             validate_quiz_content(item)
+            validate_quality(item)
             return item
         except ContentPolicyViolationError as exc:
+            is_quality_defect = isinstance(exc, QualityDefectError)
+            if is_quality_defect:
+                _log_quality_defect(exc, attempt + 1, retries + 1)
             if attempt >= retries:
                 raise
-            logger.warning(
-                "生成内容がポリシーに違反したため再生成します (%d/%d回目, %s)",
-                attempt + 1,
-                retries,
-                exc,
-            )
+            if not is_quality_defect:
+                logger.warning(
+                    "生成内容がポリシーに違反したため再生成します (%d/%d回目, %s)",
+                    attempt + 1,
+                    retries,
+                    exc,
+                )
             _emit_phase(
                 on_phase,
                 "regeneration",
                 attempt=attempt + 2,
                 total_attempts=retries + 1,
             )
-            item = _structured_quiz_with_retries(
-                agent,
-                prompt=build_content_regenerate_feedback_prompt(str(exc)),
+            feedback = (
+                build_quality_regenerate_feedback_prompt(list(exc.defects))
+                if is_quality_defect
+                else build_content_regenerate_feedback_prompt(str(exc))
             )
+            item = _structured_quiz_with_retries(agent, prompt=feedback)
     raise AssertionError("内容検証の試行回数が不正です")
 
 
