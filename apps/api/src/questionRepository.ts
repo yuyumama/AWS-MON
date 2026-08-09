@@ -5,6 +5,8 @@ import {
 	type Explanation,
 	gsiNames,
 	hashKeys,
+	JUDGE_DEFECT_TYPES,
+	type JudgeDefectType,
 	type Option,
 	type OptionReason,
 	type Question,
@@ -286,6 +288,8 @@ function parseQuality(value: unknown): QualityInput {
 			? raw.evaluator
 			: "none";
 
+	const judge = parseJudge(raw.judge);
+
 	return {
 		inlineGate,
 		evaluator,
@@ -293,6 +297,34 @@ function parseQuality(value: unknown): QualityInput {
 		score: optionalNumber(raw.score),
 		issues: optionalString(raw.issues),
 		evaluatedAt: optionalString(raw.evaluatedAt),
+		...(judge === undefined ? {} : { judge }),
+	};
+}
+
+// 自己整合ジャッジ(#140)。report-only の間は判定結果を保存するだけで生成を
+// ブロックしないため、ここで落とすと分布が採れない。判定できなかった生成では
+// agent 側が judge を出さないので、属性ごと存在しない形が正常である。
+function parseJudge(
+	value: unknown,
+): NonNullable<QualityInput["judge"]> | undefined {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		return undefined;
+	}
+
+	const raw = value as Record<string, unknown>;
+	if (raw.status !== "clean" && raw.status !== "defective") return undefined;
+
+	const defectTypes = Array.isArray(raw.defectTypes)
+		? raw.defectTypes.filter((type): type is JudgeDefectType =>
+				(JUDGE_DEFECT_TYPES as readonly unknown[]).includes(type),
+			)
+		: [];
+
+	return {
+		status: raw.status,
+		modelId: optionalString(raw.modelId),
+		defectTypes,
+		detail: optionalString(raw.detail),
 	};
 }
 

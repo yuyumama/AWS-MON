@@ -13,7 +13,7 @@ from openai import APIError
 
 from quiz_agent import agent as agent_module
 from quiz_agent.guardrail import GateResult
-from quiz_agent.model_config import model_id
+from quiz_agent.model_config import model_id, openrouter_api_key
 from quiz_agent.schema import QuizItem
 
 
@@ -220,7 +220,7 @@ def test_openrouter_api_key_prefers_environment(
         ),
     )
 
-    assert agent_module._openrouter_api_key() == "env-key"
+    assert openrouter_api_key() == "env-key"
 
 
 def test_openrouter_api_key_falls_back_to_ssm(
@@ -244,7 +244,7 @@ def test_openrouter_api_key_falls_back_to_ssm(
     monkeypatch.setenv("AWS_REGION", "ap-northeast-1")
     monkeypatch.setitem(sys.modules, "boto3", SimpleNamespace(client=client))
 
-    assert agent_module._openrouter_api_key() == "ssm-key"
+    assert openrouter_api_key() == "ssm-key"
     assert calls["client"] == ("ssm", {"region_name": "ap-northeast-1"})
     assert calls["get_parameter"] == {
         "Name": "/app/aws-mon/prod/openrouter-api-key",
@@ -259,7 +259,7 @@ def test_openrouter_api_key_requires_env_or_parameter(
     monkeypatch.delenv("OPENROUTER_API_KEY_PARAM", raising=False)
 
     with pytest.raises(RuntimeError, match="OPENROUTER_API_KEY_PARAM"):
-        agent_module._openrouter_api_key()
+        openrouter_api_key()
 
 
 class _FakeRateLimitError(Exception):
@@ -1183,3 +1183,84 @@ def test_phase_callback_error_does_not_stop_generation(
     )
 
     assert result.item.question.question == "設問はどれか。"
+
+
+# --- 自己整合ジャッジの配線(#140) ---------------------------------------------
+# report-only。判定結果は保存するが生成をブロックしない(ADR 0010 と同じ段階手順)。
+
+
+def test_generate_quiz_attaches_judge_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    _mock_research(monkeypatch)
+    FakeAgent.structured_results = [_quiz_item()]
+    monkeypatch.setattr(agent_module, "gate_enabled", lambda: False)
+    judged: list[QuizItem] = []
+
+    def fake_judge(item: QuizItem, cert: str | None = None) -> Any:
+        judged.append(item)
+        return agent_module.JudgeResult(status="clean", model_id="test/judge")
+
+    monkeypatch.setattr(agent_module, "judge_self_consistency", fake_judge)
+
+    result = agent_module.generate_quiz("aip")
+
+    assert result.judge.status == "clean"
+    assert judged == [result.item]
+
+
+def test_generate_quiz_does_not_block_on_defective_judge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """report-only の間は defective でも生成物を返すこと。"""
+    _mock_research(monkeypatch)
+    FakeAgent.structured_results = [_quiz_item()]
+    monkeypatch.setattr(agent_module, "gate_enabled", lambda: False)
+    monkeypatch.setattr(
+        agent_module,
+        "judge_self_consistency",
+        lambda item, cert=None: agent_module.JudgeResult(
+            status="defective", detail="ambiguous_correct: AとCが両方正解"
+        ),
+    )
+
+    result = agent_module.generate_quiz("aip")
+
+    assert result.judge.status == "defective"
+    assert result.item.question.question == "設問はどれか。"
+
+
+def test_judge_runs_on_the_docs_less_fallback_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """調査失敗でフォールバックした経路でもジャッジが走ること。"""
+    FakeAgent.structured_results = [_quiz_item()]
+    monkeypatch.setattr(agent_module, "Agent", FakeAgent)
+    monkeypatch.setattr(agent_module, "_model", lambda: object())
+    monkeypatch.setattr(agent_module, "_docs_mcp_enabled", lambda: False)
+    monkeypatch.setattr(
+        agent_module,
+        "judge_self_consistency",
+        lambda item, cert=None: agent_module.JudgeResult(
+            status="clean", model_id="test/judge"
+        ),
+    )
+
+    result = agent_module.generate_quiz("aip")
+
+    assert result.judge.status == "clean"
+
+
+def test_judge_receives_cert(monkeypatch: pytest.MonkeyPatch) -> None:
+    _mock_research(monkeypatch)
+    FakeAgent.structured_results = [_quiz_item()]
+    monkeypatch.setattr(agent_module, "gate_enabled", lambda: False)
+    seen: list[str | None] = []
+
+    def fake_judge(item: QuizItem, cert: str | None = None) -> Any:
+        seen.append(cert)
+        return agent_module.JudgeResult(status="clean")
+
+    monkeypatch.setattr(agent_module, "judge_self_consistency", fake_judge)
+
+    agent_module.generate_quiz("aip")
+
+    assert seen == ["aip"]

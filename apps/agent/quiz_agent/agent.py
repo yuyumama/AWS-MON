@@ -33,7 +33,8 @@ from .guardrail import (
     gate_enforced,
     gate_retries,
 )
-from .model_config import model_id, openrouter_base_url
+from .judge import JudgeResult, judge_self_consistency
+from .model_config import model_id, openrouter_api_key, openrouter_base_url
 from .prompts import (
     QUIZ_FROM_RESEARCH_PROMPT,
     QUIZ_REGENERATE_FEEDBACK_PROMPT,
@@ -163,44 +164,11 @@ def _openrouter_model() -> Model:
     # openai extra を必要とするため、importを初期化時まで遅らせる
     from .openrouter_model import ToolCallStructuredOutputModel
 
-    api_key = _openrouter_api_key()
+    api_key = openrouter_api_key()
     return ToolCallStructuredOutputModel(
         client_args={"api_key": api_key, "base_url": openrouter_base_url()},
         model_id=model_id(),
     )
-
-
-def _openrouter_api_key() -> str:
-    """環境変数を優先し、未設定ならSSM SecureStringからAPIキーを取得する。"""
-    api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
-    if api_key:
-        return api_key
-
-    parameter_name = os.environ.get("OPENROUTER_API_KEY_PARAM", "").strip()
-    if not parameter_name:
-        raise RuntimeError(
-            "OpenRouter APIキーが未設定です。OPENROUTER_API_KEY または "
-            "OPENROUTER_API_KEY_PARAM を設定してください"
-        )
-
-    try:
-        import boto3
-
-        response = boto3.client(
-            "ssm", region_name=os.environ.get("AWS_REGION", "us-east-1")
-        ).get_parameter(Name=parameter_name, WithDecryption=True)
-        api_key = response["Parameter"]["Value"].strip()
-    except Exception as e:  # noqa: BLE001 - 取得失敗時は生成を止める
-        raise RuntimeError(
-            f"SSM Parameter StoreからOpenRouter APIキーを取得できませんでした: "
-            f"{parameter_name}"
-        ) from e
-
-    if not api_key:
-        raise RuntimeError(
-            f"SSM Parameter StoreのOpenRouter APIキーが空です: {parameter_name}"
-        )
-    return api_key
 
 
 def _model() -> Model:
@@ -628,10 +596,12 @@ class GateAttempt:
 
 @dataclass
 class GenerationResult:
-    """生成結果とインライン品質ゲートの結果。"""
+    """生成結果とインライン品質ゲート・自己整合ジャッジの結果。"""
 
     item: QuizItem
     gate: GateResult = field(default_factory=lambda: GateResult(status="not_run"))
+    # 自己整合ジャッジ(#140)。report-only のため生成はブロックしない。
+    judge: JudgeResult = field(default_factory=lambda: JudgeResult(status="not_run"))
     attempts: list[GateAttempt] = field(default_factory=list)
     # グラウンディングの根拠になった read_documentation の原文。低スコアの原因が
     # 捏造なのか調査の的外れなのかは、取得した原文を見ないと判別できないため残す
@@ -834,11 +804,32 @@ def generate_quiz(
     *,
     on_phase: PhaseCallback | None = None,
 ) -> GenerationResult:
-    """問題と解説を1回の生成でまとめて作る。
+    """問題と解説を1回の生成でまとめて作り、自己整合ジャッジにかける。
 
     AGENT_DOCS_MCP が有効なら、AWSドキュメントMCPで最新情報を調査してから生成し、
     AGENT_GUARDRAIL_ID が設定されていれば調査原文を根拠にグラウンディングチェックする。
+
+    ジャッジ(#140)は生成が確定したあとに1回だけ走らせる。生成の経路は複数ある
+    (ゲート通過・ゲート無効・調査失敗のフォールバック)が、判定対象は最終的な
+    QuizItem なので、経路ごとではなくここでまとめて呼ぶ。**現状は report-only** で、
+    defective でも生成物は返す。
     """
+    result = _generate_quiz_result(
+        cert, domain, domain_label, domain_label_en, on_phase=on_phase
+    )
+    result.judge = judge_self_consistency(result.item, cert=cert)
+    return result
+
+
+def _generate_quiz_result(
+    cert: str,
+    domain: str | None = None,
+    domain_label: str | None = None,
+    domain_label_en: str | None = None,
+    *,
+    on_phase: PhaseCallback | None = None,
+) -> GenerationResult:
+    """調査・生成・グラウンディングゲートまでを行う(ジャッジは含まない)。"""
     retries = int(os.environ.get("AGENT_GENERATE_RETRIES", "3"))
     quiz_prompt = build_quiz_prompt(cert, domain, domain_label, domain_label_en)
 

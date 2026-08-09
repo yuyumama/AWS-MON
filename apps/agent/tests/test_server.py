@@ -16,6 +16,7 @@ from quiz_agent.agent import (
 )
 from quiz_agent.content_policy import ContentPolicyViolationError
 from quiz_agent.guardrail import GateResult
+from quiz_agent.judge import JudgeDefect, JudgeResult
 from quiz_agent.schema import QuizItem
 
 
@@ -71,7 +72,11 @@ def test_build_generate_response_includes_summary(
     monkeypatch.setattr(
         server_module,
         "_generate_quiz",
-        lambda **kwargs: (item, GateResult(status="not_run")),
+        lambda **kwargs: (
+            item,
+            GateResult(status="not_run"),
+            JudgeResult(status="not_run"),
+        ),
     )
 
     response = server_module.build_generate_response({}, started=0)
@@ -225,7 +230,11 @@ def test_generate_response_excludes_internal_grounding_claim(
     monkeypatch.setattr(
         server_module,
         "_generate_quiz",
-        lambda cert, domain, on_phase=None: (item, GateResult(status="not_run")),
+        lambda cert, domain, on_phase=None: (
+            item,
+            GateResult(status="not_run"),
+            JudgeResult(status="not_run"),
+        ),
     )
 
     response = server_module.build_generate_response({}, started=0.0)
@@ -443,6 +452,7 @@ def _response_for_source(
         lambda **kwargs: (
             _item_with_source(source),
             GateResult(status="not_run"),
+            JudgeResult(status="not_run"),
         ),
     )
     return server_module.build_generate_response({}, started=0)
@@ -488,3 +498,76 @@ def test_source_refs_fall_back_to_raw_source_without_url(
     assert [ref["url"] for ref in response["sourceRefs"]] == [
         "AWS公式ドキュメントを参照"
     ]
+
+
+# --- 自己整合ジャッジの保存(#140) ---------------------------------------------
+# report-only の間は判定結果を quality に保存するだけにする。実トラフィックで
+# 分布を採ってから fail-closed に切り替えるか判断する(ADR 0010 と同じ手順)。
+
+
+def _response_with_judge(
+    monkeypatch: pytest.MonkeyPatch, judge: JudgeResult
+) -> dict[str, Any]:
+    item = _item_with_source("https://docs.aws.amazon.com/a.html")
+    monkeypatch.setattr(
+        server_module,
+        "_generate_quiz",
+        lambda **kwargs: (item, GateResult(status="not_run"), judge),
+    )
+    return server_module.build_generate_response({}, started=0)
+
+
+def test_quality_includes_clean_judge_verdict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = _response_with_judge(
+        monkeypatch, JudgeResult(status="clean", model_id="test/judge")
+    )
+
+    assert response["quality"]["judge"] == {
+        "status": "clean",
+        "modelId": "test/judge",
+        "defectTypes": [],
+    }
+
+
+def test_quality_includes_judge_defect_types_and_detail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """欠陥特定型の再生成に使えるよう、種別と理由の両方を残す。"""
+    response = _response_with_judge(
+        monkeypatch,
+        JudgeResult(
+            status="defective",
+            defects=[
+                JudgeDefect(
+                    type="ambiguous_correct",
+                    detail="選択肢AとCがどちらも正解たりえます。",
+                )
+            ],
+            model_id="test/judge",
+            detail="ambiguous_correct: 選択肢AとCがどちらも正解たりえます。",
+        ),
+    )
+
+    judge = response["quality"]["judge"]
+    assert judge["status"] == "defective"
+    assert judge["defectTypes"] == ["ambiguous_correct"]
+    assert "選択肢AとC" in judge["detail"]
+
+
+def test_quality_omits_judge_when_not_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ジャッジ未設定のときはフィールドごと出さない(既存アイテムと同じ形)。"""
+    response = _response_with_judge(
+        monkeypatch, JudgeResult(status="not_run", detail="judge not configured")
+    )
+
+    assert "judge" not in response["quality"]
+
+
+def test_stub_mode_reports_judge_not_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AGENT_STUB", "1")
+
+    response = server_module.build_generate_response({"cert": "aip"}, started=0)
+
+    assert "judge" not in response["quality"]

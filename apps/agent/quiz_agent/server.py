@@ -25,6 +25,7 @@ except ModuleNotFoundError:
 
 from .content_policy import ContentPolicyViolationError
 from .guardrail import GateResult, GroundingBlockedError
+from .judge import JudgeResult
 from .log_filters import suppress_duplicate_strands_warnings
 from .model_config import model_id as _model_id
 from .quality_checks import split_source_urls
@@ -90,11 +91,15 @@ def _generate_quiz(
     domain_label_en: str | None = None,
     *,
     on_phase: Callable[[str, dict[str, int]], None] | None = None,
-) -> tuple[QuizItem, GateResult]:
+) -> tuple[QuizItem, GateResult, JudgeResult]:
     if os.environ.get("AGENT_STUB") == "1":
         if on_phase is not None:
             on_phase("generation", {"attempt": 1, "totalAttempts": 1})
-        return _stub_quiz(cert, domain), GateResult(status="not_run", detail="stub")
+        return (
+            _stub_quiz(cert, domain),
+            GateResult(status="not_run", detail="stub"),
+            JudgeResult(status="not_run", detail="stub"),
+        )
 
     from .agent import generate_quiz
 
@@ -105,10 +110,10 @@ def _generate_quiz(
         domain_label_en=domain_label_en,
         on_phase=on_phase,
     )
-    return result.item, result.gate
+    return result.item, result.gate, result.judge
 
 
-def _quality(gate: GateResult, evaluated_at: str) -> dict[str, Any]:
+def _quality(gate: GateResult, judge: JudgeResult, evaluated_at: str) -> dict[str, Any]:
     # evaluator はオンライン評価(AgentCore Evaluations)廃止後は常に none(ADR 0011)。
     # 過去アイテムに agentcore_evaluate / self_review が残るためフィールド自体は維持する。
     quality: dict[str, Any] = {
@@ -121,6 +126,18 @@ def _quality(gate: GateResult, evaluated_at: str) -> dict[str, Any]:
             quality["score"] = gate.grounding_score
     if gate.detail:
         quality["issues"] = gate.detail
+
+    # 自己整合ジャッジ(#140)。判定できなかった場合はフィールドごと出さず、
+    # ジャッジ導入前に保存されたアイテムと同じ形にする。
+    if judge.status not in ("not_run", "error"):
+        judge_payload: dict[str, Any] = {
+            "status": judge.status,
+            "modelId": judge.model_id,
+            "defectTypes": [defect.type for defect in judge.defects],
+        }
+        if judge.detail:
+            judge_payload["detail"] = judge.detail
+        quality["judge"] = judge_payload
     return quality
 
 
@@ -195,7 +212,7 @@ def build_generate_response(
             generate_kwargs.update(
                 domain_label=domain_label, domain_label_en=domain_label_en
             )
-        item, gate = _generate_quiz(**generate_kwargs)
+        item, gate, judge = _generate_quiz(**generate_kwargs)
     generated_at = _now_iso()
     latency_ms = int((time.perf_counter() - started) * 1000)
     source = item.explanation.source
@@ -213,7 +230,7 @@ def build_generate_response(
             "generatedAt": generated_at,
             "latencyMs": latency_ms,
         },
-        "quality": _quality(gate, generated_at),
+        "quality": _quality(gate, judge, generated_at),
         "sourceRefs": _source_refs(source, generated_at),
     }
 

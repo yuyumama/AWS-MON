@@ -23,3 +23,41 @@ def model_id() -> str:
 
 def openrouter_base_url() -> str:
     return os.environ.get("AGENT_OPENROUTER_BASE_URL", DEFAULT_OPENROUTER_BASE_URL)
+
+
+def openrouter_api_key() -> str:
+    """環境変数を優先し、未設定ならSSM SecureStringからAPIキーを取得する。
+
+    生成モデル（agent.py）と自己整合ジャッジ（judge.py）の両方から使うため、
+    どちらにも依存しないこのモジュールに置く。boto3 は関数内でimportするので、
+    strands を持たない呼び出し元からも安全にimportできる性質は保たれる。
+    """
+    api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    if api_key:
+        return api_key
+
+    parameter_name = os.environ.get("OPENROUTER_API_KEY_PARAM", "").strip()
+    if not parameter_name:
+        raise RuntimeError(
+            "OpenRouter APIキーが未設定です。OPENROUTER_API_KEY または "
+            "OPENROUTER_API_KEY_PARAM を設定してください"
+        )
+
+    try:
+        import boto3
+
+        response = boto3.client(
+            "ssm", region_name=os.environ.get("AWS_REGION", "us-east-1")
+        ).get_parameter(Name=parameter_name, WithDecryption=True)
+        api_key = response["Parameter"]["Value"].strip()
+    except Exception as e:  # noqa: BLE001 - 取得失敗時は生成を止める
+        raise RuntimeError(
+            f"SSM Parameter StoreからOpenRouter APIキーを取得できませんでした: "
+            f"{parameter_name}"
+        ) from e
+
+    if not api_key:
+        raise RuntimeError(
+            f"SSM Parameter StoreのOpenRouter APIキーが空です: {parameter_name}"
+        )
+    return api_key

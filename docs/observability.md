@@ -187,6 +187,7 @@ prod では `/aws/aws-mon/quiz-agent` ロググループを Terraform 管理に�
 |---|---|---|
 | トレース計装 | オプトイン（`run_server_otel.sh`） | 常時有効（Runtime環境変数） |
 | グラウンディングゲート | `.env` の `AGENT_GUARDRAIL_ID` 設定時のみ | 常時有効（SSM経由で注入） |
+| 自己整合ジャッジ | `.env` の `AGENT_JUDGE_MODEL_ID` 設定時のみ | 同左（未設定なら `not_run`） |
 | `service.name` | `aws-mon-quiz-agent-local`（コンソールで prod と区別。`AGENT_OTEL_SERVICE_NAME` で変更可） | `aws-mon-quiz-agent` |
 | 観測層の再現 | しない（観測は実AWSのみ。[ADR 0004](adr/0004-local-first-dev.md)） | — |
 

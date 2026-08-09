@@ -83,6 +83,59 @@ describe("saveGeneratedQuestion", () => {
 		expect(result.item).not.toHaveProperty("summary");
 	});
 
+	// 自己整合ジャッジ(#140)。report-only の間は判定結果を保存するだけで
+	// 生成をブロックしないため、保存されないと分布が採れず次段へ進めない。
+	it("自己整合ジャッジの判定結果を保存する", async () => {
+		const result = await saveGeneratedQuestion({
+			cert: "aip",
+			domain: "d1",
+			quiz: quiz(),
+			quality: {
+				inlineGate: "not_run",
+				evaluator: "none",
+				judge: {
+					status: "defective",
+					modelId: "openai/gpt-oss-20b:free",
+					defectTypes: ["ambiguous_correct", "correct_label_mismatch"],
+					detail: "ambiguous_correct: 選択肢AとCがどちらも正解たりえます。",
+				},
+			},
+		});
+
+		expect(result.item.quality?.judge).toEqual({
+			status: "defective",
+			modelId: "openai/gpt-oss-20b:free",
+			defectTypes: ["ambiguous_correct", "correct_label_mismatch"],
+			detail: "ambiguous_correct: 選択肢AとCがどちらも正解たりえます。",
+		});
+	});
+
+	it("ジャッジ結果が無い生成では judge 属性を保存しない", async () => {
+		const result = await saveGeneratedQuestion({
+			cert: "aip",
+			domain: "d1",
+			quiz: quiz(),
+			quality: { inlineGate: "not_run", evaluator: "none" },
+		});
+
+		expect(result.item.quality).not.toHaveProperty("judge");
+	});
+
+	it("未知の欠陥種別や壊れた judge は落として保存する", async () => {
+		const result = await saveGeneratedQuestion({
+			cert: "aip",
+			domain: "d1",
+			quiz: quiz(),
+			quality: {
+				inlineGate: "not_run",
+				evaluator: "none",
+				judge: { status: "bogus", defectTypes: ["unknown_type", 42] },
+			},
+		});
+
+		expect(result.item.quality).not.toHaveProperty("judge");
+	});
+
 	it("新規ACTIVE問題に一覧用のsparse GSIキーを保存する", async () => {
 		const result = await saveGeneratedQuestion({
 			cert: "aip",
