@@ -105,6 +105,11 @@ def sampling_metadata() -> dict[str, Any]:
         "type": "metadata",
         "model_id": model_id(),
         "dependencies": versions,
+        # 腕の識別に必要な設定を残す(後から run.log を読み返さずに済むように)。
+        "guard_content_mode": os.environ.get("AGENT_GATE_GUARD_CONTENT", "mixed"),
+        "guardrail_retries": os.environ.get("AGENT_GUARDRAIL_RETRIES", "1"),
+        "guardrail_enforce": os.environ.get("AGENT_GUARDRAIL_ENFORCE", "1"),
+        "research_retries": os.environ.get("AGENT_RESEARCH_RETRIES", "2"),
     }
 
 
@@ -204,12 +209,38 @@ def _sample_once(cert: str, domain: str | None) -> dict[str, Any]:
             "duration_sec": time.monotonic() - started,
             "error": str(e),
         }
-    gate = result.gate
+    # status/grounding/relevance は「初回試行」を表す。AGENT_GUARDRAIL_RETRIES>0 で
+    # 回したときも過去ラン(RETRIES=0)と同じ意味で比較でき、summarize() の集計も
+    # 初回通過率のままになる。再生成後の結果は final_* と attempts[] に入れる。
+    first = result.attempts[0].gate if result.attempts else result.gate
+    final = result.gate
     return {
-        "status": gate.status,
-        "grounding": gate.grounding_score,
-        "relevance": gate.relevance_score,
-        "detail": gate.detail,
+        "status": first.status,
+        "grounding": first.grounding_score,
+        "relevance": first.relevance_score,
+        "detail": first.detail,
+        "final_status": final.status,
+        "final_grounding": final.grounding_score,
+        "final_relevance": final.relevance_score,
+        "attempt_count": len(result.attempts),
+        # 低群が本当に悪い問題なのか、再生成で良くなったのかを後から読むための本文。
+        "attempts": [
+            {
+                "attempt": a.attempt,
+                "status": a.gate.status,
+                "grounding": a.gate.grounding_score,
+                "relevance": a.gate.relevance_score,
+                "item": a.item.model_dump(),
+            }
+            for a in result.attempts
+        ],
+        "item": result.item.model_dump(),
+        # 低スコアの原因が捏造(H1)か調査の的外れ(H2)かは、実際に取得された原文を
+        # 読まないと判別できない。ラベル付けのために丸ごと残す。
+        "source_texts": list(result.source_texts),
+        "source_chars": sum(len(t) for t in result.source_texts),
+        "cert": cert,
+        "domain": resolved_domain,
         "duration_sec": time.monotonic() - started,
         "error": None,
     }

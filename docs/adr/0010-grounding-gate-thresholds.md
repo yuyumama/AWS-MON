@@ -1,6 +1,6 @@
 # ADR 0010: グラウンディングゲートの閾値を実測分布に基づき grounding 0.6 へ引き下げる
 
-- 状態: 採用（2026-08-03 実測、同日ガードレール version 2 として適用）
+- 状態: 採用（2026-08-03 実測、同日ガードレール version 2 として適用）→ **前提を撤回**（[ADR 0018](0018-retire-grounding-gate-as-quality-judge.md)。ゲートを品質判定から外したため閾値調整の意味が失われた。本ADRの「初回通過率」は grounding 軸だけの数字である点も ADR 0018 で訂正）
 - 関連: [ADR 0007](0007-observability-stack.md)（Guardrailsゲートの設計）、[ADR 0009](0009-openrouter-default-provider.md)（OpenRouter既定化。残課題として issue #63 を切り出した）、issue #63（本ADRの意思決定元）、[PR #72](https://github.com/yuyumama/AWS-MON/pull/72)（ゲート入力整形と計測基盤）
 
 ## 背景

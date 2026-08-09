@@ -1,6 +1,6 @@
 # ADR 0016: 生成モデルを ling-3.0-flash に切り替える
 
-- 状態: 採用（2026-08-04）
+- 状態: 採用（2026-08-04）→ **通過率の定義を訂正**（[ADR 0018](0018-retire-grounding-gate-as-quality-judge.md)。本ADRの通過率は grounding 軸だけの数字で、採用根拠1「80%到達」は成立しない。実際は 67.9%。**モデル選定の順位は両指標で同じなので結論は変わらない**）
 - 関連: [ADR 0010](0010-grounding-gate-thresholds.md)（ゲート閾値と初回通過率の目安）、[ADR 0012](0012-openrouter-only-inference.md)（OpenRouter一本化）、[ADR 0015](0015-display-and-grounding-data-separation.md)（本ADRの計測条件を作った変更）、issue #81 / #63（本ADRの意思決定元）
 
 ## 背景

@@ -87,6 +87,73 @@ def test_accepts_allowed_ascii_content(value: str) -> None:
     validate_quiz_content(item)
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        # Professional 級の設問は、インデックスマッピングやAPIパラメータの
+        # 実物を選択肢に出さないと成立しない。コード片は英文ではないので通す。
+        (
+            "カスタムメタデータフィールドを次の構造で定義します。"
+            '"my_custom_field": { "type": "text", "fields": '
+            '{ "keyword": { "type": "keyword" } } }'
+        ),
+        (
+            "リクエストボディに次を指定します。"
+            '{ "amazon-bedrock-guardrailConfig": '
+            '{ "streamProcessingMode": "ASYNCHRONOUS" } }'
+        ),
+        (
+            "インデックス定義は次のとおりです。"
+            '{ "settings": { "index": { "knn": true } }, "mappings": '
+            '{ "properties": { "vector": { "type": "knn_vector" } } } }'
+        ),
+    ],
+)
+def test_accepts_code_fragments_in_user_facing_text(value: str) -> None:
+    """コード/JSON片は「ASCII英単語の連続」として数えない。
+
+    #4(prod q_msjw3j7l_00eea781)は、この判定に引っかかって再生成が走った結果、
+    技術用語がすべてカタカナに転写され読めない問題になった。英文の混入を防ぐ目的は
+    維持したまま、コード片は通す必要がある。
+    """
+    item = _valid_item()
+    item.question.options[0].text = value
+
+    validate_quiz_content(item)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        # コード片を許容しても、地の英文は従来どおり弾く(目的を後退させない)。
+        "説明です。one two three four five six seven eight。",
+        (
+            "説明です。The correct option accurately reflects the documented "
+            "service behavior described in the guide。"
+        ),
+        # 括弧で囲めば英文が素通りする、という抜け道を作らないこと。
+        # コード片かどうかは「括弧の中にあるか」ではなく、中身がコードの体裁
+        # (キーと値の対、代入、引用符付き文字列など)を持つかで決まる。
+        (
+            "説明です。{ The correct option accurately reflects the documented "
+            "service behavior described in the guide }。"
+        ),
+        (
+            "説明です。[ The correct option accurately reflects the documented "
+            "service behavior described in the guide ]。"
+        ),
+    ],
+)
+def test_still_rejects_english_prose(value: str) -> None:
+    item = _valid_item()
+    item.question.options[0].text = value
+
+    with pytest.raises(ContentPolicyViolationError) as excinfo:
+        validate_quiz_content(item)
+
+    assert "ASCII英単語が8語以上連続している" in str(excinfo.value)
+
+
 def test_does_not_validate_internal_grounding_claim_or_source() -> None:
     item = _valid_item()
     item.explanation.grounding_claim_en = (

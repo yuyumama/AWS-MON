@@ -13,6 +13,16 @@ _URL_RE = re.compile(r"https?://[^\s<>]+", re.IGNORECASE)
 _ASCII_WORD_RE = re.compile(
     r"(?<![A-Za-z0-9])[A-Za-z]+(?:['-][A-Za-z]+)*(?![A-Za-z0-9])"
 )
+_CODE_FRAGMENT_SYNTAX_RE = re.compile(
+    r"""
+    (?:
+        "(?:\\.|[^"\\])*"
+        | \b[A-Za-z_][A-Za-z0-9_.-]*\s*:\s*\S
+        | \b[A-Za-z_][A-Za-z0-9_.-]*\s*=(?!=)\s*\S
+    )
+    """,
+    re.VERBOSE,
+)
 
 # AWSのサービス名やAPI名は数語の英字が自然に並ぶため許容しつつ、英文の混入を
 # 検知できる境界として8語を採用する。固有表現の許容リストは保守しない。
@@ -34,14 +44,57 @@ class ContentPolicyViolationError(RuntimeError):
         super().__init__(f"生成内容がポリシーに違反しています ({detail})")
 
 
+def _mask_balanced_code_fragments(value: str) -> str:
+    # 引用符付き文字列・キーと値の対・代入を含む括弧内だけを
+    # JSONやコードとして除外し、括弧で囲んだだけの地の英文は検査対象に残す。
+    # 置換文字に日本語を使い、コード前後の英字列が連結されることも防ぐ。
+    pairs = {"{": "}", "[": "]"}
+    stack: list[tuple[str, int]] = []
+    spans: list[tuple[int, int]] = []
+    quote: str | None = None
+    escaped = False
+
+    for index, character in enumerate(value):
+        if not stack:
+            if character in pairs:
+                stack.append((character, index))
+            continue
+
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == quote:
+                quote = None
+            continue
+
+        if character in {'"', "'"}:
+            quote = character
+        elif character in pairs:
+            stack.append((character, index))
+        elif character in pairs.values():
+            if character != pairs[stack[-1][0]]:
+                stack.clear()
+                continue
+            _, start = stack.pop()
+            if not stack and _CODE_FRAGMENT_SYNTAX_RE.search(value[start : index + 1]):
+                spans.append((start, index + 1))
+
+    for start, end in reversed(spans):
+        value = f"{value[:start]}。ア。{value[end:]}"
+    return value
+
+
 def _has_long_english_sequence(value: str) -> bool:
     # URL内のパスやホスト名を英文の単語列として数えない。置換文字に日本語を使い、
     # URLの前後にある別々の英字列が連結されることも防ぐ。
     value_without_urls = _URL_RE.sub("。ア。", value)
+    value_for_detection = _mask_balanced_code_fragments(value_without_urls)
     consecutive = 0
     previous_end = 0
-    for match in _ASCII_WORD_RE.finditer(value_without_urls):
-        if _JAPANESE_RE.search(value_without_urls[previous_end : match.start()]):
+    for match in _ASCII_WORD_RE.finditer(value_for_detection):
+        if _JAPANESE_RE.search(value_for_detection[previous_end : match.start()]):
             consecutive = 0
         word = match.group()
         if len(word) == 1 and word.upper() in "ABCDEF":

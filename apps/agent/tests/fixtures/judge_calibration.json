@@ -1,0 +1,683 @@
+{
+	"description": "自己整合ジャッジの較正セット。ジャッジは clean を通し defective を弾けること。item は利用者向けフィールドのみ（grounding_claim_en は評価専用の内部フィールドで利用者に届かないため、自己整合の判定対象に含めない）。",
+	"defect_types": {
+		"requirement_contradiction": "設問が掲げた要件のうち少なくとも1つを正解が満たしていない",
+		"unsupported_specific_name": "選択肢がAPI名・条件キー・パラメータ名を名指ししているのに、その選択肢の解説が当該固有名を裏付けていない",
+		"correct_label_mismatch": "correct のラベルと、解説が正解として説明している選択肢が食い違っている",
+		"ambiguous_correct": "single 形式なのに正解たりうる選択肢が2つ以上ある"
+	},
+	"cases": [
+		{
+			"id": "clean-pii",
+			"label": "clean",
+			"defect": null,
+			"source": "prod q_msjvuov0_c4f5bb76",
+			"mutation": null,
+			"item": {
+				"summary": "Bedrock GuardrailsのPIIマスキングとログ・トレースの挙動の違い",
+				"question": {
+					"type": "single",
+					"question": "金融サービス企業が、Amazon Bedrock を用いた顧客対話型チャットボットを開発しています。同社は Amazon Bedrock Guardrails の Sensitive Information Filters を導入し、会話中にクレジットカード番号（CREDIT_DEBIT_CARD_NUMBER）や米国社会保障番号（US_SOCIAL_SECURITY_NUMBER）などの機微情報を検知してマスキング（{CREDIT_DEBIT_CARD_NUMBER} 等へ置換）する要件を満たしています。開発チームは以下の運用要件も満たす必要があります。1. モデル呼び出しログ（CloudWatch Logs）に機微情報が残らないこと 2. Guardrails のトレース出力（Converse API の trace オブジェクト等）を監査用途で保存する際、機微情報の生値が含まれないこと 開発チームが「最も適切かつ管理コストを抑えた構成」を選ぶ場合、正しい対応はどれか。",
+					"options": [
+						{
+							"label": "A",
+							"text": "Guardrails の Sensitive Information Filters を Mask モードに設定し、CloudWatch Logs のデータ保護ポリシー（Log Data Protection）を併用してログ内の機微情報をマスクする。トレース出力の match フィールドは Guardrails 側で自動的にマスクされるため、追加対応は不要。"
+						},
+						{
+							"label": "B",
+							"text": "Guardrails を Block モードに変更し、機微情報が含まれるリクエスト/レスポンスを完全に遮断する。これでログにもトレースにも機微情報が残らなくなる。"
+						},
+						{
+							"label": "C",
+							"text": "Guardrails の Mask モードを維持し、CloudWatch Logs のデータ保護ポリシーでログ内機微情報をマスクする。一方、トレース出力の match フィールドには設計上、生の機微情報値が含まれるため、アプリケーション側でトレースを保存する前に match フィールドを除外または別途マスキング処理を行う。"
+						},
+						{
+							"label": "D",
+							"text": "Guardrails でカスタム正規表現フィルタを追加し、クレジットカード番号と SSN のパターンを独自定義して Mask モードで検知させる。ビルトイン PII タイプより正確に検知できるため、ログ・トレース双方で追加対策が不要になる。"
+						}
+					],
+					"correct": ["C"]
+				},
+				"explanation": {
+					"overview": "本問は Amazon Bedrock Guardrails の Sensitive Information Filters を Mask モードで運用する際の、モデル呼び出しログとトレース出力における機微情報の扱いを問う問題です。公式ドキュメントに明記されている通り、PII マスキングはモデルへの入力とモデルからの応答にのみ適用され、CloudWatch Logs の model invocation logs には元の生データが残り、トレース出力の match フィールドには設計上マスク前の生 PII 値が格納されます。したがって、ログ保護には CloudWatch Logs データ保護ポリシーを併用し、トレース保存時にはアプリケーション側で match フィールドを除外またはマスキングする実装が必要となります。",
+					"correct_reason": "Guardrails の Mask モードはモデル入出力テキストのみをマスキングし、CloudWatch Logs の model invocation logs には元の生リクエストが記録されるため CloudWatch Logs データ保護ポリシーが必要です。またトレース出力の match フィールドには設計上生の PII 値が含まれるため、監査保存時に機微情報を含めない要件を満たすにはアプリケーション側での対処が必要です。これがマネージド機能を最大限活用しつつ要件を満たす最小コストの構成です。",
+					"option_reasons": [
+						{
+							"label": "A",
+							"reason": "トレース出力の match フィールドは Guardrails 側で自動的にマスクされず、設計上生の PII 値が含まれるため「追加対応不要」は誤りです。"
+						},
+						{
+							"label": "B",
+							"reason": "Block モードにしてもモデル呼び出しログには生データが残り、トレースにも生値が入るため要件を満たせません。また業務上会話を遮断せず匿名化して継続したいケースでは Block は不適切です。"
+						},
+						{
+							"label": "C",
+							"reason": "Mask モード維持＋CloudWatch Logs データ保護ポリシー併用でログを保護し、トレースの match フィールドはアプリ側で除外・マスキングすることで、両要件をマネージド機能中心で最小コストで満たせます。"
+						},
+						{
+							"label": "D",
+							"reason": "カスタム正規表現を追加してもログ・トレースの挙動は変わりません（ビルトインと同じ制約が適用される）。また「ビルトインより正確」とは限らず、ドキュメントは文脈があるほど精度が上がるとし単語・正規表現のみの検知に注意を促しています。"
+						}
+					],
+					"source": "https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-sensitive-filters.html"
+				}
+			}
+		},
+		{
+			"id": "clean-org-steps",
+			"label": "clean",
+			"defect": null,
+			"source": "prod q_msjw2k8h_21239b90",
+			"mutation": null,
+			"item": {
+				"summary": "組織レベルでのBedrockガードレール強制適用の正しい設計手順",
+				"question": {
+					"type": "single",
+					"question": "ある企業が AWS Organizations を使用して複数の AWS アカウントを管理しています。同社は Amazon Bedrock を用いた生成 AI アプリケーションを複数の部門で展開しており、全アカウントのモデル推論呼び出しに対して統一的な安全ガードレールを強制適用したいと考えています。以下の要件を満たすアーキテクチャを設計する必要があります。管理アカウントで一元的にガードレールを作成・バージョン管理する、組織内のすべてのアカウント（既存および将来追加されるアカウント）で、モデル推論時に例外なくガードレールが適用される、アプリケーションチームが独自に追加のアプリケーション固有ガードレールを設定した場合、より制限的な制御が優先される、運用負荷を最小化し、誤設定による推論失敗を防ぐ。正しい実装手順の組み合わせとして最も適切なものはどれか。",
+					"options": [
+						{
+							"label": "A",
+							"text": "管理アカウントで自動推論ポリシーを含むガードレールを作成しバージョン化 → リソースベースポリシーで bedrock:InvokeModel を組織全体に許可 → AWS Organizations で BEDROCK_POLICY タイプを有効化 → ガードレール ARN とバージョンを指定したポリシーをルート OU にアタッチ"
+						},
+						{
+							"label": "B",
+							"text": "管理アカウントで自動推論ポリシーを含まないガードレールを作成しバージョン化 → リソースベースポリシーで bedrock:ApplyGuardrail を組織全体に許可 → メンバーアカウントの IAM ロールに bedrock:ApplyGuardrail 権限を付与 → AWS Organizations で BEDROCK_POLICY タイプを有効化 → ガードレール ARN とバージョンを指定したポリシーをルート OU にアタッチ"
+						},
+						{
+							"label": "C",
+							"text": "各メンバーアカウントで個別にガードレールを作成しバージョン化 → アカウントレベルの適用設定で各ガードレールを指定 → AWS Organizations で BEDROCK_POLICY タイプを有効化 → 組織ポリシーで各アカウントのガードレール ARN をリストアップ"
+						},
+						{
+							"label": "D",
+							"text": "管理アカウントで自動推論ポリシーを含むガードレールを作成しバージョン化 → リソースベースポリシーで bedrock:ApplyGuardrail を組織全体に許可 → AWS Organizations で BEDROCK_POLICY タイプを有効化 → ガードレール ARN とバージョンを指定したポリシーをルート OU にアタッチ → メンバーアカウントの IAM 設定は不要（組織ポリシーが自動的に権限を付与するため）"
+						}
+					],
+					"correct": ["B"]
+				},
+				"explanation": {
+					"overview": "Amazon Bedrock Guardrails の組織レベル適用（Guardrails Enforcements）を正しく実装するには、自動推論ポリシーを除外し、正しい IAM 権限（bedrock:ApplyGuardrail）を管理アカウントのリソースベースポリシーとメンバーアカウントの実行ロールの両方に付与し、AWS Organizations で BEDROCK_POLICY タイプを有効化した上でバージョン指定のポリシーをアタッチする必要があります。レイヤード保護により、アプリケーション固有のガードレールが併用される場合はより制限的な制御が自動的に優先されます。",
+					"correct_reason": "選択肢 B は、自動推論ポリシーを含まないこと、リソースベースポリシーで bedrock:ApplyGuardrail を許可すること、メンバーアカウントの IAM ロールにも同権限を付与すること、組織ポリシータイプを有効化してバージョン指定ポリシーをアタッチすることなど、公式ドキュメントで必須とされるすべての手順を正しく網羅しています。自動推論ポリシーはガードレール適用で非対応であり含めると実行時エラーになる、bedrock:InvokeModel ではガードレール評価を許可できない、組織ポリシーだけでは IAM 権限は自動付与されない、といった公式仕様の制約をすべてクリアしています。",
+					"option_reasons": [
+						{
+							"label": "A",
+							"reason": "自動推論ポリシーを含めると実行時エラーになる。また bedrock:InvokeModel 権限ではガードレール評価（ApplyGuardrail）を許可できない。"
+						},
+						{
+							"label": "B",
+							"reason": "自動推論ポリシーを除外し、正しい権限（bedrock:ApplyGuardrail）をリソースベースポリシーとメンバーアカウント IAM の両方に付与し、組織ポリシータイプ有効化とバージョン指定ポリシーのアタッチを行うなど、必須手順をすべて正しく満たしている。"
+						},
+						{
+							"label": "C",
+							"reason": "メンバーアカウントごとに個別作成・設定するのは一元管理と将来のアカウント自動適用の要件に反し、組織レベル適用のメリットを活かせていない。"
+						},
+						{
+							"label": "D",
+							"reason": "自動推論ポリシーを含めると失敗する。またメンバーアカウントの IAM 設定が不要という記述は誤りで、組織ポリシーは適用を強制するだけで IAM 権限（bedrock:ApplyGuardrail）は別途付与必須。"
+						}
+					],
+					"source": "https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails.html, https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-enforcements.html"
+				}
+			}
+		},
+		{
+			"id": "clean-agentcore",
+			"label": "clean",
+			"defect": null,
+			"source": "prod q_msjwjchz_e45e168f",
+			"mutation": null,
+			"item": {
+				"summary": "Bedrock AgentCore移行とカスタムオーケストレーション実装判断",
+				"question": {
+					"type": "single",
+					"question": "ある企業が、複数の業務システム（ERP、CRM、在庫管理）と連携してユーザーからの複雑な問い合わせに自動応答する生成AIアプリケーションを構築しています。要件は以下の通りです。ユーザーの自然言語クエリを受け取り、意図に応じて複数のシステムへのAPI呼び出しを順序制御付きで実行する（例：在庫確認 → 価格照会 → 発注処理の順序を保証）各ステップの実行結果を検証し、異常時はリトライまたは代替フローに分岐させる会話履歴とシステム間で共有すべきコンテキスト（顧客ID、セッション固有のトランザクションID等）をステートフルに管理する将来的にエージェントのオーケストレーションロジックをコードとしてバージョン管理・CI/CDでデプロイ可能にする同社は現在、Amazon Bedrock Agents（Classic）を使用してプロトタイプを構築していますが、本番展開に向けてアーキテクチャを見直しています。実装と統合の観点から、最も適切なアプローチはどれか。",
+					"options": [
+						{
+							"label": "A",
+							"text": "Bedrock Agents ClassicのデフォルトReAct戦略を継続利用し、アクショングループに全APIを登録してプロンプトエンジニアリングで順序制御とエラーハンドリングを実現する"
+						},
+						{
+							"label": "B",
+							"text": "Bedrock Agents Classicのカスタムオーケストレーション（Lambda関数）を採用し、ステップ実行順序・検証・リトライ・分岐ロジックをLambdaコードで実装し、セッション状態でコンテキストを管理する"
+						},
+						{
+							"label": "C",
+							"text": "Amazon Bedrock AgentCoreへ移行し、AgentCore Runtimeでエージェントをホスティング、カスタムオーケストレーションロジックはStep Functionsステートマシンで実装してAgentCore Gatewayから呼び出す"
+						},
+						{
+							"label": "D",
+							"text": "Amazon Bedrock AgentCoreへ移行し、AgentCore Runtimeでエージェントをホスティング、カスタムオーケストレーションロジックはAgentCore MemoryとIdentityを活用した独自Lambda関数で実装し、セッション状態はAgentCore Memoryで永続化する"
+						}
+					],
+					"correct": ["D"]
+				},
+				"explanation": {
+					"overview": "本問は、Amazon Bedrock Agents ClassicからAgentCoreへの移行判断と、複雑なマルチシステム連携・ステートフルな会話管理を要するユースケースにおける「実装と統合」の最適解を問うものです。",
+					"correct_reason": "AgentCoreはBedrock Agents Classicの後継サービスであり、新規実装ではAgentCoreを採用すべきです。AgentCore Runtimeでエージェントをホスティングし、カスタムオーケストレーションにはLambda関数を使用可能です。AgentCore Memory（会話履歴・コンテキスト永続化）とAgentCore Identity（認証・認可）を組み合わせることで、要件の「ステートフルなコンテキスト管理」「順序制御・検証・分岐」「コードとしてのバージョン管理・CI/CD」をすべて満たします。AgentCore Memoryはセッション跨ぎの長期記憶と短期会話履歴の両方を管理でき、Lambda関数から透過的にアクセス可能です。",
+					"option_reasons": [
+						{
+							"label": "A",
+							"reason": "デフォルトReAct戦略はプロンプトベースの制御のみで、厳密なAPI実行順序保証・検証・リトライ・分岐などの決定的ロジックを実現困難です。またClassicは新規採用非推奨です。"
+						},
+						{
+							"label": "B",
+							"reason": "カスタムオーケストレーションLambda自体はClassicでも可能ですが、Classicは新規顧客向け提供終了（メンテナンスモード）のため、本番展開を見据えた新規実装には不適切です。"
+						},
+						{
+							"label": "C",
+							"reason": "AgentCore Gatewayは外部APIをMCP互換ツールとして公開する機能であり、エージェント内部のオーケストレーションロジック実行基盤ではありません。Step Functionsでオーケストレーションを外出しすると、エージェントの推論ループと統合できず、ストリーミング応答やツール使用の即時性が損なわれます。"
+						},
+						{
+							"label": "D",
+							"reason": "AgentCoreはClassicの後継として推奨され、Runtime・Memory・Identityを統合提供します。Lambdaベースのカスタムオーケストレーションで決定的ロジックを実装し、Memoryでステートフルなコンテキスト管理が可能で、コードとしてバージョン管理・CI/CDデプロイにも対応できます。"
+						}
+					],
+					"source": "https://docs.aws.amazon.com/bedrock/latest/userguide/agents-customize.html; https://docs.aws.amazon.com/bedrock/latest/userguide/orch-strategy.html; https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/what-is-bedrock-agentcore.html"
+				}
+			}
+		},
+		{
+			"id": "real-unsupported-name",
+			"label": "defective",
+			"defect": "unsupported_specific_name",
+			"source": "prod q_msjvxu5d_92400f20",
+			"mutation": "無改変。選択肢Bが bedrock:GuardrailIdentifier 条件キーを名指ししているが、解説のB欄はその固有名に一切触れず「リソースベースポリシーで許可」と言い換えている。",
+			"item": {
+				"summary": "Bedrock Guardrails組織レベル強制の制約と要件",
+				"question": {
+					"type": "single",
+					"question": "ある企業では、AWS Organizations を使用して複数の AWS アカウントを一元管理しています。全アカウントでの Amazon Bedrock モデル推論呼び出しにおいて、統一された安全基準を強制適用するため、Amazon Bedrock Guardrails を組織レベルの宣言的ポリシーで強制することを計画しています。以下の要件を満たすガードレールを作成し、組織ポリシーで適用する際、事前に確認・対応が必要となる項目として正しいものはどれか。",
+					"options": [
+						{
+							"label": "A",
+							"text": "ガードレールに Automated Reasoning checks（自動推論チェック）を含めても、組織ポリシーで問題なく強制適用できる"
+						},
+						{
+							"label": "B",
+							"text": "ガードレールの ID とバージョンが有効であることを確認し、メンバーアカウントがランタイム評価を実行できるようリソースベースポリシーで bedrock:GuardrailIdentifier 条件キーを許可する"
+						},
+						{
+							"label": "C",
+							"text": "Content filters（コンテンツフィルター）の Hate カテゴリを「High」に設定すると、組織ポリシー適用時にすべてのモデル推論リクエストがブロックされるため、避けるべきである"
+						},
+						{
+							"label": "D",
+							"text": "Standard ティアのガードレールを組織ポリシーで強制する場合、Cross-Region Inference を無効化してからポリシーを適用する必要がある"
+						}
+					],
+					"correct": ["B"]
+				},
+				"explanation": {
+					"overview": "AWS Organizations の宣言的ポリシーで Amazon Bedrock Guardrails を組織全体に強制適用するには、ガードレール ID の有効性確認、メンバーアカウントへのランタイム評価権限付与、Service Quotas の確認、Automated Reasoning ポリシーの非包含確認が必須要件となります。",
+					"correct_reason": "選択肢 B は、組織レベルでの Guardrails 強制に必要な 2 つの重要要件（ガードレール ID の有効性確認と、メンバーアカウントがランタイム評価を実行するためのリソースベースポリシーでの許可）を正しく記述しています。公式ドキュメントでは、無効なガードレール ID を指定すると組織全体で API 呼び出しが失敗すること、およびメンバーアカウントが強制されたガードレールを評価できるよう IAM 権限を付与する必要があることが明記されています。",
+					"option_reasons": [
+						{
+							"label": "A",
+							"reason": "誤り。Automated Reasoning checks を含むガードレールは組織レベルのポリシーでサポートされていません。公式ドキュメントでは、組織レベルで適用する前にガードレールに Automated Reasoning ポリシーが含まれていないことを確認する必要があると明記されています。"
+						},
+						{
+							"label": "B",
+							"reason": "正解。ガードレール ID の有効性確認（無効な ID だと組織全体で API 失敗）と、メンバーアカウントがランタイム評価を実行できるようリソースベースポリシーで許可することが、組織ポリシー適用の必須要件としてドキュメントに記載されています。"
+						},
+						{
+							"label": "C",
+							"reason": "誤り。Content filters の強度設定（High 含む）が組織ポリシー適用時にすべてのリクエストをブロックするという仕様は存在しません。フィルター強度は検出感度を調整するものであり、組織ポリシーの適用可否に影響しません。"
+						},
+						{
+							"label": "D",
+							"reason": "誤り。Standard ティアは Cross-Region Inference に対応しており、それを無効化する必要はありません。むしろ Standard ティアでは Cross-Region Inference を活用した分散推論が可能です。"
+						}
+					],
+					"source": "https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails.html, https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_bedrock.html, https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_bedrock_best_practices.html"
+				}
+			}
+		},
+		{
+			"id": "real-requirement-contradiction",
+			"label": "defective",
+			"defect": "requirement_contradiction",
+			"source": "prod q_msjzxso6_2637d627",
+			"mutation": "無改変。設問の要件3「本番相当のストリーミング体験(トークン単位の逐次表示)を損なわないこと」に対し、正解Aは同期モードを選ばせている。",
+			"item": {
+				"summary": "Bedrock Guardrails ストリーミング時の同期/非同期モードとトレース取得の挙動",
+				"question": {
+					"type": "single",
+					"question": "ある企業が Amazon Bedrock を使用して、顧客向けサポートチャットボットを構築しています。このチャットボットでは Amazon Bedrock Guardrails を導入し、有害コンテンツのフィルタリングと Contextual Grounding Policy による RAG 回答のグラウンディング検証を行っています。アプリケーションは InvokeModelWithResponseStream API を使用してストリーミング応答を実装しており、エンドユーザーにはトークン単位で段階的に回答を表示しています。開発チームは本番環境へのデプロイ前に、以下の要件を満たすテスト・検証手順を確立しようとしています。1. ガードレールの作業用ドラフト（DRAFT）とバージョン付きスナップショット（例：バージョン 3）の両方を、同一のテストプロンプトセットで比較検証できること。2. ストリーミング応答中にガードレールが介入した場合、どのポリシー（コンテンツフィルタ、センシティブ情報、Contextual Grounding 等）がトリガーされたかを特定できること。3. 本番相当のストリーミング体験（トークン単位の逐次表示）を損なわないこと。開発チームが採用すべき最も適切なテスト・検証アプローチはどれか。",
+					"options": [
+						{
+							"label": "A",
+							"text": "コンソールのテストウィンドウで Working draft と Version 3 を切り替えてテストプロンプトを実行し、View trace で各ポリシーの違反詳細を確認する。ストリーミング挙動の検証は、本番と同一の InvokeModelWithResponseStream 呼び出しにおいて X-Amzn-Bedrock-Trace: ENABLED ヘッダーを付与し、streamProcessingMode: SYNCHRONOUS を指定して実施する。"
+						},
+						{
+							"label": "B",
+							"text": "コンソールのテストウィンドウはドラフトのみテスト可能なため、バージョン 3 の検証には ApplyGuardrail API を個別に呼び出す。ストリーミング時のトレース取得は streamProcessingMode: ASYNCHRONOUS を指定し、最終チャンクの amazon-bedrock-trace フィールドからポリシー別違反を確認する。"
+						},
+						{
+							"label": "C",
+							"text": "コンソールのテストウィンドウでドラフトとバージョン 3 の両方をテスト可能。ストリーミング検証では streamProcessingMode: ASYNCHRONOUS を指定し、逐次表示をブロックせずに最終チャンクのトレースで全ポリシーの違反を確認する。ただし X-Amzn-Bedrock-GuardrailVersion ヘッダーは DRAFT 固定でテストする。"
+						},
+						{
+							"label": "D",
+							"text": "ApplyGuardrail API を使用してプロンプトとモデル応答を個別に評価し、バージョン指定なしで常に最新ドラフトをテストする。ストリーミング本番では streamProcessingMode: SYNCHRONOUS を採用し、ガードレール介入時に即座にストリームを停止してエラーメッセージを表示する。"
+						}
+					],
+					"correct": ["A"]
+				},
+				"explanation": {
+					"overview": "本問は、Amazon Bedrock Guardrails をストリーミング応答（InvokeModelWithResponseStream）と組み合わせた本番グレードの GenAI アプリケーションにおいて、ドラフトとバージョンの両方を同一条件で比較検証する、ストリーミング中のポリシー別介入をトレースで特定する、ユーザー体験（逐次表示）を損なわないという 3 つの要件を同時に満たすテスト・検証アプローチを問うものです。",
+					"correct_reason": "正解 A は、コンソールのテストウィンドウでドラフトとバージョンを切り替えてテスト可能であり、View trace でポリシー別違反を確認できる点、ストリーミング検証で X-Amzn-Bedrock-Trace: ENABLED ヘッダーと streamProcessingMode: SYNCHRONOUS を組み合わせることで、本番相当の安全性（介入時にストリームを保留して即時遮断）を確保しつつ最終チャンクのトレースで介入ポリシーを特定できる点、同期モードでもガードレール処理完了後は正常にストリームが流れるため逐次表示のユーザー体験を維持できる点のすべてを満たしています。",
+					"option_reasons": [
+						{
+							"label": "A",
+							"reason": "コンソールでドラフトとバージョンの両方をテストでき、View trace でポリシー別違反を確認可能。ストリーミング検証でトレース有効化と同期モードを組み合わせることで、本番相当の安全性と介入ポリシーの特定、逐次表示の体験維持を両立できる。"
+						},
+						{
+							"label": "B",
+							"reason": "コンソールのテストウィンドウはバージョンも選択してテスト可能であり、ドラフトのみという記述は誤り。ApplyGuardrail API はモデル呼び出しとは独立した評価用であり、ストリーミング呼び出しとの相互作用検証には不適切。非同期モード推奨も本番安全性要件と矛盾する。"
+						},
+						{
+							"label": "C",
+							"reason": "X-Amzn-Bedrock-GuardrailVersion を DRAFT 固定でテストすると、要件のドラフトとバージョン 3 の比較検証ができない。非同期モード採用も本番安全性要件（即時遮断）と矛盾する。"
+						},
+						{
+							"label": "D",
+							"reason": "ApplyGuardrail API を主手段とするとストリーミング応答とガードレールの相互作用（介入時のストリーム停止挙動等）を検証できない。バージョン指定なしで常に最新ドラフトをテストするのは本番デプロイのベストプラクティス（不変バージョン固定）に反する。"
+						}
+					],
+					"source": "https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-test.html"
+				}
+			}
+		},
+		{
+			"id": "mut-pii-requirement",
+			"label": "defective",
+			"defect": "requirement_contradiction",
+			"source": "derived from q_msjvuov0_c4f5bb76",
+			"mutation": "設問に「アプリケーションコードの追加実装は行えない」という要件を追加した。正解Cはアプリケーション側で match フィールドを除外する実装を要求するため矛盾する。",
+			"item": {
+				"summary": "Bedrock GuardrailsのPIIマスキングとログ・トレースの挙動の違い",
+				"question": {
+					"type": "single",
+					"question": "金融サービス企業が、Amazon Bedrock を用いた顧客対話型チャットボットを開発しています。同社は Amazon Bedrock Guardrails の Sensitive Information Filters を導入し、会話中にクレジットカード番号（CREDIT_DEBIT_CARD_NUMBER）や米国社会保障番号（US_SOCIAL_SECURITY_NUMBER）などの機微情報を検知してマスキング（{CREDIT_DEBIT_CARD_NUMBER} 等へ置換）する要件を満たしています。開発チームは以下の運用要件も満たす必要があります。1. モデル呼び出しログ（CloudWatch Logs）に機微情報が残らないこと 2. Guardrails のトレース出力（Converse API の trace オブジェクト等）を監査用途で保存する際、機微情報の生値が含まれないこと 開発チームが「最も適切かつ管理コストを抑えた構成」を選ぶ場合、正しい対応はどれか。 なお本要件は、マネージドサービスの設定のみで満たす必要があり、アプリケーションコードの追加実装は一切行えないものとします。",
+					"options": [
+						{
+							"label": "A",
+							"text": "Guardrails の Sensitive Information Filters を Mask モードに設定し、CloudWatch Logs のデータ保護ポリシー（Log Data Protection）を併用してログ内の機微情報をマスクする。トレース出力の match フィールドは Guardrails 側で自動的にマスクされるため、追加対応は不要。"
+						},
+						{
+							"label": "B",
+							"text": "Guardrails を Block モードに変更し、機微情報が含まれるリクエスト/レスポンスを完全に遮断する。これでログにもトレースにも機微情報が残らなくなる。"
+						},
+						{
+							"label": "C",
+							"text": "Guardrails の Mask モードを維持し、CloudWatch Logs のデータ保護ポリシーでログ内機微情報をマスクする。一方、トレース出力の match フィールドには設計上、生の機微情報値が含まれるため、アプリケーション側でトレースを保存する前に match フィールドを除外または別途マスキング処理を行う。"
+						},
+						{
+							"label": "D",
+							"text": "Guardrails でカスタム正規表現フィルタを追加し、クレジットカード番号と SSN のパターンを独自定義して Mask モードで検知させる。ビルトイン PII タイプより正確に検知できるため、ログ・トレース双方で追加対策が不要になる。"
+						}
+					],
+					"correct": ["C"]
+				},
+				"explanation": {
+					"overview": "本問は Amazon Bedrock Guardrails の Sensitive Information Filters を Mask モードで運用する際の、モデル呼び出しログとトレース出力における機微情報の扱いを問う問題です。公式ドキュメントに明記されている通り、PII マスキングはモデルへの入力とモデルからの応答にのみ適用され、CloudWatch Logs の model invocation logs には元の生データが残り、トレース出力の match フィールドには設計上マスク前の生 PII 値が格納されます。したがって、ログ保護には CloudWatch Logs データ保護ポリシーを併用し、トレース保存時にはアプリケーション側で match フィールドを除外またはマスキングする実装が必要となります。",
+					"correct_reason": "Guardrails の Mask モードはモデル入出力テキストのみをマスキングし、CloudWatch Logs の model invocation logs には元の生リクエストが記録されるため CloudWatch Logs データ保護ポリシーが必要です。またトレース出力の match フィールドには設計上生の PII 値が含まれるため、監査保存時に機微情報を含めない要件を満たすにはアプリケーション側での対処が必要です。これがマネージド機能を最大限活用しつつ要件を満たす最小コストの構成です。",
+					"option_reasons": [
+						{
+							"label": "A",
+							"reason": "トレース出力の match フィールドは Guardrails 側で自動的にマスクされず、設計上生の PII 値が含まれるため「追加対応不要」は誤りです。"
+						},
+						{
+							"label": "B",
+							"reason": "Block モードにしてもモデル呼び出しログには生データが残り、トレースにも生値が入るため要件を満たせません。また業務上会話を遮断せず匿名化して継続したいケースでは Block は不適切です。"
+						},
+						{
+							"label": "C",
+							"reason": "Mask モード維持＋CloudWatch Logs データ保護ポリシー併用でログを保護し、トレースの match フィールドはアプリ側で除外・マスキングすることで、両要件をマネージド機能中心で最小コストで満たせます。"
+						},
+						{
+							"label": "D",
+							"reason": "カスタム正規表現を追加してもログ・トレースの挙動は変わりません（ビルトインと同じ制約が適用される）。また「ビルトインより正確」とは限らず、ドキュメントは文脈があるほど精度が上がるとし単語・正規表現のみの検知に注意を促しています。"
+						}
+					],
+					"source": "https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-sensitive-filters.html"
+				}
+			}
+		},
+		{
+			"id": "mut-pii-label",
+			"label": "defective",
+			"defect": "correct_label_mismatch",
+			"source": "derived from q_msjvuov0_c4f5bb76",
+			"mutation": "correct を C から A に付け替えた。解説は依然としてCを正解として説明し、option_reasons のA欄は「誤りです」と述べている。",
+			"item": {
+				"summary": "Bedrock GuardrailsのPIIマスキングとログ・トレースの挙動の違い",
+				"question": {
+					"type": "single",
+					"question": "金融サービス企業が、Amazon Bedrock を用いた顧客対話型チャットボットを開発しています。同社は Amazon Bedrock Guardrails の Sensitive Information Filters を導入し、会話中にクレジットカード番号（CREDIT_DEBIT_CARD_NUMBER）や米国社会保障番号（US_SOCIAL_SECURITY_NUMBER）などの機微情報を検知してマスキング（{CREDIT_DEBIT_CARD_NUMBER} 等へ置換）する要件を満たしています。開発チームは以下の運用要件も満たす必要があります。1. モデル呼び出しログ（CloudWatch Logs）に機微情報が残らないこと 2. Guardrails のトレース出力（Converse API の trace オブジェクト等）を監査用途で保存する際、機微情報の生値が含まれないこと 開発チームが「最も適切かつ管理コストを抑えた構成」を選ぶ場合、正しい対応はどれか。",
+					"options": [
+						{
+							"label": "A",
+							"text": "Guardrails の Sensitive Information Filters を Mask モードに設定し、CloudWatch Logs のデータ保護ポリシー（Log Data Protection）を併用してログ内の機微情報をマスクする。トレース出力の match フィールドは Guardrails 側で自動的にマスクされるため、追加対応は不要。"
+						},
+						{
+							"label": "B",
+							"text": "Guardrails を Block モードに変更し、機微情報が含まれるリクエスト/レスポンスを完全に遮断する。これでログにもトレースにも機微情報が残らなくなる。"
+						},
+						{
+							"label": "C",
+							"text": "Guardrails の Mask モードを維持し、CloudWatch Logs のデータ保護ポリシーでログ内機微情報をマスクする。一方、トレース出力の match フィールドには設計上、生の機微情報値が含まれるため、アプリケーション側でトレースを保存する前に match フィールドを除外または別途マスキング処理を行う。"
+						},
+						{
+							"label": "D",
+							"text": "Guardrails でカスタム正規表現フィルタを追加し、クレジットカード番号と SSN のパターンを独自定義して Mask モードで検知させる。ビルトイン PII タイプより正確に検知できるため、ログ・トレース双方で追加対策が不要になる。"
+						}
+					],
+					"correct": ["A"]
+				},
+				"explanation": {
+					"overview": "本問は Amazon Bedrock Guardrails の Sensitive Information Filters を Mask モードで運用する際の、モデル呼び出しログとトレース出力における機微情報の扱いを問う問題です。公式ドキュメントに明記されている通り、PII マスキングはモデルへの入力とモデルからの応答にのみ適用され、CloudWatch Logs の model invocation logs には元の生データが残り、トレース出力の match フィールドには設計上マスク前の生 PII 値が格納されます。したがって、ログ保護には CloudWatch Logs データ保護ポリシーを併用し、トレース保存時にはアプリケーション側で match フィールドを除外またはマスキングする実装が必要となります。",
+					"correct_reason": "Guardrails の Mask モードはモデル入出力テキストのみをマスキングし、CloudWatch Logs の model invocation logs には元の生リクエストが記録されるため CloudWatch Logs データ保護ポリシーが必要です。またトレース出力の match フィールドには設計上生の PII 値が含まれるため、監査保存時に機微情報を含めない要件を満たすにはアプリケーション側での対処が必要です。これがマネージド機能を最大限活用しつつ要件を満たす最小コストの構成です。",
+					"option_reasons": [
+						{
+							"label": "A",
+							"reason": "トレース出力の match フィールドは Guardrails 側で自動的にマスクされず、設計上生の PII 値が含まれるため「追加対応不要」は誤りです。"
+						},
+						{
+							"label": "B",
+							"reason": "Block モードにしてもモデル呼び出しログには生データが残り、トレースにも生値が入るため要件を満たせません。また業務上会話を遮断せず匿名化して継続したいケースでは Block は不適切です。"
+						},
+						{
+							"label": "C",
+							"reason": "Mask モード維持＋CloudWatch Logs データ保護ポリシー併用でログを保護し、トレースの match フィールドはアプリ側で除外・マスキングすることで、両要件をマネージド機能中心で最小コストで満たせます。"
+						},
+						{
+							"label": "D",
+							"reason": "カスタム正規表現を追加してもログ・トレースの挙動は変わりません（ビルトインと同じ制約が適用される）。また「ビルトインより正確」とは限らず、ドキュメントは文脈があるほど精度が上がるとし単語・正規表現のみの検知に注意を促しています。"
+						}
+					],
+					"source": "https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-sensitive-filters.html"
+				}
+			}
+		},
+		{
+			"id": "mut-pii-ambiguous",
+			"label": "defective",
+			"defect": "ambiguous_correct",
+			"source": "derived from q_msjvuov0_c4f5bb76",
+			"mutation": "選択肢Aを正解Cと実質同じ主張に書き換えた。single 形式だが正解が2つになる。",
+			"item": {
+				"summary": "Bedrock GuardrailsのPIIマスキングとログ・トレースの挙動の違い",
+				"question": {
+					"type": "single",
+					"question": "金融サービス企業が、Amazon Bedrock を用いた顧客対話型チャットボットを開発しています。同社は Amazon Bedrock Guardrails の Sensitive Information Filters を導入し、会話中にクレジットカード番号（CREDIT_DEBIT_CARD_NUMBER）や米国社会保障番号（US_SOCIAL_SECURITY_NUMBER）などの機微情報を検知してマスキング（{CREDIT_DEBIT_CARD_NUMBER} 等へ置換）する要件を満たしています。開発チームは以下の運用要件も満たす必要があります。1. モデル呼び出しログ（CloudWatch Logs）に機微情報が残らないこと 2. Guardrails のトレース出力（Converse API の trace オブジェクト等）を監査用途で保存する際、機微情報の生値が含まれないこと 開発チームが「最も適切かつ管理コストを抑えた構成」を選ぶ場合、正しい対応はどれか。",
+					"options": [
+						{
+							"label": "A",
+							"text": "Guardrails の Sensitive Information Filters を Mask モードに設定し、CloudWatch Logs のデータ保護ポリシーを併用してログ内の機微情報をマスクする。トレース出力の match フィールドには生の機微情報値が含まれるため、監査用途で保存する前にアプリケーション側で match フィールドを取り除く処理を実装する。"
+						},
+						{
+							"label": "B",
+							"text": "Guardrails を Block モードに変更し、機微情報が含まれるリクエスト/レスポンスを完全に遮断する。これでログにもトレースにも機微情報が残らなくなる。"
+						},
+						{
+							"label": "C",
+							"text": "Guardrails の Mask モードを維持し、CloudWatch Logs のデータ保護ポリシーでログ内機微情報をマスクする。一方、トレース出力の match フィールドには設計上、生の機微情報値が含まれるため、アプリケーション側でトレースを保存する前に match フィールドを除外または別途マスキング処理を行う。"
+						},
+						{
+							"label": "D",
+							"text": "Guardrails でカスタム正規表現フィルタを追加し、クレジットカード番号と SSN のパターンを独自定義して Mask モードで検知させる。ビルトイン PII タイプより正確に検知できるため、ログ・トレース双方で追加対策が不要になる。"
+						}
+					],
+					"correct": ["C"]
+				},
+				"explanation": {
+					"overview": "本問は Amazon Bedrock Guardrails の Sensitive Information Filters を Mask モードで運用する際の、モデル呼び出しログとトレース出力における機微情報の扱いを問う問題です。公式ドキュメントに明記されている通り、PII マスキングはモデルへの入力とモデルからの応答にのみ適用され、CloudWatch Logs の model invocation logs には元の生データが残り、トレース出力の match フィールドには設計上マスク前の生 PII 値が格納されます。したがって、ログ保護には CloudWatch Logs データ保護ポリシーを併用し、トレース保存時にはアプリケーション側で match フィールドを除外またはマスキングする実装が必要となります。",
+					"correct_reason": "Guardrails の Mask モードはモデル入出力テキストのみをマスキングし、CloudWatch Logs の model invocation logs には元の生リクエストが記録されるため CloudWatch Logs データ保護ポリシーが必要です。またトレース出力の match フィールドには設計上生の PII 値が含まれるため、監査保存時に機微情報を含めない要件を満たすにはアプリケーション側での対処が必要です。これがマネージド機能を最大限活用しつつ要件を満たす最小コストの構成です。",
+					"option_reasons": [
+						{
+							"label": "A",
+							"reason": "トレース出力の match フィールドは Guardrails 側で自動的にマスクされず、設計上生の PII 値が含まれるため「追加対応不要」は誤りです。"
+						},
+						{
+							"label": "B",
+							"reason": "Block モードにしてもモデル呼び出しログには生データが残り、トレースにも生値が入るため要件を満たせません。また業務上会話を遮断せず匿名化して継続したいケースでは Block は不適切です。"
+						},
+						{
+							"label": "C",
+							"reason": "Mask モード維持＋CloudWatch Logs データ保護ポリシー併用でログを保護し、トレースの match フィールドはアプリ側で除外・マスキングすることで、両要件をマネージド機能中心で最小コストで満たせます。"
+						},
+						{
+							"label": "D",
+							"reason": "カスタム正規表現を追加してもログ・トレースの挙動は変わりません（ビルトインと同じ制約が適用される）。また「ビルトインより正確」とは限らず、ドキュメントは文脈があるほど精度が上がるとし単語・正規表現のみの検知に注意を促しています。"
+						}
+					],
+					"source": "https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-sensitive-filters.html"
+				}
+			}
+		},
+		{
+			"id": "mut-org-requirement",
+			"label": "defective",
+			"defect": "requirement_contradiction",
+			"source": "derived from q_msjw2k8h_21239b90",
+			"mutation": "設問に「メンバーアカウント側で追加のIAM設定を行わない」という要件を追加した。正解Bはメンバーアカウントの IAM ロールへの bedrock:ApplyGuardrail 付与を手順に含むため矛盾する。",
+			"item": {
+				"summary": "組織レベルでのBedrockガードレール強制適用の正しい設計手順",
+				"question": {
+					"type": "single",
+					"question": "ある企業が AWS Organizations を使用して複数の AWS アカウントを管理しています。同社は Amazon Bedrock を用いた生成 AI アプリケーションを複数の部門で展開しており、全アカウントのモデル推論呼び出しに対して統一的な安全ガードレールを強制適用したいと考えています。以下の要件を満たすアーキテクチャを設計する必要があります。管理アカウントで一元的にガードレールを作成・バージョン管理する、組織内のすべてのアカウント（既存および将来追加されるアカウント）で、モデル推論時に例外なくガードレールが適用される、アプリケーションチームが独自に追加のアプリケーション固有ガードレールを設定した場合、より制限的な制御が優先される、運用負荷を最小化し、誤設定による推論失敗を防ぐ。正しい実装手順の組み合わせとして最も適切なものはどれか。 ただし、メンバーアカウント側では追加のIAM設定を一切行わないこととします。",
+					"options": [
+						{
+							"label": "A",
+							"text": "管理アカウントで自動推論ポリシーを含むガードレールを作成しバージョン化 → リソースベースポリシーで bedrock:InvokeModel を組織全体に許可 → AWS Organizations で BEDROCK_POLICY タイプを有効化 → ガードレール ARN とバージョンを指定したポリシーをルート OU にアタッチ"
+						},
+						{
+							"label": "B",
+							"text": "管理アカウントで自動推論ポリシーを含まないガードレールを作成しバージョン化 → リソースベースポリシーで bedrock:ApplyGuardrail を組織全体に許可 → メンバーアカウントの IAM ロールに bedrock:ApplyGuardrail 権限を付与 → AWS Organizations で BEDROCK_POLICY タイプを有効化 → ガードレール ARN とバージョンを指定したポリシーをルート OU にアタッチ"
+						},
+						{
+							"label": "C",
+							"text": "各メンバーアカウントで個別にガードレールを作成しバージョン化 → アカウントレベルの適用設定で各ガードレールを指定 → AWS Organizations で BEDROCK_POLICY タイプを有効化 → 組織ポリシーで各アカウントのガードレール ARN をリストアップ"
+						},
+						{
+							"label": "D",
+							"text": "管理アカウントで自動推論ポリシーを含むガードレールを作成しバージョン化 → リソースベースポリシーで bedrock:ApplyGuardrail を組織全体に許可 → AWS Organizations で BEDROCK_POLICY タイプを有効化 → ガードレール ARN とバージョンを指定したポリシーをルート OU にアタッチ → メンバーアカウントの IAM 設定は不要（組織ポリシーが自動的に権限を付与するため）"
+						}
+					],
+					"correct": ["B"]
+				},
+				"explanation": {
+					"overview": "Amazon Bedrock Guardrails の組織レベル適用（Guardrails Enforcements）を正しく実装するには、自動推論ポリシーを除外し、正しい IAM 権限（bedrock:ApplyGuardrail）を管理アカウントのリソースベースポリシーとメンバーアカウントの実行ロールの両方に付与し、AWS Organizations で BEDROCK_POLICY タイプを有効化した上でバージョン指定のポリシーをアタッチする必要があります。レイヤード保護により、アプリケーション固有のガードレールが併用される場合はより制限的な制御が自動的に優先されます。",
+					"correct_reason": "選択肢 B は、自動推論ポリシーを含まないこと、リソースベースポリシーで bedrock:ApplyGuardrail を許可すること、メンバーアカウントの IAM ロールにも同権限を付与すること、組織ポリシータイプを有効化してバージョン指定ポリシーをアタッチすることなど、公式ドキュメントで必須とされるすべての手順を正しく網羅しています。自動推論ポリシーはガードレール適用で非対応であり含めると実行時エラーになる、bedrock:InvokeModel ではガードレール評価を許可できない、組織ポリシーだけでは IAM 権限は自動付与されない、といった公式仕様の制約をすべてクリアしています。",
+					"option_reasons": [
+						{
+							"label": "A",
+							"reason": "自動推論ポリシーを含めると実行時エラーになる。また bedrock:InvokeModel 権限ではガードレール評価（ApplyGuardrail）を許可できない。"
+						},
+						{
+							"label": "B",
+							"reason": "自動推論ポリシーを除外し、正しい権限（bedrock:ApplyGuardrail）をリソースベースポリシーとメンバーアカウント IAM の両方に付与し、組織ポリシータイプ有効化とバージョン指定ポリシーのアタッチを行うなど、必須手順をすべて正しく満たしている。"
+						},
+						{
+							"label": "C",
+							"reason": "メンバーアカウントごとに個別作成・設定するのは一元管理と将来のアカウント自動適用の要件に反し、組織レベル適用のメリットを活かせていない。"
+						},
+						{
+							"label": "D",
+							"reason": "自動推論ポリシーを含めると失敗する。またメンバーアカウントの IAM 設定が不要という記述は誤りで、組織ポリシーは適用を強制するだけで IAM 権限（bedrock:ApplyGuardrail）は別途付与必須。"
+						}
+					],
+					"source": "https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails.html, https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-enforcements.html"
+				}
+			}
+		},
+		{
+			"id": "mut-org-unsupported-name",
+			"label": "defective",
+			"defect": "unsupported_specific_name",
+			"source": "derived from q_msjw2k8h_21239b90",
+			"mutation": "選択肢Bに bedrock:GuardrailArn 条件キーの併記という具体手順を追加した。解説のB欄はこの固有名に一切触れていない。",
+			"item": {
+				"summary": "組織レベルでのBedrockガードレール強制適用の正しい設計手順",
+				"question": {
+					"type": "single",
+					"question": "ある企業が AWS Organizations を使用して複数の AWS アカウントを管理しています。同社は Amazon Bedrock を用いた生成 AI アプリケーションを複数の部門で展開しており、全アカウントのモデル推論呼び出しに対して統一的な安全ガードレールを強制適用したいと考えています。以下の要件を満たすアーキテクチャを設計する必要があります。管理アカウントで一元的にガードレールを作成・バージョン管理する、組織内のすべてのアカウント（既存および将来追加されるアカウント）で、モデル推論時に例外なくガードレールが適用される、アプリケーションチームが独自に追加のアプリケーション固有ガードレールを設定した場合、より制限的な制御が優先される、運用負荷を最小化し、誤設定による推論失敗を防ぐ。正しい実装手順の組み合わせとして最も適切なものはどれか。",
+					"options": [
+						{
+							"label": "A",
+							"text": "管理アカウントで自動推論ポリシーを含むガードレールを作成しバージョン化 → リソースベースポリシーで bedrock:InvokeModel を組織全体に許可 → AWS Organizations で BEDROCK_POLICY タイプを有効化 → ガードレール ARN とバージョンを指定したポリシーをルート OU にアタッチ"
+						},
+						{
+							"label": "B",
+							"text": "管理アカウントで自動推論ポリシーを含まないガードレールを作成しバージョン化 → リソースベースポリシーで bedrock:ApplyGuardrail を組織全体に許可 → メンバーアカウントの IAM ロールに bedrock:ApplyGuardrail 権限を付与 → AWS Organizations で BEDROCK_POLICY タイプを有効化 → ガードレール ARN とバージョンを指定したポリシーをルート OU にアタッチ（このときポリシーには bedrock:GuardrailArn 条件キーを併記して適用範囲を絞る）"
+						},
+						{
+							"label": "C",
+							"text": "各メンバーアカウントで個別にガードレールを作成しバージョン化 → アカウントレベルの適用設定で各ガードレールを指定 → AWS Organizations で BEDROCK_POLICY タイプを有効化 → 組織ポリシーで各アカウントのガードレール ARN をリストアップ"
+						},
+						{
+							"label": "D",
+							"text": "管理アカウントで自動推論ポリシーを含むガードレールを作成しバージョン化 → リソースベースポリシーで bedrock:ApplyGuardrail を組織全体に許可 → AWS Organizations で BEDROCK_POLICY タイプを有効化 → ガードレール ARN とバージョンを指定したポリシーをルート OU にアタッチ → メンバーアカウントの IAM 設定は不要（組織ポリシーが自動的に権限を付与するため）"
+						}
+					],
+					"correct": ["B"]
+				},
+				"explanation": {
+					"overview": "Amazon Bedrock Guardrails の組織レベル適用（Guardrails Enforcements）を正しく実装するには、自動推論ポリシーを除外し、正しい IAM 権限（bedrock:ApplyGuardrail）を管理アカウントのリソースベースポリシーとメンバーアカウントの実行ロールの両方に付与し、AWS Organizations で BEDROCK_POLICY タイプを有効化した上でバージョン指定のポリシーをアタッチする必要があります。レイヤード保護により、アプリケーション固有のガードレールが併用される場合はより制限的な制御が自動的に優先されます。",
+					"correct_reason": "選択肢 B は、自動推論ポリシーを含まないこと、リソースベースポリシーで bedrock:ApplyGuardrail を許可すること、メンバーアカウントの IAM ロールにも同権限を付与すること、組織ポリシータイプを有効化してバージョン指定ポリシーをアタッチすることなど、公式ドキュメントで必須とされるすべての手順を正しく網羅しています。自動推論ポリシーはガードレール適用で非対応であり含めると実行時エラーになる、bedrock:InvokeModel ではガードレール評価を許可できない、組織ポリシーだけでは IAM 権限は自動付与されない、といった公式仕様の制約をすべてクリアしています。",
+					"option_reasons": [
+						{
+							"label": "A",
+							"reason": "自動推論ポリシーを含めると実行時エラーになる。また bedrock:InvokeModel 権限ではガードレール評価（ApplyGuardrail）を許可できない。"
+						},
+						{
+							"label": "B",
+							"reason": "自動推論ポリシーを除外し、正しい権限（bedrock:ApplyGuardrail）をリソースベースポリシーとメンバーアカウント IAM の両方に付与し、組織ポリシータイプ有効化とバージョン指定ポリシーのアタッチを行うなど、必須手順をすべて正しく満たしている。"
+						},
+						{
+							"label": "C",
+							"reason": "メンバーアカウントごとに個別作成・設定するのは一元管理と将来のアカウント自動適用の要件に反し、組織レベル適用のメリットを活かせていない。"
+						},
+						{
+							"label": "D",
+							"reason": "自動推論ポリシーを含めると失敗する。またメンバーアカウントの IAM 設定が不要という記述は誤りで、組織ポリシーは適用を強制するだけで IAM 権限（bedrock:ApplyGuardrail）は別途付与必須。"
+						}
+					],
+					"source": "https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails.html, https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-enforcements.html"
+				}
+			}
+		},
+		{
+			"id": "mut-agentcore-label",
+			"label": "defective",
+			"defect": "correct_label_mismatch",
+			"source": "derived from q_msjwjchz_e45e168f",
+			"mutation": "correct を D から C に付け替えた。解説の correct_reason はDを正解として説明し、option_reasons のC欄は「不適切」と述べている。",
+			"item": {
+				"summary": "Bedrock AgentCore移行とカスタムオーケストレーション実装判断",
+				"question": {
+					"type": "single",
+					"question": "ある企業が、複数の業務システム（ERP、CRM、在庫管理）と連携してユーザーからの複雑な問い合わせに自動応答する生成AIアプリケーションを構築しています。要件は以下の通りです。ユーザーの自然言語クエリを受け取り、意図に応じて複数のシステムへのAPI呼び出しを順序制御付きで実行する（例：在庫確認 → 価格照会 → 発注処理の順序を保証）各ステップの実行結果を検証し、異常時はリトライまたは代替フローに分岐させる会話履歴とシステム間で共有すべきコンテキスト（顧客ID、セッション固有のトランザクションID等）をステートフルに管理する将来的にエージェントのオーケストレーションロジックをコードとしてバージョン管理・CI/CDでデプロイ可能にする同社は現在、Amazon Bedrock Agents（Classic）を使用してプロトタイプを構築していますが、本番展開に向けてアーキテクチャを見直しています。実装と統合の観点から、最も適切なアプローチはどれか。",
+					"options": [
+						{
+							"label": "A",
+							"text": "Bedrock Agents ClassicのデフォルトReAct戦略を継続利用し、アクショングループに全APIを登録してプロンプトエンジニアリングで順序制御とエラーハンドリングを実現する"
+						},
+						{
+							"label": "B",
+							"text": "Bedrock Agents Classicのカスタムオーケストレーション（Lambda関数）を採用し、ステップ実行順序・検証・リトライ・分岐ロジックをLambdaコードで実装し、セッション状態でコンテキストを管理する"
+						},
+						{
+							"label": "C",
+							"text": "Amazon Bedrock AgentCoreへ移行し、AgentCore Runtimeでエージェントをホスティング、カスタムオーケストレーションロジックはStep Functionsステートマシンで実装してAgentCore Gatewayから呼び出す"
+						},
+						{
+							"label": "D",
+							"text": "Amazon Bedrock AgentCoreへ移行し、AgentCore Runtimeでエージェントをホスティング、カスタムオーケストレーションロジックはAgentCore MemoryとIdentityを活用した独自Lambda関数で実装し、セッション状態はAgentCore Memoryで永続化する"
+						}
+					],
+					"correct": ["C"]
+				},
+				"explanation": {
+					"overview": "本問は、Amazon Bedrock Agents ClassicからAgentCoreへの移行判断と、複雑なマルチシステム連携・ステートフルな会話管理を要するユースケースにおける「実装と統合」の最適解を問うものです。",
+					"correct_reason": "AgentCoreはBedrock Agents Classicの後継サービスであり、新規実装ではAgentCoreを採用すべきです。AgentCore Runtimeでエージェントをホスティングし、カスタムオーケストレーションにはLambda関数を使用可能です。AgentCore Memory（会話履歴・コンテキスト永続化）とAgentCore Identity（認証・認可）を組み合わせることで、要件の「ステートフルなコンテキスト管理」「順序制御・検証・分岐」「コードとしてのバージョン管理・CI/CD」をすべて満たします。AgentCore Memoryはセッション跨ぎの長期記憶と短期会話履歴の両方を管理でき、Lambda関数から透過的にアクセス可能です。",
+					"option_reasons": [
+						{
+							"label": "A",
+							"reason": "デフォルトReAct戦略はプロンプトベースの制御のみで、厳密なAPI実行順序保証・検証・リトライ・分岐などの決定的ロジックを実現困難です。またClassicは新規採用非推奨です。"
+						},
+						{
+							"label": "B",
+							"reason": "カスタムオーケストレーションLambda自体はClassicでも可能ですが、Classicは新規顧客向け提供終了（メンテナンスモード）のため、本番展開を見据えた新規実装には不適切です。"
+						},
+						{
+							"label": "C",
+							"reason": "AgentCore Gatewayは外部APIをMCP互換ツールとして公開する機能であり、エージェント内部のオーケストレーションロジック実行基盤ではありません。Step Functionsでオーケストレーションを外出しすると、エージェントの推論ループと統合できず、ストリーミング応答やツール使用の即時性が損なわれます。"
+						},
+						{
+							"label": "D",
+							"reason": "AgentCoreはClassicの後継として推奨され、Runtime・Memory・Identityを統合提供します。Lambdaベースのカスタムオーケストレーションで決定的ロジックを実装し、Memoryでステートフルなコンテキスト管理が可能で、コードとしてバージョン管理・CI/CDデプロイにも対応できます。"
+						}
+					],
+					"source": "https://docs.aws.amazon.com/bedrock/latest/userguide/agents-customize.html; https://docs.aws.amazon.com/bedrock/latest/userguide/orch-strategy.html; https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/what-is-bedrock-agentcore.html"
+				}
+			}
+		},
+		{
+			"id": "mut-agentcore-ambiguous",
+			"label": "defective",
+			"defect": "ambiguous_correct",
+			"source": "derived from q_msjwjchz_e45e168f",
+			"mutation": "選択肢Cを正解Dと実質同じ構成に書き換えた。single 形式だが正解が2つになる。",
+			"item": {
+				"summary": "Bedrock AgentCore移行とカスタムオーケストレーション実装判断",
+				"question": {
+					"type": "single",
+					"question": "ある企業が、複数の業務システム（ERP、CRM、在庫管理）と連携してユーザーからの複雑な問い合わせに自動応答する生成AIアプリケーションを構築しています。要件は以下の通りです。ユーザーの自然言語クエリを受け取り、意図に応じて複数のシステムへのAPI呼び出しを順序制御付きで実行する（例：在庫確認 → 価格照会 → 発注処理の順序を保証）各ステップの実行結果を検証し、異常時はリトライまたは代替フローに分岐させる会話履歴とシステム間で共有すべきコンテキスト（顧客ID、セッション固有のトランザクションID等）をステートフルに管理する将来的にエージェントのオーケストレーションロジックをコードとしてバージョン管理・CI/CDでデプロイ可能にする同社は現在、Amazon Bedrock Agents（Classic）を使用してプロトタイプを構築していますが、本番展開に向けてアーキテクチャを見直しています。実装と統合の観点から、最も適切なアプローチはどれか。",
+					"options": [
+						{
+							"label": "A",
+							"text": "Bedrock Agents ClassicのデフォルトReAct戦略を継続利用し、アクショングループに全APIを登録してプロンプトエンジニアリングで順序制御とエラーハンドリングを実現する"
+						},
+						{
+							"label": "B",
+							"text": "Bedrock Agents Classicのカスタムオーケストレーション（Lambda関数）を採用し、ステップ実行順序・検証・リトライ・分岐ロジックをLambdaコードで実装し、セッション状態でコンテキストを管理する"
+						},
+						{
+							"label": "C",
+							"text": "Amazon Bedrock AgentCoreへ移行し、AgentCore Runtimeでエージェントをホスティング、カスタムオーケストレーションロジックはAgentCore MemoryとIdentityを活用したLambda関数で実装し、セッション状態はAgentCore Memoryで永続化する"
+						},
+						{
+							"label": "D",
+							"text": "Amazon Bedrock AgentCoreへ移行し、AgentCore Runtimeでエージェントをホスティング、カスタムオーケストレーションロジックはAgentCore MemoryとIdentityを活用した独自Lambda関数で実装し、セッション状態はAgentCore Memoryで永続化する"
+						}
+					],
+					"correct": ["D"]
+				},
+				"explanation": {
+					"overview": "本問は、Amazon Bedrock Agents ClassicからAgentCoreへの移行判断と、複雑なマルチシステム連携・ステートフルな会話管理を要するユースケースにおける「実装と統合」の最適解を問うものです。",
+					"correct_reason": "AgentCoreはBedrock Agents Classicの後継サービスであり、新規実装ではAgentCoreを採用すべきです。AgentCore Runtimeでエージェントをホスティングし、カスタムオーケストレーションにはLambda関数を使用可能です。AgentCore Memory（会話履歴・コンテキスト永続化）とAgentCore Identity（認証・認可）を組み合わせることで、要件の「ステートフルなコンテキスト管理」「順序制御・検証・分岐」「コードとしてのバージョン管理・CI/CD」をすべて満たします。AgentCore Memoryはセッション跨ぎの長期記憶と短期会話履歴の両方を管理でき、Lambda関数から透過的にアクセス可能です。",
+					"option_reasons": [
+						{
+							"label": "A",
+							"reason": "デフォルトReAct戦略はプロンプトベースの制御のみで、厳密なAPI実行順序保証・検証・リトライ・分岐などの決定的ロジックを実現困難です。またClassicは新規採用非推奨です。"
+						},
+						{
+							"label": "B",
+							"reason": "カスタムオーケストレーションLambda自体はClassicでも可能ですが、Classicは新規顧客向け提供終了（メンテナンスモード）のため、本番展開を見据えた新規実装には不適切です。"
+						},
+						{
+							"label": "C",
+							"reason": "AgentCore Gatewayは外部APIをMCP互換ツールとして公開する機能であり、エージェント内部のオーケストレーションロジック実行基盤ではありません。Step Functionsでオーケストレーションを外出しすると、エージェントの推論ループと統合できず、ストリーミング応答やツール使用の即時性が損なわれます。"
+						},
+						{
+							"label": "D",
+							"reason": "AgentCoreはClassicの後継として推奨され、Runtime・Memory・Identityを統合提供します。Lambdaベースのカスタムオーケストレーションで決定的ロジックを実装し、Memoryでステートフルなコンテキスト管理が可能で、コードとしてバージョン管理・CI/CDデプロイにも対応できます。"
+						}
+					],
+					"source": "https://docs.aws.amazon.com/bedrock/latest/userguide/agents-customize.html; https://docs.aws.amazon.com/bedrock/latest/userguide/orch-strategy.html; https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/what-is-bedrock-agentcore.html"
+				}
+			}
+		}
+	]
+}
