@@ -7,11 +7,12 @@ ADR 0018 の「トレードオフ / 留意」に書いた教訓に対応する�
 
 入力は2種類を受け付ける。
 
-- `sample_gate_scores.py --out` が書いた JSONL(`item` と `attempts[].item` を読む)
+- `sample_generations.py --out` が書いた JSONL(`item` を読む。旧 `sample_gate_scores.py`
+  が書いた `attempts[].item` 形式も読める)
 - `tests/fixtures/judge_calibration.json`(`cases[].item` を読む)
 
 使い方:
-    python scripts/check_quality_defects.py docs_local/gate-scores-2026-08-09-arm1.jsonl
+    python scripts/check_quality_defects.py runs.jsonl
     python scripts/check_quality_defects.py --calibration
     python scripts/check_quality_defects.py *.jsonl --list
 
@@ -102,7 +103,7 @@ def main() -> int:
         description="決定的品質チェックを実データに当てて検出件数を出す"
     )
     parser.add_argument(
-        "paths", nargs="*", type=Path, help="sample_gate_scores.py の JSONL"
+        "paths", nargs="*", type=Path, help="sample_generations.py の JSONL"
     )
     parser.add_argument(
         "--calibration",
