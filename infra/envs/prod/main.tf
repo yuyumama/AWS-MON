@@ -17,10 +17,6 @@ data "aws_ssm_parameter" "cognito_client_id" {
   name = "/app/aws-mon/prod/cognito-client-id"
 }
 
-data "aws_ssm_parameter" "agent_guardrail_id" {
-  name = "/app/aws-mon/prod/agent-guardrail-id"
-}
-
 locals {
   name_prefix = "aws-mon-prod"
 
@@ -75,8 +71,7 @@ locals {
   agent_environment = {
     OPENROUTER_API_KEY_PARAM        = "/app/aws-mon/prod/openrouter-api-key"
     AGENT_MODEL_ID                  = var.agent_model_id
-    AGENT_GUARDRAIL_ID              = data.aws_ssm_parameter.agent_guardrail_id.value
-    AGENT_GUARDRAIL_VERSION         = var.agent_guardrail_version
+    AGENT_JUDGE_MODEL_ID            = var.agent_judge_model_id
     AGENT_OBSERVABILITY_ENABLED     = "true"
     OTEL_PYTHON_DISTRO              = "aws_distro"
     OTEL_PYTHON_CONFIGURATOR        = "aws_configurator"
@@ -560,11 +555,6 @@ data "aws_iam_policy_document" "agent_runtime" {
     resources = ["arn:${local.partition}:ssm:${local.region}:${local.account_id}:parameter/app/aws-mon/prod/openrouter-api-key"]
   }
 
-  statement {
-    sid       = "ApplyGuardrail"
-    actions   = ["bedrock:ApplyGuardrail"]
-    resources = ["arn:${local.partition}:bedrock:${local.region}:${local.account_id}:guardrail/${data.aws_ssm_parameter.agent_guardrail_id.value}"]
-  }
 }
 
 resource "aws_iam_role_policy" "agent_runtime" {

@@ -24,7 +24,6 @@ except ModuleNotFoundError:
 
 
 from .content_policy import ContentPolicyViolationError
-from .guardrail import GateResult, GroundingBlockedError
 from .judge import JudgeResult
 from .log_filters import suppress_duplicate_strands_warnings
 from .model_config import model_id as _model_id
@@ -91,15 +90,11 @@ def _generate_quiz(
     domain_label_en: str | None = None,
     *,
     on_phase: Callable[[str, dict[str, int]], None] | None = None,
-) -> tuple[QuizItem, GateResult, JudgeResult]:
+) -> tuple[QuizItem, JudgeResult]:
     if os.environ.get("AGENT_STUB") == "1":
         if on_phase is not None:
             on_phase("generation", {"attempt": 1, "totalAttempts": 1})
-        return (
-            _stub_quiz(cert, domain),
-            GateResult(status="not_run", detail="stub"),
-            JudgeResult(status="not_run", detail="stub"),
-        )
+        return _stub_quiz(cert, domain), JudgeResult(status="not_run", detail="stub")
 
     from .agent import generate_quiz
 
@@ -110,22 +105,21 @@ def _generate_quiz(
         domain_label_en=domain_label_en,
         on_phase=on_phase,
     )
-    return result.item, result.gate, result.judge
+    return result.item, result.judge
 
 
-def _quality(gate: GateResult, judge: JudgeResult, evaluated_at: str) -> dict[str, Any]:
-    # evaluator はオンライン評価(AgentCore Evaluations)廃止後は常に none(ADR 0011)。
-    # 過去アイテムに agentcore_evaluate / self_review が残るためフィールド自体は維持する。
+def _quality(judge: JudgeResult, evaluated_at: str) -> dict[str, Any]:
+    # inlineGate / evaluator / score / issues は後方互換のために残すフィールドである。
+    # オンライン評価は ADR 0011 で、Guardrails グラウンディングゲートは ADR 0018 で
+    # それぞれ廃止したため、新規保存の値は常に not_run / none で score は付かない。
+    # 既存の DynamoDB アイテムに passed / failed / self_review / agentcore_evaluate と
+    # スコアが残っているため、フィールド自体は維持する。
     quality: dict[str, Any] = {
-        "inlineGate": gate.status,
+        "inlineGate": "not_run",
         "evaluator": "none",
     }
-    if gate.status != "not_run":
+    if judge.status not in ("not_run", "error"):
         quality["evaluatedAt"] = evaluated_at
-        if gate.grounding_score is not None:
-            quality["score"] = gate.grounding_score
-    if gate.detail:
-        quality["issues"] = gate.detail
 
     # 自己整合ジャッジ(#140)。判定できなかった場合はフィールドごと出さず、
     # ジャッジ導入前に保存されたアイテムと同じ形にする。
@@ -212,7 +206,7 @@ def build_generate_response(
             generate_kwargs.update(
                 domain_label=domain_label, domain_label_en=domain_label_en
             )
-        item, gate, judge = _generate_quiz(**generate_kwargs)
+        item, judge = _generate_quiz(**generate_kwargs)
     generated_at = _now_iso()
     latency_ms = int((time.perf_counter() - started) * 1000)
     source = item.explanation.source
@@ -230,7 +224,7 @@ def build_generate_response(
             "generatedAt": generated_at,
             "latencyMs": latency_ms,
         },
-        "quality": _quality(gate, judge, generated_at),
+        "quality": _quality(judge, generated_at),
         "sourceRefs": _source_refs(source, generated_at),
     }
 
@@ -244,18 +238,6 @@ def _source_refs(source: str, retrieved_at: str) -> list[dict[str, str]]:
     """
     urls = split_source_urls(source) or [source]
     return [{"url": url, "retrievedAt": retrieved_at} for url in urls]
-
-
-def grounding_blocked_response(
-    exc: GroundingBlockedError, *, agent_version: str = AGENT_VERSION
-) -> dict[str, Any]:
-    return {
-        "status": "error",
-        "code": "grounding_blocked",
-        "message": str(exc),
-        "modelId": _model_id(),
-        "agentVersion": agent_version,
-    }
 
 
 def error_response(
@@ -322,13 +304,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(
                 HTTPStatus.OK, build_generate_response(body, started=started)
             )
-        except GroundingBlockedError as exc:
-            # ドキュメントに根拠づかない問題は保存させない(フェーズ3-3のインラインゲート)
-            self._send_json(
-                HTTPStatus.UNPROCESSABLE_ENTITY, grounding_blocked_response(exc)
-            )
         except ContentPolicyViolationError as exc:
-            # 日本語プレーンテキスト要件を満たさない問題は保存させない。
+            # 日本語プレーンテキスト要件・決定的品質チェックを満たさない問題は保存させない。
             self._send_json(HTTPStatus.UNPROCESSABLE_ENTITY, error_response(exc))
         except Exception as exc:  # noqa: BLE001 - HTTP boundary returns JSON error
             # .agent は重い依存(strands/mcp)を持つため、エラー時のみ遅延importする

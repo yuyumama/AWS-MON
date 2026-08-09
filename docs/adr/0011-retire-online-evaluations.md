@@ -33,7 +33,10 @@ ADR 0007 の決定3で、継続品質評価として AgentCore Evaluations の�
 
 監視3層のうち**「品質（傾向）」層＝AgentCore Evaluations オンライン評価を廃止**し、
 品質担保は、インラインの Guardrails グラウンディングゲート（`quiz_agent/guardrail.py`、
-全件・同期・fail-open）に一本化する。ADR 0007 の決定1（ADOT直送トレース）・
+全件・同期・fail-open）に一本化する。**（2026-08-09 訂正: このゲートは
+[ADR 0018](0018-retire-grounding-gate-as-quality-judge.md) で撤去した。品質担保は保存前の
+決定的チェック `quiz_agent/quality_checks.py` と自己整合ジャッジ `quiz_agent/judge.py` の
+2層に置き換わっている。）**ADR 0007 の決定1（ADOT直送トレース）・
 決定2（Guardrails ゲート）は維持する。検証テーマである AI オブザーバビリティの
 トレース・ログ・メトリクス・X-Ray Transaction Search・GenAI Observability も維持する。
 

@@ -1,12 +1,20 @@
-"""グラウンディングゲートのスコア分布を採取するバッチスクリプト(フェーズ0-b)。
+"""生成をN回まわして結果を採取するバッチスクリプト。
 
-prod実測の初回通過率が低い(issue #63)ことを受けて、しきい値の再設定を検討する
-材料としてグラウンディング/関連度スコアの分布を集める。AGENT_GUARDRAIL_ENFORCE=0
-でレポートモードに固定し、ゲートで弾かれても生成は止めない(スコアの記録が目的)。
+もとは `sample_gate_scores.py` で、Guardrails グラウンディングゲートのスコア分布を
+集めるためのものだった（issue #63、ADR 0010）。ADR 0018 でゲートを撤去したため、
+**採取対象を「生成された問題そのもの」と「調査完了状況・ジャッジ判定」に置き換えた。**
+
+このスクリプトが解く問題は変わっていない。**推測で変更せず、問題本文を保存したうえで
+測る**ことである。旧版は status/score/duration しか保存しておらず、ADR 0010/0015/0016 の
+全計測で「低スコアの問題が本当に悪かったか」を後から検証できなかった（ADR 0018 の背景）。
 
 使い方:
-    python scripts/sample_gate_scores.py --n 20 --cert aip
-    python scripts/sample_gate_scores.py --n 30 --cert aip --domain d1 --out scores.jsonl
+    python scripts/sample_generations.py --n 20 --cert aip
+    python scripts/sample_generations.py --n 30 --cert aip --domain d1 --out runs.jsonl
+
+出力した JSONL は次のスクリプトにそのまま渡せる。
+
+    python scripts/check_quality_defects.py runs.jsonl --list
 """
 
 from __future__ import annotations
@@ -37,8 +45,6 @@ sys.path.insert(0, str(AGENT_DIR))
 from quiz_agent.agent import generate_quiz  # noqa: E402
 from quiz_agent.model_config import model_id  # noqa: E402
 
-# しきい値候補(create_guardrail.py の既定 grounding=0.7 / relevance=0.5 周辺を含む)。
-THRESHOLDS = [0.5, 0.55, 0.6, 0.65, 0.7]
 MAX_CONSECUTIVE_FAILURES = 3
 DEPENDENCIES = (
     "strands-agents",
@@ -106,10 +112,12 @@ def sampling_metadata() -> dict[str, Any]:
         "model_id": model_id(),
         "dependencies": versions,
         # 腕の識別に必要な設定を残す(後から run.log を読み返さずに済むように)。
-        "guard_content_mode": os.environ.get("AGENT_GATE_GUARD_CONTENT", "mixed"),
-        "guardrail_retries": os.environ.get("AGENT_GUARDRAIL_RETRIES", "1"),
-        "guardrail_enforce": os.environ.get("AGENT_GUARDRAIL_ENFORCE", "1"),
+        "judge_model_id": os.environ.get("AGENT_JUDGE_MODEL_ID"),
+        "research_enforce": os.environ.get("AGENT_RESEARCH_ENFORCE", "1"),
         "research_retries": os.environ.get("AGENT_RESEARCH_RETRIES", "2"),
+        "content_retries": os.environ.get("AGENT_CONTENT_RETRIES", "1"),
+        "docs_search_limit": os.environ.get("AGENT_DOCS_SEARCH_LIMIT", "1"),
+        "docs_read_limit": os.environ.get("AGENT_DOCS_READ_LIMIT", "2"),
     }
 
 
@@ -131,81 +139,61 @@ def _percentile(values: list[float], pct: float) -> float | None:
 
 def _stats_block(values: list[float]) -> dict[str, float | None]:
     if not values:
-        return {"mean": None, "median": None, "p25": None, "p75": None}
+        return {"mean": None, "median": None, "p25": None, "p75": None, "p90": None}
     return {
         "mean": stats.fmean(values),
         "median": stats.median(values),
         "p25": _percentile(values, 0.25),
         "p75": _percentile(values, 0.75),
+        "p90": _percentile(values, 0.90),
     }
+
+
+def _count_by(records: list[dict[str, Any]], key: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for record in records:
+        value = record.get(key)
+        if value is None:
+            continue
+        counts[str(value)] = counts.get(str(value), 0) + 1
+    return counts
 
 
 def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
     """サンプリング結果を集計する純粋関数(ユニットテスト用に分離)。
 
-    status別件数、grounding/relevanceスコアの mean・median・p25・p75、
-    しきい値候補ごとの通過率(そのしきい値以上のスコアだった割合)を返す。
-
-    **通過率として読むべきは passed_rate_scored である。**threshold_pass_rates は
-    grounding と relevance を軸ごとに独立して集計した値であり、ゲートの合否ではない
-    (ゲートは両者の AND で判定する)。ADR 0015 / 0016 はこの区別をせず
-    threshold_pass_rates["0.6"]["grounding"] を「初回通過率」として転記しており、
-    実際の通過率と最大14ポイントずれていた(issue #143)。
+    所要時間は ADR 0014 の job 締切(10分)を脅かしていないかの確認に使う。
+    調査プロンプトを変える計測(#142)では、難易度と同時に時間も見ること。
     """
-    status_counts: dict[str, int] = {}
-    for record in records:
-        status = record.get("status") or "error"
-        status_counts[status] = status_counts.get(status, 0) + 1
-
-    grounding_values = [
-        record["grounding"]
-        for record in records
-        if isinstance(record.get("grounding"), (int, float))
+    ok = [r for r in records if r.get("status") == "ok"]
+    durations = [
+        r["duration_sec"]
+        for r in records
+        if isinstance(r.get("duration_sec"), (int, float))
     ]
-    relevance_values = [
-        record["relevance"]
-        for record in records
-        if isinstance(record.get("relevance"), (int, float))
-    ]
-
-    threshold_pass_rates: dict[str, dict[str, float | None]] = {}
-    for threshold in THRESHOLDS:
-        threshold_pass_rates[str(threshold)] = {
-            "grounding": (
-                sum(1 for v in grounding_values if v >= threshold)
-                / len(grounding_values)
-                if grounding_values
-                else None
-            ),
-            "relevance": (
-                sum(1 for v in relevance_values if v >= threshold)
-                / len(relevance_values)
-                if relevance_values
-                else None
-            ),
-        }
-
-    # 分母は threshold_pass_rates と揃える(スコアが取れた件数)。揃えないと
-    # 2つの通過率を並べたときに読み手が取り違える。
-    scored = len(grounding_values)
-    passed = status_counts.get("passed", 0)
 
     return {
         "total": len(records),
-        "scored": scored,
-        "status_counts": status_counts,
-        # ゲートの合否(grounding と relevance の AND)。過去ADRとの比較にはこれを使う。
-        "passed_rate_scored": (passed / scored if scored else None),
-        "passed_rate_total": (passed / len(records) if records else None),
-        "grounding": _stats_block(grounding_values),
-        "relevance": _stats_block(relevance_values),
-        # 軸ごとの独立集計。合否ではないので通過率として読まないこと。
-        "threshold_pass_rates": threshold_pass_rates,
+        "ok": len(ok),
+        "status_counts": _count_by(records, "status"),
+        "research_counts": _count_by(records, "research_status"),
+        "judge_counts": _count_by(ok, "judge_status"),
+        "judge_defect_counts": _judge_defect_counts(ok),
+        "duration_sec": _stats_block(durations),
     }
+
+
+def _judge_defect_counts(records: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for record in records:
+        for defect_type in record.get("judge_defect_types") or []:
+            counts[defect_type] = counts.get(defect_type, 0) + 1
+    return counts
 
 
 def _sample_once(cert: str, domain: str | None) -> dict[str, Any]:
     started = time.monotonic()
+    resolved_domain: str | None = domain
     try:
         resolved_domain, domain_label, domain_label_en = _resolve_harness_domain(
             cert, domain
@@ -219,40 +207,22 @@ def _sample_once(cert: str, domain: str | None) -> dict[str, Any]:
     except Exception as e:  # noqa: BLE001 - 1回分の失敗として記録して継続する
         return {
             "status": "error",
-            "grounding": None,
-            "relevance": None,
-            "detail": None,
+            "error_code": getattr(e, "error_code", None),
+            "cert": cert,
+            "domain": resolved_domain,
             "duration_sec": time.monotonic() - started,
             "error": str(e),
         }
-    # status/grounding/relevance は「初回試行」を表す。AGENT_GUARDRAIL_RETRIES>0 で
-    # 回したときも過去ラン(RETRIES=0)と同じ意味で比較でき、summarize() の集計も
-    # 初回通過率のままになる。再生成後の結果は final_* と attempts[] に入れる。
-    first = result.attempts[0].gate if result.attempts else result.gate
-    final = result.gate
     return {
-        "status": first.status,
-        "grounding": first.grounding_score,
-        "relevance": first.relevance_score,
-        "detail": first.detail,
-        "final_status": final.status,
-        "final_grounding": final.grounding_score,
-        "final_relevance": final.relevance_score,
-        "attempt_count": len(result.attempts),
-        # 低群が本当に悪い問題なのか、再生成で良くなったのかを後から読むための本文。
-        "attempts": [
-            {
-                "attempt": a.attempt,
-                "status": a.gate.status,
-                "grounding": a.gate.grounding_score,
-                "relevance": a.gate.relevance_score,
-                "item": a.item.model_dump(),
-            }
-            for a in result.attempts
-        ],
+        "status": "ok",
+        "research_status": result.research.status,
+        "research_detail": result.research.detail,
+        "judge_status": result.judge.status,
+        "judge_defect_types": [defect.type for defect in result.judge.defects],
+        "judge_detail": result.judge.detail,
+        # 生成物の良し悪しは本文を読まないと判定できない。丸ごと残す。
         "item": result.item.model_dump(),
-        # 低スコアの原因が捏造(H1)か調査の的外れ(H2)かは、実際に取得された原文を
-        # 読まないと判別できない。ラベル付けのために丸ごと残す。
+        # 調査が的外れだったのかを後から読むために原文も残す。
         "source_texts": list(result.source_texts),
         "source_chars": sum(len(t) for t in result.source_texts),
         "cert": cert,
@@ -263,17 +233,9 @@ def _sample_once(cert: str, domain: str | None) -> dict[str, Any]:
 
 
 def main() -> int:
-    # 生成自体をブロックしないレポートモードに固定する(枠を無駄撃ちしないため)。
-    # load_dotenv より先に設定する(load_dotenv は既存の環境変数を上書きしないため、
-    # .env 側に AGENT_GUARDRAIL_ENFORCE=1 があってもレポートモードのままにできる)。
-    os.environ.setdefault("AGENT_GUARDRAIL_ENFORCE", "0")
-    # cli.py / server.py と違いこのスクリプトは .env を読んでいなかったため、
-    # AGENT_GUARDRAIL_ID や OPENROUTER_API_KEY が未設定のまま実行されていた。
     load_dotenv(AGENT_DIR / ".env")
 
-    parser = argparse.ArgumentParser(
-        description="グラウンディングゲートのスコア分布を採取する"
-    )
+    parser = argparse.ArgumentParser(description="生成をN回まわして結果を採取する")
     parser.add_argument("--n", type=int, default=20, help="サンプリング回数(既定20)")
     parser.add_argument("--cert", default="aip", help="資格コード(既定aip)")
     parser.add_argument(
@@ -300,7 +262,8 @@ def main() -> int:
             records.append(record)
             print(
                 f"[{i + 1}/{args.n}] status={record['status']} "
-                f"grounding={record['grounding']} relevance={record['relevance']} "
+                f"research={record.get('research_status')} "
+                f"judge={record.get('judge_status')} "
                 f"duration={record['duration_sec']:.1f}s"
                 + (f" error={record['error']}" if record["error"] else ""),
                 file=sys.stderr,

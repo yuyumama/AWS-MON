@@ -12,8 +12,8 @@ import pytest
 from openai import APIError
 
 from quiz_agent import agent as agent_module
-from quiz_agent.guardrail import GateResult
 from quiz_agent.model_config import model_id, openrouter_api_key
+from quiz_agent.research_status import ResearchResult
 from quiz_agent.schema import QuizItem
 
 
@@ -129,28 +129,25 @@ def _mock_research(monkeypatch: pytest.MonkeyPatch) -> FakeMCPClient:
     return client
 
 
-def test_gate_retry_reuses_research_and_only_repeats_structured_output(
+def test_regeneration_reuses_research_and_only_repeats_structured_output(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """再生成しても調査はやり直さない(MCP接続とツール一覧は1回)。
+
+    ADR 0018 でゲート起因の再生成は撤去したが、内容ポリシー違反と品質欠陥の
+    再生成は残る。調査済みの会話履歴を使い回す性質はそのまま維持する。
+    """
     client = _mock_research(monkeypatch)
     FakeAgent.structured_results = [
-        _quiz_item("初回はどれか。"),
+        _quiz_item("初回は<br>混入したものはどれか。"),
         _quiz_item("再生成はどれか。"),
     ]
-    gates = iter(
-        [
-            GateResult(status="failed", detail="grounding=0.1"),
-            GateResult(status="passed"),
-        ]
-    )
-    monkeypatch.setattr(agent_module, "gate_enabled", lambda: True)
-    monkeypatch.setattr(agent_module, "gate_retries", lambda: 1)
-    monkeypatch.setattr(agent_module, "check_grounding", lambda **kwargs: next(gates))
+    monkeypatch.setenv("AGENT_CONTENT_RETRIES", "1")
 
-    result = agent_module._generate_quiz_with_docs_and_gate("問題生成プロンプト")
+    result = agent_module._generate_quiz_with_research("問題生成プロンプト")
 
     assert result.item.question.question == "再生成はどれか。"
-    assert result.gate.status == "passed"
+    assert result.research.status == "complete"
     assert client.enter_count == 1
     assert client.list_tools_count == 1
     assert len(FakeAgent.instances) == 1
@@ -165,7 +162,8 @@ def test_structured_output_retry_keeps_research_history(
     FakeAgent.structured_results = [ValueError("invalid output"), _quiz_item()]
     monkeypatch.setattr(agent_module.time, "sleep", lambda seconds: None)
 
-    item, source_texts = agent_module._generate_quiz_with_docs("問題生成プロンプト")
+    result = agent_module._generate_quiz_with_research("問題生成プロンプト")
+    item, source_texts = result.item, result.source_texts
 
     assert item.question.question == "設問はどれか。"
     assert source_texts == ["調査済みAWSドキュメント原文"]
@@ -184,7 +182,7 @@ def test_structured_output_failure_does_not_fall_back_without_research(
     monkeypatch.setattr(agent_module, "_docs_mcp_enabled", lambda: True)
     monkeypatch.setattr(
         agent_module,
-        "_generate_quiz_with_docs_and_gate",
+        "_generate_quiz_with_research",
         fail_structured_output,
     )
     monkeypatch.setattr(
@@ -329,7 +327,8 @@ def test_research_transient_model_error_retries_with_fresh_agents(
     monkeypatch.setattr(agent_module, "Agent", _TransientThenSuccessfulAgent)
     FakeAgent.structured_results = [_quiz_item()]
 
-    item, source_texts = agent_module._generate_quiz_with_docs("問題生成プロンプト")
+    result = agent_module._generate_quiz_with_research("問題生成プロンプト")
+    item, source_texts = result.item, result.source_texts
 
     assert item.question.question == "設問はどれか。"
     assert source_texts == ["調査済みAWSドキュメント原文"]
@@ -357,7 +356,7 @@ def test_research_transient_model_error_exhaustion_reports_attempt_metadata(
     monkeypatch.setattr(agent_module, "Agent", _AlwaysTransientAgent)
 
     with pytest.raises(agent_module.DocsResearchError) as exc_info:
-        agent_module._generate_quiz_with_docs("問題生成プロンプト")
+        agent_module._generate_quiz_with_research("問題生成プロンプト")
 
     assert exc_info.value.cause_kind == "model"
     assert exc_info.value.original_exception_type == "APIError"
@@ -380,7 +379,7 @@ def test_mcp_list_tools_failure_is_not_retried(
     monkeypatch.setenv("AGENT_RESEARCH_RETRIES", "3")
 
     with pytest.raises(agent_module.DocsResearchError) as exc_info:
-        agent_module._generate_quiz_with_docs("問題生成プロンプト")
+        agent_module._generate_quiz_with_research("問題生成プロンプト")
 
     assert exc_info.value.cause_kind == "mcp"
     assert exc_info.value.original_exception_type == "RuntimeError"
@@ -476,71 +475,6 @@ def test_research_retry_kwargs_shortens_throttle_retries(
     monkeypatch.setenv("AGENT_MODEL_RETRY_ATTEMPTS", "2")
     kwargs = agent_module._research_retry_kwargs()
     assert kwargs["retry_strategy"]._max_attempts == 2
-
-
-# --- Phase 1-a: _gate_guard_content ------------------------------------------
-
-
-def test_gate_guard_content_excludes_correct_label_line() -> None:
-    item = _quiz_item()
-
-    content = agent_module._gate_guard_content(item)
-
-    assert "正解: " not in content
-
-
-def test_gate_guard_content_uses_grounding_claim_instead_of_correct_reason(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("AGENT_GATE_INCLUDE_OVERVIEW", raising=False)
-    item = _quiz_item()
-
-    content = agent_module._gate_guard_content(item)
-
-    assert "A: 正解" in content
-    assert item.explanation.grounding_claim_en in content
-    assert item.explanation.correct_reason not in content
-    assert "概要" not in content
-
-
-def test_gate_guard_content_includes_overview_when_enabled(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("AGENT_GATE_INCLUDE_OVERVIEW", "1")
-    item = _quiz_item()
-
-    content = agent_module._gate_guard_content(item)
-
-    assert "概要" in content
-
-
-def test_gate_guard_content_claim_only_drops_japanese_option_text(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """claim_only 腕では日本語の正解選択肢本文とラベル接頭辞を含めない。"""
-    monkeypatch.setenv("AGENT_GATE_GUARD_CONTENT", "claim_only")
-    monkeypatch.delenv("AGENT_GATE_INCLUDE_OVERVIEW", raising=False)
-    item = _quiz_item()
-
-    content = agent_module._gate_guard_content(item)
-
-    assert content == item.explanation.grounding_claim_en
-    assert "A: " not in content
-    assert "正解" not in content
-
-
-def test_gate_guard_content_defaults_to_mixed(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """未設定なら従来どおり日本語の正解選択肢本文を含む(既定の腕を変えない)。"""
-    monkeypatch.delenv("AGENT_GATE_GUARD_CONTENT", raising=False)
-    monkeypatch.delenv("AGENT_GATE_INCLUDE_OVERVIEW", raising=False)
-    item = _quiz_item()
-
-    content = agent_module._gate_guard_content(item)
-
-    assert "A: 正解" in content
-    assert item.explanation.grounding_claim_en in content
 
 
 # --- Phase 1-b: _tool_result_texts -------------------------------------------
@@ -644,7 +578,8 @@ def test_generate_quiz_with_docs_uses_read_documentation_result(
     client = _mock_research(monkeypatch)
     FakeAgent.structured_results = [_quiz_item()]
 
-    item, source_texts = agent_module._generate_quiz_with_docs("問題生成プロンプト")
+    result = agent_module._generate_quiz_with_research("問題生成プロンプト")
+    item, source_texts = result.item, result.source_texts
 
     assert item.question.question == "設問はどれか。"
     assert source_texts == ["調査済みAWSドキュメント原文"]
@@ -690,8 +625,6 @@ def _mock_empty_research(monkeypatch: pytest.MonkeyPatch, messages: list[Any]) -
         yield agent, []
 
     monkeypatch.setattr(agent_module, "_researched_agent", researched_agent)
-    monkeypatch.setattr(agent_module, "gate_enabled", lambda: True)
-    monkeypatch.setattr(agent_module, "gate_retries", lambda: 1)
     FakeAgent.structured_results = [_quiz_item()]
 
 
@@ -706,10 +639,10 @@ def test_empty_research_is_blocked_when_enforced(
     monkeypatch: pytest.MonkeyPatch, messages: list[Any], detail: str
 ) -> None:
     _mock_empty_research(monkeypatch, messages)
-    monkeypatch.setenv("AGENT_GUARDRAIL_ENFORCE", "1")
+    monkeypatch.setenv("AGENT_RESEARCH_ENFORCE", "1")
 
     with pytest.raises(agent_module.ResearchIncompleteError, match=detail):
-        agent_module._generate_quiz_with_docs_and_gate("問題生成プロンプト")
+        agent_module._generate_quiz_with_research("問題生成プロンプト")
 
     assert FakeAgent.instances[0].structured_count == 0
 
@@ -721,28 +654,35 @@ def test_empty_research_is_blocked_when_enforced(
         (_search_only_messages(), "no_read_documentation"),
     ],
 )
-def test_empty_research_returns_not_run_detail_in_report_mode(
+def test_empty_research_records_incomplete_when_not_enforced(
     monkeypatch: pytest.MonkeyPatch, messages: list[Any], detail: str
 ) -> None:
     _mock_empty_research(monkeypatch, messages)
-    monkeypatch.setenv("AGENT_GUARDRAIL_ENFORCE", "0")
+    monkeypatch.setenv("AGENT_RESEARCH_ENFORCE", "0")
 
-    result = agent_module._generate_quiz_with_docs_and_gate("問題生成プロンプト")
+    result = agent_module._generate_quiz_with_research("問題生成プロンプト")
 
-    assert result.gate == GateResult(status="not_run", detail=detail)
+    assert result.research == ResearchResult(status="incomplete", detail=detail)
 
 
-def test_empty_research_falls_back_when_gate_is_disabled_even_if_enforced(
+def test_empty_research_is_blocked_without_any_guardrail_configuration(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """ガードレールの設定と無関係に fail-closed が効くこと(#141 の中心)。
+
+    撤去前は `gate_enabled() and gate_enforced()` が条件だったため、
+    AGENT_GUARDRAIL_ID が未設定だと調査未完了でもそのまま生成していた。
+    ガードレールの有無と調査の強制は無関係なので切り離した。
+    """
     _mock_empty_research(monkeypatch, _no_tool_messages())
-    monkeypatch.setattr(agent_module, "gate_enabled", lambda: False)
-    monkeypatch.setenv("AGENT_GUARDRAIL_ENFORCE", "1")
+    monkeypatch.delenv("AGENT_GUARDRAIL_ID", raising=False)
+    monkeypatch.delenv("AGENT_GUARDRAIL_ENFORCE", raising=False)
+    monkeypatch.delenv("AGENT_RESEARCH_ENFORCE", raising=False)
 
-    result = agent_module._generate_quiz_with_docs_and_gate("問題生成プロンプト")
+    with pytest.raises(agent_module.ResearchIncompleteError, match="no_tool_calls"):
+        agent_module._generate_quiz_with_research("問題生成プロンプト")
 
-    assert result.gate == GateResult(status="not_run", detail="no_tool_calls")
-    assert FakeAgent.instances[0].structured_count == 1
+    assert FakeAgent.instances[0].structured_count == 0
 
 
 def _docs_research_error() -> agent_module.DocsResearchError:
@@ -758,10 +698,9 @@ def test_research_failure_is_blocked_as_dependency_error_when_enforced(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(agent_module, "_docs_mcp_enabled", lambda: True)
-    monkeypatch.setattr(agent_module, "gate_enabled", lambda: True)
     monkeypatch.setattr(
         agent_module,
-        "_generate_quiz_with_docs_and_gate",
+        "_generate_quiz_with_research",
         lambda *args, **kwargs: (_ for _ in ()).throw(_docs_research_error()),
     )
     monkeypatch.setattr(
@@ -769,28 +708,33 @@ def test_research_failure_is_blocked_as_dependency_error_when_enforced(
         "_generate",
         lambda *args, **kwargs: pytest.fail("強制モードではフォールバックしないこと"),
     )
-    monkeypatch.setenv("AGENT_GUARDRAIL_ENFORCE", "1")
+    monkeypatch.setenv("AGENT_RESEARCH_ENFORCE", "1")
 
     with pytest.raises(agent_module.ResearchFailedError):
         agent_module.generate_quiz("saa")
 
 
-def test_research_failure_falls_back_when_gate_is_disabled_even_if_enforced(
+def test_research_failure_is_blocked_without_any_guardrail_configuration(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """調査失敗の fail-closed もガードレールの設定に依存しないこと。"""
     monkeypatch.setattr(agent_module, "_docs_mcp_enabled", lambda: True)
-    monkeypatch.setattr(agent_module, "gate_enabled", lambda: False)
     monkeypatch.setattr(
         agent_module,
-        "_generate_quiz_with_docs_and_gate",
+        "_generate_quiz_with_research",
         lambda *args, **kwargs: (_ for _ in ()).throw(_docs_research_error()),
     )
-    monkeypatch.setattr(agent_module, "_generate", lambda *args, **kwargs: _quiz_item())
-    monkeypatch.setenv("AGENT_GUARDRAIL_ENFORCE", "1")
+    monkeypatch.setattr(
+        agent_module,
+        "_generate",
+        lambda *args, **kwargs: pytest.fail("強制モードではフォールバックしないこと"),
+    )
+    monkeypatch.delenv("AGENT_GUARDRAIL_ID", raising=False)
+    monkeypatch.delenv("AGENT_GUARDRAIL_ENFORCE", raising=False)
+    monkeypatch.delenv("AGENT_RESEARCH_ENFORCE", raising=False)
 
-    result = agent_module.generate_quiz("saa")
-
-    assert result.gate == GateResult(status="not_run", detail="research_failed")
+    with pytest.raises(agent_module.ResearchFailedError):
+        agent_module.generate_quiz("saa")
 
 
 def test_research_failure_falls_back_with_not_run_detail_and_structured_log(
@@ -799,16 +743,16 @@ def test_research_failure_falls_back_with_not_run_detail_and_structured_log(
     monkeypatch.setattr(agent_module, "_docs_mcp_enabled", lambda: True)
     monkeypatch.setattr(
         agent_module,
-        "_generate_quiz_with_docs_and_gate",
+        "_generate_quiz_with_research",
         lambda *args, **kwargs: (_ for _ in ()).throw(_docs_research_error()),
     )
     monkeypatch.setattr(agent_module, "_generate", lambda *args, **kwargs: _quiz_item())
-    monkeypatch.setenv("AGENT_GUARDRAIL_ENFORCE", "0")
+    monkeypatch.setenv("AGENT_RESEARCH_ENFORCE", "0")
 
     with caplog.at_level(logging.WARNING, logger="quiz_agent.agent"):
         result = agent_module.generate_quiz("saa")
 
-    assert result.gate == GateResult(status="not_run", detail="research_failed")
+    assert result.research == ResearchResult(status="failed", detail="RuntimeError")
     research_logs = [
         json.loads(record.getMessage())
         for record in caplog.records
@@ -827,23 +771,20 @@ def test_research_failure_falls_back_with_not_run_detail_and_structured_log(
     ]
 
 
-def test_gate_disabled_result_is_logged_and_counted(
+def test_complete_research_is_logged_and_counted(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     _mock_research(monkeypatch)
     FakeAgent.structured_results = [_quiz_item()]
-    monkeypatch.setattr(agent_module, "gate_enabled", lambda: False)
+    monkeypatch.delenv("AGENT_RESEARCH_METRICS", raising=False)
     monkeypatch.delenv("AGENT_GATE_METRICS", raising=False)
 
-    result = agent_module._generate_quiz_with_docs_and_gate(
-        "問題生成プロンプト", cert="aip"
-    )
+    result = agent_module._generate_quiz_with_research("問題生成プロンプト", cert="aip")
 
-    assert result.gate == GateResult(status="not_run", detail="gate_disabled")
+    assert result.research == ResearchResult(status="complete")
     payload = json.loads(capsys.readouterr().out.strip())
-    assert payload["Status"] == "not_run"
-    assert payload["GateEvaluationCount"] == 1
-    assert payload["Reason"] == "gate_disabled"
+    assert payload["Status"] == "complete"
+    assert payload["ResearchCount"] == 1
 
 
 def test_docs_mcp_disabled_result_is_logged_and_counted(
@@ -851,72 +792,38 @@ def test_docs_mcp_disabled_result_is_logged_and_counted(
 ) -> None:
     monkeypatch.setattr(agent_module, "_docs_mcp_enabled", lambda: False)
     monkeypatch.setattr(agent_module, "_generate", lambda *args, **kwargs: _quiz_item())
+    monkeypatch.delenv("AGENT_RESEARCH_METRICS", raising=False)
     monkeypatch.delenv("AGENT_GATE_METRICS", raising=False)
 
     result = agent_module.generate_quiz("saa")
 
-    assert result.gate == GateResult(status="not_run", detail="docs_mcp_disabled")
-    payload = json.loads(capsys.readouterr().out.strip())
-    assert payload["Status"] == "not_run"
-    assert payload["GateEvaluationCount"] == 1
-    assert payload["Reason"] == "docs_mcp_disabled"
-
-
-# --- Phase 2: ゲートブロック後のフィードバック付き再生成 ------------------------
-
-
-def test_gate_retry_uses_feedback_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
-    _mock_research(monkeypatch)
-    FakeAgent.structured_results = [
-        _quiz_item("初回はどれか。"),
-        _quiz_item("再生成はどれか。"),
-    ]
-    gates = iter(
-        [
-            GateResult(status="failed", detail="grounding=0.1"),
-            GateResult(status="passed"),
-        ]
+    assert result.research == ResearchResult(
+        status="skipped", detail="docs_mcp_disabled"
     )
-    monkeypatch.setattr(agent_module, "gate_enabled", lambda: True)
-    monkeypatch.setattr(agent_module, "gate_retries", lambda: 1)
-    monkeypatch.setattr(agent_module, "check_grounding", lambda **kwargs: next(gates))
-
-    agent_module._generate_quiz_with_docs_and_gate("問題生成プロンプト")
-
-    assert FakeAgent.instances[0].structured_prompts == [
-        agent_module.QUIZ_FROM_RESEARCH_PROMPT,
-        agent_module.QUIZ_REGENERATE_FEEDBACK_PROMPT,
-    ]
+    payload = json.loads(capsys.readouterr().out.strip())
+    assert payload["Status"] == "skipped"
+    assert payload["ResearchCount"] == 1
+    assert payload["Reason"] == "docs_mcp_disabled"
 
 
 # --- 内容ポリシー違反後の再生成 ----------------------------------------------
 
 
-def test_content_violation_regenerates_once_after_gate(
+def test_content_violation_regenerates_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _mock_research(monkeypatch)
     invalid = _quiz_item("設問に<br>が混入したものはどれか。")
     FakeAgent.structured_results = [invalid, _quiz_item("再生成した設問はどれか。")]
-    gate_calls: list[dict[str, Any]] = []
-    monkeypatch.setattr(agent_module, "gate_enabled", lambda: True)
-    monkeypatch.setattr(agent_module, "gate_retries", lambda: 1)
     monkeypatch.setenv("AGENT_CONTENT_RETRIES", "1")
     events: list[tuple[str, dict[str, int]]] = []
 
-    def pass_gate(**kwargs: Any) -> GateResult:
-        gate_calls.append(kwargs)
-        return GateResult(status="passed")
-
-    monkeypatch.setattr(agent_module, "check_grounding", pass_gate)
-
-    result = agent_module._generate_quiz_with_docs_and_gate(
+    result = agent_module._generate_quiz_with_research(
         "問題生成プロンプト",
         on_phase=lambda phase, detail: events.append((phase, detail)),
     )
 
     assert result.item.question.question == "再生成した設問はどれか。"
-    assert len(gate_calls) == 1
     assert FakeAgent.instances[0].structured_count == 2
     assert "保存前の内容検証" in FakeAgent.instances[0].structured_prompts[1]
     assert "question.question" in FakeAgent.instances[0].structured_prompts[1]
@@ -932,24 +839,14 @@ def test_content_violation_fails_closed_after_retry(
         _quiz_item("設問に<br>が混入したものはどれか。"),
         _quiz_item("再生成しても<strong>違反</strong>があるのはどれか。"),
     ]
-    gate_calls: list[dict[str, Any]] = []
-    monkeypatch.setattr(agent_module, "gate_enabled", lambda: True)
-    monkeypatch.setattr(agent_module, "gate_retries", lambda: 1)
     monkeypatch.setenv("AGENT_CONTENT_RETRIES", "1")
-
-    def pass_gate(**kwargs: Any) -> GateResult:
-        gate_calls.append(kwargs)
-        return GateResult(status="passed")
-
-    monkeypatch.setattr(agent_module, "check_grounding", pass_gate)
 
     with pytest.raises(
         agent_module.ContentPolicyViolationError,
         match=r"question\.question: HTMLタグを含む",
     ):
-        agent_module._generate_quiz_with_docs_and_gate("問題生成プロンプト")
+        agent_module._generate_quiz_with_research("問題生成プロンプト")
 
-    assert len(gate_calls) == 1
     assert FakeAgent.instances[0].structured_count == 2
 
 
@@ -972,11 +869,10 @@ def test_quality_defect_regenerates_once_with_named_defect(
         _defective_item(),
         _quiz_item("再生成した設問はどれか。"),
     ]
-    monkeypatch.setattr(agent_module, "gate_enabled", lambda: False)
     monkeypatch.setenv("AGENT_CONTENT_RETRIES", "1")
     events: list[tuple[str, dict[str, int]]] = []
 
-    result = agent_module._generate_quiz_with_docs_and_gate(
+    result = agent_module._generate_quiz_with_research(
         "問題生成プロンプト",
         on_phase=lambda phase, detail: events.append((phase, detail)),
     )
@@ -999,13 +895,12 @@ def test_quality_defect_fails_closed_after_retry(
         _defective_item(),
         _defective_item("要件は次のとおり。"),
     ]
-    monkeypatch.setattr(agent_module, "gate_enabled", lambda: False)
     monkeypatch.setenv("AGENT_CONTENT_RETRIES", "1")
 
     with pytest.raises(
         agent_module.QualityDefectError, match="missing_question_prompt"
     ):
-        agent_module._generate_quiz_with_docs_and_gate("問題生成プロンプト")
+        agent_module._generate_quiz_with_research("問題生成プロンプト")
 
     assert FakeAgent.instances[0].structured_count == 2
 
@@ -1016,11 +911,10 @@ def test_quality_defect_error_code_is_content_invalid(
     """ADR 0014 の写像テーブルに既にある content_invalid を流用する。"""
     _mock_research(monkeypatch)
     FakeAgent.structured_results = [_defective_item()]
-    monkeypatch.setattr(agent_module, "gate_enabled", lambda: False)
     monkeypatch.setenv("AGENT_CONTENT_RETRIES", "0")
 
     with pytest.raises(agent_module.QualityDefectError) as excinfo:
-        agent_module._generate_quiz_with_docs_and_gate("問題生成プロンプト")
+        agent_module._generate_quiz_with_research("問題生成プロンプト")
 
     assert excinfo.value.error_code == "content_invalid"
 
@@ -1031,14 +925,13 @@ def test_quality_defect_is_logged_with_defect_codes(
     """どの欠陥で落ちたかを prod のログから追えること。"""
     _mock_research(monkeypatch)
     FakeAgent.structured_results = [_defective_item(), _defective_item()]
-    monkeypatch.setattr(agent_module, "gate_enabled", lambda: False)
     monkeypatch.setenv("AGENT_CONTENT_RETRIES", "1")
 
     with (
         caplog.at_level(logging.WARNING, logger="quiz_agent.agent"),
         pytest.raises(agent_module.QualityDefectError),
     ):
-        agent_module._generate_quiz_with_docs_and_gate("問題生成プロンプト")
+        agent_module._generate_quiz_with_research("問題生成プロンプト")
 
     events = [
         json.loads(record.message)
@@ -1064,10 +957,9 @@ def test_content_policy_violation_takes_precedence_over_quality_defect(
         _quiz_item("要件は<br>以下のとおりです。"),
         _quiz_item("再生成した設問はどれか。"),
     ]
-    monkeypatch.setattr(agent_module, "gate_enabled", lambda: False)
     monkeypatch.setenv("AGENT_CONTENT_RETRIES", "1")
 
-    agent_module._generate_quiz_with_docs_and_gate("問題生成プロンプト")
+    agent_module._generate_quiz_with_research("問題生成プロンプト")
 
     feedback = FakeAgent.instances[0].structured_prompts[1]
     assert "保存前の内容検証" in feedback
@@ -1098,60 +990,47 @@ def test_content_retry_without_docs_reuses_same_agent(
 # --- Phase 0-a: 構造化ログ ----------------------------------------------------
 
 
-def test_generate_quiz_with_docs_and_gate_logs_passed_result(
+def test_generate_quiz_with_research_logs_complete_result(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     _mock_research(monkeypatch)
     FakeAgent.structured_results = [_quiz_item()]
-    monkeypatch.setattr(agent_module, "gate_enabled", lambda: True)
-    monkeypatch.setattr(agent_module, "gate_retries", lambda: 1)
-    monkeypatch.setattr(
-        agent_module,
-        "check_grounding",
-        lambda **kwargs: GateResult(
-            status="passed", grounding_score=0.9, relevance_score=0.8
-        ),
-    )
 
     with caplog.at_level(logging.INFO, logger="quiz_agent.agent"):
-        result = agent_module._generate_quiz_with_docs_and_gate(
+        result = agent_module._generate_quiz_with_research(
             "問題生成プロンプト", cert="aip"
         )
 
-    assert result.gate.status == "passed"
-    gate_logs = [
+    assert result.research.status == "complete"
+    research_logs = [
         json.loads(r.getMessage())
         for r in caplog.records
-        if r.getMessage().startswith("{") and '"grounding_gate"' in r.getMessage()
+        if r.getMessage().startswith("{")
+        and '"research_completeness"' in r.getMessage()
     ]
-    assert len(gate_logs) == 1
-    assert gate_logs[0] == {
-        "event": "grounding_gate",
-        "status": "passed",
-        "grounding": 0.9,
-        "relevance": 0.8,
-        "attempt": 1,
-        "attempts": 2,
-        "cert": "aip",
-        "detail": None,
-    }
+    assert research_logs == [
+        {
+            "event": "research_completeness",
+            "status": "complete",
+            "cert": "aip",
+            "detail": None,
+        }
+    ]
 
 
-def test_phase_events_follow_generation_and_gate_retry_order(
+def test_phase_events_follow_generation_and_regeneration_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """ゲート撤去後の進捗フェーズ。guardrail フェーズは出なくなった。"""
     _mock_research(monkeypatch)
     FakeAgent.structured_results = [
-        _quiz_item("初回はどれか。"),
+        _quiz_item("初回は<br>混入したものはどれか。"),
         _quiz_item("再生成はどれか。"),
     ]
-    gates = iter([GateResult(status="failed"), GateResult(status="passed")])
-    monkeypatch.setattr(agent_module, "gate_enabled", lambda: True)
-    monkeypatch.setattr(agent_module, "gate_retries", lambda: 1)
-    monkeypatch.setattr(agent_module, "check_grounding", lambda **kwargs: next(gates))
+    monkeypatch.setenv("AGENT_CONTENT_RETRIES", "1")
     events: list[tuple[str, dict[str, int]]] = []
 
-    agent_module._generate_quiz_with_docs_and_gate(
+    agent_module._generate_quiz_with_research(
         "問題生成プロンプト",
         on_phase=lambda phase, detail: events.append((phase, detail)),
     )
@@ -1161,12 +1040,10 @@ def test_phase_events_follow_generation_and_gate_retry_order(
         "research",
         "research",
         "generation",
-        "guardrail",
         "regeneration",
-        "guardrail",
         "complete",
     ]
-    assert events[5][1] == {"attempt": 2, "totalAttempts": 2}
+    assert events[4][1] == {"attempt": 2, "totalAttempts": 2}
 
 
 def test_phase_callback_error_does_not_stop_generation(
@@ -1192,7 +1069,6 @@ def test_phase_callback_error_does_not_stop_generation(
 def test_generate_quiz_attaches_judge_result(monkeypatch: pytest.MonkeyPatch) -> None:
     _mock_research(monkeypatch)
     FakeAgent.structured_results = [_quiz_item()]
-    monkeypatch.setattr(agent_module, "gate_enabled", lambda: False)
     judged: list[QuizItem] = []
 
     def fake_judge(item: QuizItem, cert: str | None = None) -> Any:
@@ -1213,7 +1089,6 @@ def test_generate_quiz_does_not_block_on_defective_judge(
     """report-only の間は defective でも生成物を返すこと。"""
     _mock_research(monkeypatch)
     FakeAgent.structured_results = [_quiz_item()]
-    monkeypatch.setattr(agent_module, "gate_enabled", lambda: False)
     monkeypatch.setattr(
         agent_module,
         "judge_self_consistency",
@@ -1252,7 +1127,6 @@ def test_judge_runs_on_the_docs_less_fallback_path(
 def test_judge_receives_cert(monkeypatch: pytest.MonkeyPatch) -> None:
     _mock_research(monkeypatch)
     FakeAgent.structured_results = [_quiz_item()]
-    monkeypatch.setattr(agent_module, "gate_enabled", lambda: False)
     seen: list[str | None] = []
 
     def fake_judge(item: QuizItem, cert: str | None = None) -> Any:

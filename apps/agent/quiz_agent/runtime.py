@@ -20,14 +20,12 @@ except ModuleNotFoundError:
         return False
 
 
-from .guardrail import GroundingBlockedError
 from .log_filters import suppress_duplicate_strands_warnings
 from .server import (
     _as_json_bytes,
     _parse_body,
     build_generate_response,
     error_response,
-    grounding_blocked_response,
     quota_exhausted_response,
 )
 
@@ -94,11 +92,6 @@ class RuntimeHandler(BaseHTTPRequestHandler):
                 body, started=started, agent_version=AGENT_VERSION
             )
             self._send_json(HTTPStatus.OK, response)
-        except GroundingBlockedError as exc:
-            self._send_json(
-                HTTPStatus.OK,
-                grounding_blocked_response(exc, agent_version=AGENT_VERSION),
-            )
         except Exception as exc:  # noqa: BLE001 - AgentCore SDK maps non-200 to exceptions
             # .agent は重い依存(strands/mcp)を持つため、エラー時のみ遅延importする
             from .agent import QuotaExhaustedError
@@ -161,8 +154,6 @@ class RuntimeHandler(BaseHTTPRequestHandler):
                     agent_version=AGENT_VERSION,
                     on_phase=on_phase,
                 )
-            except GroundingBlockedError as exc:
-                result = grounding_blocked_response(exc, agent_version=AGENT_VERSION)
             except Exception as exc:  # noqa: BLE001 - 終端resultへエラーを格納する
                 from .agent import QuotaExhaustedError
 

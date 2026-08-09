@@ -93,6 +93,24 @@ grounding < 0.6 の5件を取得原文と突き合わせた結果、5件中4件�
 
 スコアによる生成のブロックと、ブロック起因の再生成をやめる。**`research_incomplete`（調査ターンがドキュメントを取得できなかった）の fail-closed は維持する**（issue #77 の決定。調査が失敗したまま生成すると本当に根拠のない問題ができる）。現在 `agent.py` で `gate_enforced()` がこの2用途を兼ねているため、分離が必要である。
 
+#### スコアの扱い: **案A（`ApplyGuardrail` 呼び出しごと撤去）を採る**（2026-08-09, issue #141）
+
+| 案 | 内容 | 採否 |
+|---|---|---|
+| **A** | **`ApplyGuardrail` 呼び出しごと撤去** | **採用** |
+| B | 呼び出しは残しスコアだけ記録 | 却下 |
+| C | 呼び出しを残しジャッジの入力にする | 却下 |
+
+根拠:
+
+- **grounding 軸の真陽性はゼロである。**記録を続けても品質の信号にならない。Bはゼロ情報に文字数課金を払い続ける案になる
+- **スコアは難易度と逆相関する。**「ドキュメント知識をシナリオに適用した答え」を構造的に減点するため、残すと将来また品質指標として誤用される。ADR 0016 の「初回通過率」（issue #143）が、まさに指標の意味を取り違えたまま採用根拠になった前例である
+- Cは較正セットの拡張（「スコアは低いが正当」というケースの追加）が前提になる。ジャッジ自体がまだ実トラフィックで未検証（report-only 段階）であり、未検証の判定器に未検証の入力を足す順序は取らない
+
+**Guardrails リソース自体は削除しない。**Terraform の環境変数注入と `bedrock:ApplyGuardrail` の IAM 許可は削除するが、ガードレール（SSM `/app/aws-mon/prod/agent-guardrail-id`）と `scripts/create_guardrail.py` は残す。方針が変われば変数と env の再追加だけで戻せる。
+
+`quality.inlineGate` / `quality.evaluator` / `quality.score` / `quality.issues` の型は `packages/shared` に残す（既存 DynamoDB アイテムに値があるため。ADR 0011 の前例に倣う）。新規保存では `inlineGate` は常に `not_run` で、`score` / `issues` は付かない。
+
 ### 2. 品質担保を2層に置き換える
 
 | 層 | 対象 | 手段 |
@@ -155,8 +173,12 @@ ADR 0011 が「品質担保は Guardrails ゲートに一本化」と決めて�
 |---|---|---|
 | 1 | #139 | **完了**。`quality_checks.py` の3チェック + URLエンコード検査を保存前に適用し、欠陥を名指しした再生成 → fail-closed（`content_invalid`）にした |
 | 2 | #140 | **実装完了・モデル未選定**。`quiz_agent/judge.py` を追加し report-only で `quality.judge` に保存する。`AGENT_JUDGE_MODEL_ID` が未設定なら動かない（`not_run`）。**候補4モデルの較正計測は未実施**で、`scripts/run_judge_calibration.py` を実行して選定する必要がある |
-| 3 | #141 | 下記「決定1」のとおり実施 |
+| 3 | #141 | **完了**。`ApplyGuardrail` 呼び出しを撤去（案A）。fail-closed を `AGENT_RESEARCH_ENFORCE`（既定1）へ分離した。**撤去前は `AGENT_GUARDRAIL_ID` 未設定だと調査未完了の fail-closed も効かなかった** |
 | 4 | #142 | 調査プロンプトを2ドキュメント・制約衝突型に変更（効果の実測は未実施） |
+
+計測スクリプトの名前も変えた。`scripts/sample_gate_scores.py` → **`scripts/sample_generations.py`**（ゲートのスコアではなく、生成された問題本文・調査完了状況・ジャッジ判定を採る）。EMFメトリクスも `GateEvaluationCount` / `GroundingScore` / `RelevanceScore` → **`ResearchCount`** に置き換えたので、ダッシュボードの差し替えが要る。
+
+issue #143 で `summarize()` に足した `status=passed` ベースの集計は、ゲートと一緒に無くなった。**訂正の内容（過去の通過率は grounding 単軸だった）は ADR 0015 / 0016 の本文に残っている。**
 
 ## トレードオフ / 留意
 

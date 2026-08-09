@@ -15,7 +15,6 @@ from quiz_agent.agent import (
     ResearchIncompleteError,
 )
 from quiz_agent.content_policy import ContentPolicyViolationError
-from quiz_agent.guardrail import GateResult
 from quiz_agent.judge import JudgeDefect, JudgeResult
 from quiz_agent.schema import QuizItem
 
@@ -72,11 +71,7 @@ def test_build_generate_response_includes_summary(
     monkeypatch.setattr(
         server_module,
         "_generate_quiz",
-        lambda **kwargs: (
-            item,
-            GateResult(status="not_run"),
-            JudgeResult(status="not_run"),
-        ),
+        lambda **kwargs: (item, JudgeResult(status="not_run")),
     )
 
     response = server_module.build_generate_response({}, started=0)
@@ -230,11 +225,7 @@ def test_generate_response_excludes_internal_grounding_claim(
     monkeypatch.setattr(
         server_module,
         "_generate_quiz",
-        lambda cert, domain, on_phase=None: (
-            item,
-            GateResult(status="not_run"),
-            JudgeResult(status="not_run"),
-        ),
+        lambda cert, domain, on_phase=None: (item, JudgeResult(status="not_run")),
     )
 
     response = server_module.build_generate_response({}, started=0.0)
@@ -451,7 +442,6 @@ def _response_for_source(
         "_generate_quiz",
         lambda **kwargs: (
             _item_with_source(source),
-            GateResult(status="not_run"),
             JudgeResult(status="not_run"),
         ),
     )
@@ -512,7 +502,7 @@ def _response_with_judge(
     monkeypatch.setattr(
         server_module,
         "_generate_quiz",
-        lambda **kwargs: (item, GateResult(status="not_run"), judge),
+        lambda **kwargs: (item, judge),
     )
     return server_module.build_generate_response({}, started=0)
 

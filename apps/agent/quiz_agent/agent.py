@@ -24,20 +24,10 @@ from strands.models.model import Model
 from strands.tools.mcp import MCPClient
 
 from .content_policy import ContentPolicyViolationError, validate_quiz_content
-from .gate_metrics import emit_gate_metrics
-from .guardrail import (
-    GateResult,
-    GroundingBlockedError,
-    check_grounding,
-    gate_enabled,
-    gate_enforced,
-    gate_retries,
-)
 from .judge import JudgeResult, judge_self_consistency
 from .model_config import model_id, openrouter_api_key, openrouter_base_url
 from .prompts import (
     QUIZ_FROM_RESEARCH_PROMPT,
-    QUIZ_REGENERATE_FEEDBACK_PROMPT,
     QUIZ_SYSTEM_PROMPT,
     build_content_regenerate_feedback_prompt,
     build_docs_research_prompt,
@@ -45,6 +35,8 @@ from .prompts import (
     build_quiz_prompt,
 )
 from .quality_checks import QualityDefectError, validate_quality
+from .research_metrics import emit_research_metrics
+from .research_status import ResearchResult, research_enforced
 from .schema import QuizItem
 from .tool_limits import docs_tool_limiter
 
@@ -476,8 +468,8 @@ def _structured_quiz_with_retries(
 ) -> QuizItem:
     """調査済みの同一Agentで構造化出力だけを再試行する。
 
-    prompt: 通常は初回生成用(QUIZ_FROM_RESEARCH_PROMPT)。ゲートブロック後の
-    再生成では QUIZ_REGENERATE_FEEDBACK_PROMPT を渡す(フェーズ2)。
+    prompt: 通常は初回生成用(QUIZ_FROM_RESEARCH_PROMPT)。内容ポリシー違反・
+    品質欠陥の再生成では、欠陥を名指ししたフィードバック文を渡す。
     """
     last_err: Exception | None = None
     for attempt in range(retries + 1):
@@ -566,142 +558,51 @@ def _ensure_valid_content(
     raise AssertionError("内容検証の試行回数が不正です")
 
 
-def _generate_quiz_with_docs(
-    quiz_prompt: str, *, on_phase: PhaseCallback | None = None
-) -> tuple[QuizItem, list[str]]:
-    """MCP調査つき生成。生成結果と、調査で得たドキュメント原文を返す。"""
-    researched = (
-        _researched_agent(quiz_prompt)
-        if on_phase is None
-        else _researched_agent(quiz_prompt, on_phase=on_phase)
-    )
-    with researched as (agent, source_texts):
-        item = _structured_quiz_with_retries(agent)
-        return _ensure_valid_content(agent, item, on_phase=on_phase), source_texts
-
-
-@dataclass
-class GateAttempt:
-    """ゲート1試行分の記録。
-
-    再生成が問題を良くしているのか悪くしているのかを後から読み比べるため、
-    その試行で採点された item をスコアと対にして保持する
-    (`sample_gate_scores.py` の計測用。本番経路では参照しない)。
-    """
-
-    attempt: int
-    item: QuizItem
-    gate: GateResult
-
-
 @dataclass
 class GenerationResult:
-    """生成結果とインライン品質ゲート・自己整合ジャッジの結果。"""
+    """生成結果と、調査完了状況・自己整合ジャッジの結果。"""
 
     item: QuizItem
-    gate: GateResult = field(default_factory=lambda: GateResult(status="not_run"))
+    research: ResearchResult = field(
+        default_factory=lambda: ResearchResult(status="skipped")
+    )
     # 自己整合ジャッジ(#140)。report-only のため生成はブロックしない。
     judge: JudgeResult = field(default_factory=lambda: JudgeResult(status="not_run"))
-    attempts: list[GateAttempt] = field(default_factory=list)
-    # グラウンディングの根拠になった read_documentation の原文。低スコアの原因が
-    # 捏造なのか調査の的外れなのかは、取得した原文を見ないと判別できないため残す
-    # (計測用。本番経路では参照しない)。
+    # 調査で取得した read_documentation の原文(計測用。本番経路では参照しない)。
     source_texts: list[str] = field(default_factory=list)
 
 
-def _gate_query(item: QuizItem) -> str:
-    return item.question.question
-
-
-def _gate_include_overview() -> bool:
-    return os.environ.get("AGENT_GATE_INCLUDE_OVERVIEW", "0").lower() not in (
-        "0",
-        "false",
-        "off",
-    )
-
-
-def _gate_guard_content_mode() -> str:
-    """guard_content の構成を切り替える(スコア分布のA/B比較用)。
-
-    - "mixed"(既定): 正解の選択肢本文(日本語) + grounding_claim_en(英語)
-    - "claim_only" : grounding_claim_en のみ
-
-    ADR 0015 は「日本語部分は英語の原文と照合できず減点要因になる」として
-    correct_reason を grounding_claim_en に置き換えたが、正解の選択肢本文(日本語)は
-    guard_content に残ったままである。同じ理屈が残りの日本語にも当たるのかを測る腕。
-    """
-    return os.environ.get("AGENT_GATE_GUARD_CONTENT", "mixed").strip().lower()
-
-
-def _gate_guard_content(item: QuizItem) -> str:
-    """ゲート対象のテキスト = 正解の選択肢本文 + 評価専用の英語主張。
-
-    「正解: A, D」のようなラベル行はドキュメント原文に存在しえず常に減点要因になるため
-    含めない。overview は既定では含めず、AGENT_GATE_INCLUDE_OVERVIEW=1 のときだけ
-    含める(スコア分布でのA/B比較用)。
-    AGENT_GATE_GUARD_CONTENT=claim_only なら英語の主張文だけに絞る。
-    """
-    if _gate_guard_content_mode() == "claim_only":
-        return item.explanation.grounding_claim_en
-    option_text = {o.label: o.text for o in item.question.options}
-    lines = [
-        f"{label}: {option_text.get(label, '')}" for label in item.question.correct
-    ]
-    if _gate_include_overview():
-        lines.append(item.explanation.overview)
-    lines.append(item.explanation.grounding_claim_en)
-    return "\n".join(lines)
-
-
-def _log_gate_result(
-    gate: GateResult, attempt: int, attempts: int, cert: str | None
-) -> None:
-    """ゲート評価結果を構造化ログ+EMFメトリクスで記録する(合否・not_run問わず毎回)。
-
-    prod実測の初回通過率を継続的に把握するための計測(フェーズ0-a)。
-    """
+def _log_research_result(research: ResearchResult, cert: str | None) -> None:
+    """調査完了状況を構造化ログ+EMFメトリクスで記録する(毎回)。"""
     logger.info(
         json.dumps(
             {
-                "event": "grounding_gate",
-                "status": gate.status,
-                "grounding": gate.grounding_score,
-                "relevance": gate.relevance_score,
-                "attempt": attempt,
-                "attempts": attempts,
+                "event": "research_completeness",
+                "status": research.status,
                 "cert": cert,
-                "detail": gate.detail,
+                "detail": research.detail,
             },
             ensure_ascii=False,
         )
     )
-    emit_gate_metrics(
-        status=gate.status,
-        grounding=gate.grounding_score,
-        relevance=gate.relevance_score,
-        cert=cert,
-        reason=gate.detail,
-    )
+    emit_research_metrics(status=research.status, cert=cert, reason=research.detail)
 
 
-def _generate_quiz_with_docs_and_gate(
+def _generate_quiz_with_research(
     quiz_prompt: str,
     cert: str | None = None,
     *,
     on_phase: PhaseCallback | None = None,
 ) -> GenerationResult:
-    """MCP調査つき生成 + Guardrailsグラウンディングチェック(有効時)。
+    """MCP調査つき生成。
 
-    ブロックされたら再生成し、それでも通らなければ enforce 設定に応じて
-    エラー(弾く)か、failed のまま返す(レポートのみ)。
+    グラウンディングゲートは ADR 0018 で撤去した。実測で grounding 軸の真陽性が
+    ゼロだったうえ、ブロック起因の再生成が良問を壊して壊れた版を通していた
+    (再生成11回のうち通過3回、そのうち2回が回答不能な問題)。
+    **調査未完了の fail-closed だけは維持する**(issue #77 の決定)。
 
     cert: ログ・メトリクス記録用(任意)。generate_quiz から渡される。
     """
-    gate_is_enabled = gate_enabled()
-    attempts = (gate_retries() + 1) if gate_is_enabled else 1
-    last: GenerationResult | None = None
-
     researched = (
         _researched_agent(quiz_prompt)
         if on_phase is None
@@ -713,87 +614,20 @@ def _generate_quiz_with_docs_and_gate(
             _missing_research_detail(agent.messages) if not source_texts else None
         )
         if missing_detail:
-            gate = GateResult(status="not_run", detail=missing_detail)
-            _log_gate_result(gate, attempt=1, attempts=1, cert=cert)
-            if gate_is_enabled and gate_enforced():
+            research = ResearchResult(status="incomplete", detail=missing_detail)
+            _log_research_result(research, cert)
+            if research_enforced():
                 raise ResearchIncompleteError(
                     f"ドキュメント調査が不完全なため生成を中止しました ({missing_detail})"
                 )
-            item = _structured_quiz_with_retries(agent)
-            item = _ensure_valid_content(agent, item, on_phase=on_phase)
-            _emit_phase(on_phase, "complete", attempt=1, total_attempts=1)
-            return GenerationResult(item=item, gate=gate, source_texts=source_texts)
+        else:
+            research = ResearchResult(status="complete")
+            _log_research_result(research, cert)
 
         item = _structured_quiz_with_retries(agent)
-        if not gate_is_enabled:
-            gate = GateResult(status="not_run", detail="gate_disabled")
-            _log_gate_result(gate, attempt=1, attempts=1, cert=cert)
-            item = _ensure_valid_content(agent, item, on_phase=on_phase)
-            _emit_phase(on_phase, "complete", attempt=1, total_attempts=1)
-            return GenerationResult(item=item, gate=gate, source_texts=source_texts)
-
-        gate_attempts: list[GateAttempt] = []
-        for attempt in range(attempts):
-            _emit_phase(
-                on_phase,
-                "guardrail",
-                attempt=attempt + 1,
-                total_attempts=attempts,
-            )
-            gate = check_grounding(
-                grounding_source="\n\n".join(source_texts),
-                query=_gate_query(item),
-                guard_content=_gate_guard_content(item),
-            )
-            _log_gate_result(gate, attempt=attempt + 1, attempts=attempts, cert=cert)
-            # 採点された時点の item を残す(content検証前・再生成前の姿)。
-            gate_attempts.append(GateAttempt(attempt=attempt + 1, item=item, gate=gate))
-            if gate.status != "failed":
-                item = _ensure_valid_content(agent, item, on_phase=on_phase)
-                _emit_phase(
-                    on_phase,
-                    "complete",
-                    attempt=attempt + 1,
-                    total_attempts=attempts,
-                )
-                return GenerationResult(
-                    item=item,
-                    gate=gate,
-                    attempts=gate_attempts,
-                    source_texts=source_texts,
-                )
-
-            last = GenerationResult(
-                item=item,
-                gate=gate,
-                attempts=gate_attempts,
-                source_texts=source_texts,
-            )
-            logger.warning(
-                "グラウンディングチェックでブロックされました (%d/%d回目, %s)",
-                attempt + 1,
-                attempts,
-                gate.detail,
-            )
-            if attempt < attempts - 1:
-                # 調査済み会話履歴と原文を再利用し、フィードバック付きで構造化出力だけやり直す。
-                _emit_phase(
-                    on_phase,
-                    "regeneration",
-                    attempt=attempt + 2,
-                    total_attempts=attempts,
-                )
-                item = _structured_quiz_with_retries(
-                    agent, prompt=QUIZ_REGENERATE_FEEDBACK_PROMPT
-                )
-        assert last is not None
-        if gate_enforced():
-            raise GroundingBlockedError(
-                f"グラウンディングチェックを{attempts}回通過できませんでした ({last.gate.detail})"
-            )
-        last.item = _ensure_valid_content(agent, last.item, on_phase=on_phase)
-        _emit_phase(on_phase, "complete", attempt=attempts, total_attempts=attempts)
-        return last
+        item = _ensure_valid_content(agent, item, on_phase=on_phase)
+        _emit_phase(on_phase, "complete", attempt=1, total_attempts=1)
+        return GenerationResult(item=item, research=research, source_texts=source_texts)
 
 
 def generate_quiz(
@@ -829,24 +663,22 @@ def _generate_quiz_result(
     *,
     on_phase: PhaseCallback | None = None,
 ) -> GenerationResult:
-    """調査・生成・グラウンディングゲートまでを行う(ジャッジは含まない)。"""
+    """調査と生成までを行う(ジャッジは含まない)。"""
     retries = int(os.environ.get("AGENT_GENERATE_RETRIES", "3"))
     quiz_prompt = build_quiz_prompt(cert, domain, domain_label, domain_label_en)
 
     if _docs_mcp_enabled():
         try:
             if on_phase is None:
-                return _generate_quiz_with_docs_and_gate(quiz_prompt, cert=cert)
-            return _generate_quiz_with_docs_and_gate(
+                return _generate_quiz_with_research(quiz_prompt, cert=cert)
+            return _generate_quiz_with_research(
                 quiz_prompt, cert=cert, on_phase=on_phase
             )
-        except GroundingBlockedError:
-            raise
         except QuotaExhaustedError:
             # 日次枠切れでの再生成は無駄なので、ドキュメントなし生成へフォールバックしない
             raise
         except DocsResearchError as e:
-            fail_closed = gate_enabled() and gate_enforced()
+            fail_closed = research_enforced()
             logger.warning(
                 json.dumps(
                     {
@@ -861,8 +693,8 @@ def _generate_quiz_result(
                 ),
                 exc_info=True,
             )
-            gate = GateResult(status="not_run", detail="research_failed")
-            _log_gate_result(gate, attempt=1, attempts=1, cert=cert)
+            research = ResearchResult(status="failed", detail=e.original_exception_type)
+            _log_research_result(research, cert)
             if fail_closed:
                 raise ResearchFailedError(
                     "ドキュメント調査の依存障害により生成を中止しました"
@@ -877,7 +709,7 @@ def _generate_quiz_result(
                 on_phase=on_phase,
             )
             _emit_phase(on_phase, "complete", attempt=1, total_attempts=1)
-            return GenerationResult(item=item, gate=gate)
+            return GenerationResult(item=item, research=research)
 
     _emit_phase(on_phase, "generation", attempt=1, total_attempts=1)
     item = _generate(
@@ -887,12 +719,14 @@ def _generate_quiz_result(
         retries=retries,
         on_phase=on_phase,
     )
-    gate = GateResult(status="not_run", detail="docs_mcp_disabled")
-    _log_gate_result(gate, attempt=1, attempts=1, cert=cert)
+    research = ResearchResult(status="skipped", detail="docs_mcp_disabled")
+    _log_research_result(research, cert)
     _emit_phase(on_phase, "complete", attempt=1, total_attempts=1)
-    return GenerationResult(item=item, gate=gate)
+    return GenerationResult(item=item, research=research)
 
 
 # 旧 evaluate_question(自己批評のプレースホルダ)はフェーズ3-2で AgentCore Evaluations の
 # オンライン評価に置き換えたが、費用のほぼ全額がジャッジトークンだったため
-# ADR 0011 で廃止した。品質担保はインラインの Guardrails ゲート(guardrail.py)のみ。
+# ADR 0011 で廃止した。その後継だった Guardrails グラウンディングゲートも
+# ADR 0018 で撤去した(実測で真陽性ゼロ)。品質担保は decision的チェック
+# (quality_checks.py)と自己整合ジャッジ(judge.py)の2層である。
