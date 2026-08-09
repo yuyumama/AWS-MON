@@ -44,6 +44,10 @@ sys.path.insert(0, str(AGENT_DIR))
 
 from quiz_agent.agent import generate_quiz  # noqa: E402
 from quiz_agent.model_config import model_id  # noqa: E402
+from quiz_agent.tool_limits import (  # noqa: E402
+    DEFAULT_READ_LIMIT,
+    DEFAULT_SEARCH_LIMIT,
+)
 
 MAX_CONSECUTIVE_FAILURES = 3
 DEPENDENCIES = (
@@ -116,8 +120,15 @@ def sampling_metadata() -> dict[str, Any]:
         "research_enforce": os.environ.get("AGENT_RESEARCH_ENFORCE", "1"),
         "research_retries": os.environ.get("AGENT_RESEARCH_RETRIES", "2"),
         "content_retries": os.environ.get("AGENT_CONTENT_RETRIES", "1"),
-        "docs_search_limit": os.environ.get("AGENT_DOCS_SEARCH_LIMIT", "1"),
-        "docs_read_limit": os.environ.get("AGENT_DOCS_READ_LIMIT", "2"),
+        # 既定値は tool_limits から引く。ここに数値を書き写すと、実装を変えたときに
+        # メタデータだけが古い値を記録して計測条件を誤らせる(2026-08-09 の #142 計測で
+        # 実際に search_limit を 1 と誤記録した。実際の生成は 2 で走っていた)。
+        "docs_search_limit": os.environ.get(
+            "AGENT_DOCS_SEARCH_LIMIT", str(DEFAULT_SEARCH_LIMIT)
+        ),
+        "docs_read_limit": os.environ.get(
+            "AGENT_DOCS_READ_LIMIT", str(DEFAULT_READ_LIMIT)
+        ),
     }
 
 

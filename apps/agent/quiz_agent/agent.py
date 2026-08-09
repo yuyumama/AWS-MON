@@ -640,13 +640,14 @@ def generate_quiz(
 ) -> GenerationResult:
     """問題と解説を1回の生成でまとめて作り、自己整合ジャッジにかける。
 
-    AGENT_DOCS_MCP が有効なら、AWSドキュメントMCPで最新情報を調査してから生成し、
-    AGENT_GUARDRAIL_ID が設定されていれば調査原文を根拠にグラウンディングチェックする。
+    AGENT_DOCS_MCP が有効なら、AWSドキュメントMCPで最新情報を調査してから生成する。
+    調査が完了しなかった場合は AGENT_RESEARCH_ENFORCE(既定1)により fail-closed になる
+    (ADR 0018 でグラウンディングゲートは撤去済み)。
 
     ジャッジ(#140)は生成が確定したあとに1回だけ走らせる。生成の経路は複数ある
-    (ゲート通過・ゲート無効・調査失敗のフォールバック)が、判定対象は最終的な
-    QuizItem なので、経路ごとではなくここでまとめて呼ぶ。**現状は report-only** で、
-    defective でも生成物は返す。
+    (通常経路・調査失敗のフォールバック)が、判定対象は最終的な QuizItem なので、
+    経路ごとではなくここでまとめて呼ぶ。現状は report-only で、defective でも
+    生成物は返す。
     """
     result = _generate_quiz_result(
         cert, domain, domain_label, domain_label_en, on_phase=on_phase

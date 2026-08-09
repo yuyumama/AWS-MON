@@ -22,7 +22,7 @@ variable "agent_model_id" {
 }
 
 variable "agent_judge_model_id" {
-  description = "OpenRouter model id for the self-consistency judge (ADR 0018). Empty string disables the judge. Must differ from agent_model_id: judging with the generation model is self-critique, which ADR 0007 removed."
+  description = "OpenRouter model id for the self-consistency judge (ADR 0018). Empty string disables the judge. Must differ from agent_model_id: judging with the generation model is self-critique, which ADR 0007 removed. Selected by calibration on 2026-08-09: the only candidate meeting the bar (8/9 defective detected, 0/3 clean rejected, 0 errors)."
   type        = string
-  default     = ""
+  default     = "nvidia/nemotron-3-super-120b-a12b:free"
 }
