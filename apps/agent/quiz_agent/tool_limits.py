@@ -13,7 +13,12 @@ from collections import Counter
 
 from strands.hooks import BeforeToolCallEvent, HookProvider, HookRegistry
 
-DEFAULT_SEARCH_LIMIT = 1
+# search 2 / read 2。issue #142 で調査対象を「異なる2つのサービス(機能)」にしたため、
+# 検索も2回必要になった(1回の検索クエリで無関係な2サービスの仕様は引けない)。
+# read は元から2回許可していたので増えていない。**検索1回ぶんはコストが増える**:
+# ツール呼び出しは1回につき1モデルターンなので、入力トークンと所要時間が伸びる。
+# 生成時間は ADR 0014 の job 締切(10分)に対して実測すること。
+DEFAULT_SEARCH_LIMIT = 2
 DEFAULT_READ_LIMIT = 2
 
 _CANCEL_MESSAGE = (

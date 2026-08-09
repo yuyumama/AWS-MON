@@ -108,6 +108,10 @@ python3 -m quiz_agent.server
 最新の公式ドキュメントを調査してから問題を生成する（`agent.py` の
 `_generate_quiz_with_research`。調査1ターン → 会話履歴を踏まえた `structured_output`）。
 
+調査対象は**異なる2つのサービス(機能)**で、「同じ要件の候補になりうるが付いてくる制約が違う」
+関係のものを選ばせる（issue #142）。1ページの箇条書きを読むだけの調査だと、
+その箇条書きがそのまま答えになり、難易度が Foundational 級に落ちるため。
+
 - `AGENT_DOCS_MCP=0` で無効化（従来どおり調査なしで生成）
 - 調査ターンの一過性モデルエラー（ストリーム途中の `status_code` なし `openai.APIError`）は
   `AGENT_RESEARCH_RETRIES`（既定2）回まで調査ターンをやり直す（試行ごとに新しいAgent、
@@ -118,8 +122,10 @@ python3 -m quiz_agent.server
 - 起動コマンドは `AGENT_DOCS_MCP_COMMAND` で差し替え可（例: `uvx awslabs.aws-documentation-mcp-server@latest`）
 - ツール呼び出しが増えるぶん、1問あたりのLLMトークン消費と生成時間は増える。
   調査量はプロンプト指示に加えてコードでも上限を強制する（`quiz_agent/tool_limits.py`。
-  既定 `search_documentation` 1回 / `read_documentation` 2回。
+  既定 `search_documentation` 2回 / `read_documentation` 2回。
   `AGENT_DOCS_SEARCH_LIMIT` / `AGENT_DOCS_READ_LIMIT` で変更可）。
+  **search が2回なのは、調査対象を「異なる2つのサービス(機能)」にしたため**
+  （issue #142。1回の検索クエリで無関係な2サービスの仕様は引けない）。
   上限超過分のツール呼び出しはキャンセルされ、モデルにはそこまでの調査結果で
   続行するよう伝わる（issue #70）。
 

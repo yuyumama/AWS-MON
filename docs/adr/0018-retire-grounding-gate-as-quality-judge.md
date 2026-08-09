@@ -174,7 +174,16 @@ ADR 0011 が「品質担保は Guardrails ゲートに一本化」と決めて�
 | 1 | #139 | **完了**。`quality_checks.py` の3チェック + URLエンコード検査を保存前に適用し、欠陥を名指しした再生成 → fail-closed（`content_invalid`）にした |
 | 2 | #140 | **実装完了・モデル未選定**。`quiz_agent/judge.py` を追加し report-only で `quality.judge` に保存する。`AGENT_JUDGE_MODEL_ID` が未設定なら動かない（`not_run`）。**候補4モデルの較正計測は未実施**で、`scripts/run_judge_calibration.py` を実行して選定する必要がある |
 | 3 | #141 | **完了**。`ApplyGuardrail` 呼び出しを撤去（案A）。fail-closed を `AGENT_RESEARCH_ENFORCE`（既定1）へ分離した。**撤去前は `AGENT_GUARDRAIL_ID` 未設定だと調査未完了の fail-closed も効かなかった** |
-| 4 | #142 | 調査プロンプトを2ドキュメント・制約衝突型に変更（効果の実測は未実施） |
+| 4 | #142 | **実装完了・効果は未実測**。調査プロンプトを「異なる2つのサービス(機能)の制約が衝突する状況」型に変更し、誤答の作り方の条件を足した。`AGENT_DOCS_SEARCH_LIMIT` の既定は 1 → 2（1回の検索クエリで無関係な2サービスは引けないため。**issue #142 の「追加コストなし」は `read_documentation` にのみ当てはまり、検索1回ぶんは増える**） |
+
+第4段の効果測定は、`scripts/sample_generations.py --n 30 --cert aip --out <出力先>.jsonl` を
+**第1〜3段を適用した状態で**変更前後それぞれ実行して比較する（生成側の変更が混ざらないよう、
+プロンプト以外を固定すること）。読むべき指標は次の3つと、`summarize()` が出す
+`duration_sec` の中央値・p90（ADR 0014 の job 締切10分を脅かしていないか）である。
+
+- 正解が単一ドキュメントの1文の言い換えになっている問題の割合
+- 誤答の否定理由が「ドキュメントにない」だけの問題の割合
+- 設問に登場するサービス/機能の数
 
 計測スクリプトの名前も変えた。`scripts/sample_gate_scores.py` → **`scripts/sample_generations.py`**（ゲートのスコアではなく、生成された問題本文・調査完了状況・ジャッジ判定を採る）。EMFメトリクスも `GateEvaluationCount` / `GroundingScore` / `RelevanceScore` → **`ResearchCount`** に置き換えたので、ダッシュボードの差し替えが要る。
 

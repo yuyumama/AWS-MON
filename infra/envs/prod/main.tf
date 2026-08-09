@@ -8,7 +8,9 @@ data "aws_cloudfront_cache_policy" "caching_optimized" {
   name = "Managed-CachingOptimized"
 }
 
-# CognitoとGuardrailはアカウント固有値のため、オーナーが作成したSSMから読む。
+# Cognitoはアカウント固有値のため、オーナーが作成したSSMから読む。
+# Guardrailの参照は ADR 0018 のゲート撤去で不要になったため削除した
+# (リソース自体とSSMパラメータは残してあるので、戻すときは data と env を足す)。
 data "aws_ssm_parameter" "cognito_user_pool_id" {
   name = "/app/aws-mon/prod/cognito-user-pool-id"
 }
@@ -554,7 +556,6 @@ data "aws_iam_policy_document" "agent_runtime" {
     actions   = ["ssm:GetParameter"]
     resources = ["arn:${local.partition}:ssm:${local.region}:${local.account_id}:parameter/app/aws-mon/prod/openrouter-api-key"]
   }
-
 }
 
 resource "aws_iam_role_policy" "agent_runtime" {
