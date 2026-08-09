@@ -10,10 +10,14 @@ from __future__ import annotations
 import pytest
 
 from quiz_agent.quality_checks import (
+    QualityDefectError,
     duplicate_option_labels,
+    find_quality_defects,
     katakana_degraded,
     missing_question_prompt,
     split_source_urls,
+    url_encoded_text,
+    validate_quality,
 )
 from quiz_agent.schema import QuizItem
 
@@ -23,10 +27,11 @@ def _item(
     *,
     labels: str | None = None,
     question: str = "正しいものを選択してください。",
+    summary: str = "テスト用の要約",
 ) -> QuizItem:
     return QuizItem.model_validate(
         {
-            "summary": "テスト用の要約",
+            "summary": summary,
             "question": {
                 "type": "single",
                 "question": question,
@@ -254,9 +259,154 @@ def test_flags_question_without_prompt(question: str) -> None:
         "この挙動について、正しい説明は次のうちどれですか。",
         "要件をすべて満たすアーキテクチャとして、最も適切な2つを選んでください。",
         "最も適切な対応を選択してください。",
+        # 2026-08-09 の実測(83設問)で誤検出された実物。「〜ますか？」形は
+        # どれか/どれですか/選んでください/選択してください のいずれにも当たらない。
+        "どのガードレール構成を選択し、どのように適用すれば要件をすべて満たせますか？",
+        "この構成で最も懸念されるリスクは何でしょうか。",
     ],
 )
 def test_does_not_flag_normal_question(question: str) -> None:
     item = _item(["正解", "誤り1", "誤り2", "誤り3"], question=question)
 
     assert missing_question_prompt(item) is False
+
+
+# --- URLエンコード混入 --------------------------------------------------------
+# 2026-08-09 の計測(arm2 の1件)で、設問本文に %0A%0A(URLエンコードされた改行)が
+# 生のまま混入していた。
+#
+# 判定は「制御文字・空白・パーセント自身のパーセントエスケープ」に限定する。
+# %XX を無条件に拾うと「使用率が95%DB側で…」のような日本語が誤検出されうる
+# (D と B は16進数字)。%0A / %20 のように制御文字・空白を表す並びなら、
+# 百分率の直後に来る文字列としては現実的でない。
+#
+# 全体がUTF-8のパーセントエンコード(%E3%81%82…)になった場合は、日本語文字が
+# 1文字も残らないため content_policy の「日本語文字を含まない」で捕まる。
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "要件は次のとおりです。%0A%0A運用コストを最小にすること。",
+        "手順1%0D%0A手順2",
+        "項目A%09項目B",
+        "Amazon%20Bedrock%20Guardrails を有効にする",
+        "進捗率は50%25です",
+    ],
+)
+def test_flags_url_encoded_fragments_in_question(text: str) -> None:
+    item = _item(["正解", "誤り1", "誤り2", "誤り3"], question=text)
+
+    assert url_encoded_text(item) == ["question.question"]
+
+
+def test_flags_url_encoded_fragments_in_options_and_summary() -> None:
+    item = _item(
+        ["正解%0A続き", "誤り1", "誤り2", "誤り3"],
+        summary="要約%0Aの途中",
+    )
+
+    assert url_encoded_text(item) == ["summary", "question.options[0].text"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "キャッシュヒット率が95%を超える構成はどれか。",
+        "使用率が80%のときの挙動として正しいものはどれか。",
+        "スループットが20%DBに影響する場合はどれか。",
+        "コストを100%削減できる構成はどれか。",
+        "しきい値を95%Aに設定した場合はどれか。",
+    ],
+)
+def test_does_not_flag_percentages_in_japanese(text: str) -> None:
+    """百分率の直後に16進数字が続いても誤検出しないこと。"""
+    item = _item(["正解", "誤り1", "誤り2", "誤り3"], question=text)
+
+    assert url_encoded_text(item) == []
+
+
+def test_does_not_flag_percent_encoding_inside_source_url() -> None:
+    """URLのパーセントエンコードは正当なので、利用者向けフィールドだけを見る。"""
+    item = _item(["正解", "誤り1", "誤り2", "誤り3"])
+    item.explanation.source = "https://docs.aws.amazon.com/a.html?q=%E3%81%82"
+
+    assert url_encoded_text(item) == []
+
+
+# --- 生成パスへの適用 ---------------------------------------------------------
+# fail-closed にする根拠は、拾うのが「回答不能」「読めない」「ラベルが重複して
+# 画面が壊れる」といった出題価値がゼロの欠陥であること(ADR 0018)。
+
+
+def test_find_quality_defects_returns_empty_for_normal_item() -> None:
+    item = _item(
+        [
+            "Guardrails の Sensitive Information Filters を Mask モードに設定する。",
+            "Guardrails を Block モードに変更する。",
+            "CloudWatch Logs のデータ保護ポリシーを併用する。",
+            "カスタム正規表現フィルタを追加する。",
+        ]
+    )
+
+    assert find_quality_defects(item) == []
+    validate_quality(item)  # 送出しないこと
+
+
+def test_find_quality_defects_names_each_defect() -> None:
+    """再生成で欠陥を名指しできるよう、種別コードを返すこと。"""
+    item = _item(
+        ["正解%0A続き", "誤り1", "誤り2", "誤り3", "誤り4"],
+        labels="ABCDD",
+        question="ある企業がRAGシステムを構築しています。要件は以下のとおりです。",
+    )
+
+    codes = [defect.code for defect in find_quality_defects(item)]
+
+    assert codes == [
+        "missing_question_prompt",
+        "duplicate_option_labels",
+        "url_encoded_text",
+    ]
+
+
+def test_validate_quality_raises_with_defect_codes_in_message() -> None:
+    item = _item(
+        ["正解", "誤り1", "誤り2", "誤り3"],
+        question="ある企業が生成AIアプリを構築しています。要件は以下のとおりです。",
+    )
+
+    with pytest.raises(QualityDefectError, match="missing_question_prompt") as excinfo:
+        validate_quality(item)
+
+    assert [defect.code for defect in excinfo.value.defects] == [
+        "missing_question_prompt"
+    ]
+
+
+def test_quality_defect_error_reuses_content_invalid_error_code() -> None:
+    """ADR 0014 の写像テーブルに受け口がある content_invalid を流用する。"""
+    item = _item(
+        ["正解", "誤り1", "誤り2", "誤り3"],
+        question="要件は以下のとおりです。",
+    )
+
+    with pytest.raises(QualityDefectError) as excinfo:
+        validate_quality(item)
+
+    assert excinfo.value.error_code == "content_invalid"
+
+
+def test_katakana_defect_is_reported() -> None:
+    item = _item(
+        [
+            "カスタムメタデータフィールドをすべて キーワード タイプとして定義する",
+            "テキスト タイプとし さらに キーワード サブフィールドを持つ構造にする",
+            "Bedrock 管理メタデータフィールドを キーワード タイプ に変更する",
+            "エンジン を エヌエムスリブ に変更する",
+        ]
+    )
+
+    assert [defect.code for defect in find_quality_defects(item)] == [
+        "katakana_degraded"
+    ]

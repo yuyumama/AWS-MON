@@ -85,9 +85,12 @@ def test_docs_tool_limiter_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
 
     registry = _register(docs_tool_limiter())
 
-    event = _event("search_documentation")
-    registry.invoke_callbacks(event)
-    assert event.cancel_tool is False
+    # issue #142 で調査対象を「異なる2つのサービス(機能)」にしたため search も2回。
+    # 1回の検索クエリで無関係な2サービスの仕様は引けない。
+    for _ in range(2):
+        event = _event("search_documentation")
+        registry.invoke_callbacks(event)
+        assert event.cancel_tool is False
     event = _event("search_documentation")
     registry.invoke_callbacks(event)
     assert isinstance(event.cancel_tool, str)

@@ -23,7 +23,8 @@ AWS認定試験の模擬問題を生成するWebアプリ。生成AIで問題・
 | `apps/agent` | Strands Agents + OpenRouter（既定）/ Bedrock (Python) | AgentCore Runtime |
 | データ | DynamoDB | — |
 | 認証/認可 | 既存 Cognito User Pool（別AWSアカウント / ログインのみ / 登録機能なし） | `BANK` は登録済みユーザー可、`GENERATE`/`MIXED` は生成権限必須 |
-| 監視 | OTel(ADOT) + X-Ray Transaction Search + CloudWatch GenAI Observability + Guardrails品質ゲート | 詳細は [docs/observability.md](docs/observability.md) |
+| 監視 | OTel(ADOT) + X-Ray Transaction Search + CloudWatch GenAI Observability | 詳細は [docs/observability.md](docs/observability.md) |
+| 品質担保 | 保存前の決定的チェック(LLMなし) + 自己整合ジャッジ(OpenRouter無料モデル、report-only) | [ADR 0018](docs/adr/0018-retire-grounding-gate-as-quality-judge.md) |
 | IaC | Terraform（envs = local / prod） | — |
 
 ```

@@ -41,6 +41,9 @@ type JobErrorCode =
 	| "generation_timeout"
 	| "research_incomplete"
 	| "research_failed"
+	// grounding_blocked は ADR 0018 でゲートを撤去したため新規には発生しない。
+	// agent と API は別々にデプロイされるので、旧イメージの agent が動いている
+	// 間や切り戻し時に届く可能性がある。受け口と再試行方針は残す。
 	| "grounding_blocked"
 	| "rate_limited"
 	| "content_invalid"
@@ -178,6 +181,8 @@ function publicProgressPhase(
 			return "researching";
 		case "generation":
 			return "drafting";
+		// guardrail / grounding は ADR 0018 のゲート撤去で agent が送らなくなった。
+		// デプロイ順序と切り戻しのため写像は残す。
 		case "guardrail":
 		case "grounding":
 			return "verifying";

@@ -68,7 +68,7 @@ flowchart TB
 |---|---|---|---|
 | `apps/web` | Vite + React + TS | S3 + CloudFront | 主要画面（資格選択/出題/解説/セッション再開・削除/問題リスト/復習リスト）を実装済み。セッション削除時は、キーボード操作可能な確認ダイアログを挟む。問題リストでは、資格・AIPドメインをURL queryに保持し、一覧から詳細を遅延取得する。Cognitoログインには自前フォーム+SRP（`amazon-cognito-identity-js`、`VITE_AUTH_MODE=cognito`）を使用。ローカルでは、vite dev server（:5173）が `/api` を api（:8080）にプロキシ |
 | `apps/api` | Hono + Lambda Web Adapter (TS) | Lambda | セッション開始・取得・一覧・削除（`DELETE /sessions/:id`）、回答、次問、問題一覧（`GET /questions`）、dev用endpoint、agent HTTP連携、認証・生成権限（`src/auth.ts`）を実装済み |
-| `apps/agent` | Strands Agents + OpenRouter / Bedrock (Python) | AgentCore Runtime | CLI + local HTTP server (`/health`, `/generate`) を実装済み。AWSドキュメントMCPで調査してから生成（調査失敗時のみ調査なしへフォールバック）。既定はOpenRouter（`nvidia/nemotron-3-ultra-550b-a55b:free`、[ADR 0016](adr/0016-generation-model-selection.md)の切り戻し手順により2026-08-08に ling-3.0-flash から復帰）で、`AGENT_MODEL_PROVIDER=bedrock` によりBedrockへ切り替え可。オブザーバビリティ（OTel/ADOT計装・Guardrailsグラウンディングゲート）も実装し、ライブ確認済み（[ADR 0007](adr/0007-observability-stack.md)。AgentCore Evaluationsオンライン評価は検証後に [ADR 0011](adr/0011-retire-online-evaluations.md) で廃止） |
+| `apps/agent` | Strands Agents + OpenRouter / Bedrock (Python) | AgentCore Runtime | CLI + local HTTP server (`/health`, `/generate`) を実装済み。AWSドキュメントMCPで調査してから生成（調査失敗時のみ調査なしへフォールバック）。既定はOpenRouter（`nvidia/nemotron-3-ultra-550b-a55b:free`、[ADR 0016](adr/0016-generation-model-selection.md)の切り戻し手順により2026-08-08に ling-3.0-flash から復帰）で、`AGENT_MODEL_PROVIDER=bedrock` によりBedrockへ切り替え可。オブザーバビリティ（OTel/ADOT計装）も実装し、ライブ確認済み（[ADR 0007](adr/0007-observability-stack.md)）。品質担保は保存前の決定的チェックと自己整合ジャッジの2層（[ADR 0018](adr/0018-retire-grounding-gate-as-quality-judge.md)。AgentCore Evaluationsオンライン評価は [ADR 0011](adr/0011-retire-online-evaluations.md)、Guardrailsグラウンディングゲートは ADR 0018 で廃止） |
 | `packages/shared` | TS型 + テーブル定義 | web/apiがimport | 実装済み |
 | DynamoDB | 4テーブル構成 | AWS / DynamoDB Local | テーブル定義確定。prod（`aws-mon-prod-*`）・localともTerraform適用済み |
 | 認証/認可 | 既存 Cognito User Pool + AWS-MON App Client | 別AWSアカウント / AWS | User Pool は共通。登録済みユーザーは `BANK` 出題可、LLM呼び出しに到達する `GENERATE` / `MIXED` / 再生成は生成権限で制限。ローカルは `x-dev-user-id` devシムで代替（[ADR 0006](adr/0006-auth-cognito-cloud-only.md)） |
@@ -188,10 +188,12 @@ sequenceDiagram
 
 SSEは `phase` イベントと、成功・失敗を格納した最後の `result` イベントからなる。無イベント区間では、20秒ごとのコメント行で接続を維持する。workerは内部フェーズを利用者向けの `researching` / `drafting` / `verifying` / `regenerating` に変換し、`SessionMeta.initial.progress` または `prefetch.progress` へ条件付きUpdateで保存する。同じフェーズ・試行番号は重複排除し、書き込み間隔は最短5秒とする。進捗更新では楽観ロック用の `version` を進めない。Webは既存の3秒ポーリングでこのフィールドを読み、「調査 → 作成 → 検証」の現在工程を表示する。
 
-agent は Guardrails のグラウンディングゲート後、保存前の生成境界で利用者向けフィールドが日本語のプレーンテキストかを検証する。違反時は構造化出力だけを再生成し、解消しなければ fail-closed で worker へエラーを返す。
+agent は保存前の生成境界で2層の検証を行う。まず利用者向けフィールドが日本語のプレーンテキストかを検証し（`quiz_agent/content_policy.py`）、次に決定的な品質チェックで出題価値がゼロの構造欠陥（問いかけの欠落＝回答不能、カタカナ退化、選択肢ラベルの重複、URLエンコード混入）を検出する（`quiz_agent/quality_checks.py`、[ADR 0018](adr/0018-retire-grounding-gate-as-quality-judge.md)）。違反時は**欠陥を名指しした指示**で構造化出力だけを再生成し、解消しなければ fail-closed（`content_invalid`）で worker へエラーを返す。汎用的な「作り直してください」にしないのは、ADR 0018 の計測で汎用指示が設問のシナリオを削って回答不能にすることが分かっているため。
+
+`explanation.source` にモデルが複数URLを連結して返すことがあるため、`sourceRefs` は1URL = 1要素に分割して保存する。
 
 - `mode=GENERATE` は常にagent生成、`mode=MIXED` はbankを優先し候補がない場合だけagent生成にフォールバックする。
-- agent呼び出しのタイムアウトは `AGENT_REQUEST_TIMEOUT_MS` で環境ごとに設定する。超過は汎用の502ではなく `code: "generation_timeout"` の504として扱う。agentが返す `grounding_blocked` / `research_incomplete` / `research_failed` / `rate_limited` / `content_invalid` もHTTP・AgentCore両経路で `ApiError.code` からjobの `errorCode` まで保持する（[ADR 0014](adr/0014-generation-retry-policy.md)）。
+- agent呼び出しのタイムアウトは `AGENT_REQUEST_TIMEOUT_MS` で環境ごとに設定する。超過は汎用の502ではなく `code: "generation_timeout"` の504として扱う。agentが返す `research_incomplete` / `research_failed` / `rate_limited` / `content_invalid` もHTTP・AgentCore両経路で `ApiError.code` からjobの `errorCode` まで保持する（[ADR 0014](adr/0014-generation-retry-policy.md)）。
 - 生成失敗はセッションの `preparing.state=FAILED` / `prefetch.state=FAILED` と `errorCode` に反映され、Webはこれを見て利用者向けの文言を出す。
 
 ### 3. 開発用workerによるjob処理（`/dev/jobs/run`）
@@ -242,7 +244,7 @@ job の排他と回収は次のとおり（[ADR 0013](adr/0013-async-initial-gen
 - job の完了（SUCCEEDED / RETRY_WAIT / FAILED）は `lockedBy` 一致を条件にする。ロックを失っていた worker は結果を書かずに降りる。
 - worker は Lambda の残り時間から算出したデッドラインを持つ。残り時間が1件分の予算（`AGENT_REQUEST_TIMEOUT_MS` + 30秒）を切ったら、次の job を claim しない。Lambda timeout によって生成中に終了し、job を RUNNING のまま座礁させないためである。
 
-job の失敗時は `errorCode` ごとの試行上限とbackoffを使う（[ADR 0014](adr/0014-generation-retry-policy.md)）。`research_incomplete` は3回・5秒、`grounding_blocked` は2回・5秒、`generation_timeout` / `research_failed` / 未分類失敗は3回・30秒、`rate_limited` は1回で即FAILEDとする。登録時の `maxAttempts=3` も上限として残し、種別上限との小さい方を使う。次の `runAfter` が `createdAt` から10分の締切を超える場合は再試行せず、元の `errorCode` を維持してFAILEDにする。
+job の失敗時は `errorCode` ごとの試行上限とbackoffを使う（[ADR 0014](adr/0014-generation-retry-policy.md)）。`research_incomplete` は3回・5秒、`grounding_blocked` は2回・5秒（[ADR 0018](adr/0018-retire-grounding-gate-as-quality-judge.md) のゲート撤去で新規には発生しないが、デプロイ順序と切り戻しのため写像は残す）、`generation_timeout` / `research_failed` / 未分類失敗は3回・30秒、`rate_limited` は1回で即FAILEDとする。登録時の `maxAttempts=3` も上限として残し、種別上限との小さい方を使う。次の `runAfter` が `createdAt` から10分の締切を超える場合は再試行せず、元の `errorCode` を維持してFAILEDにする。
 
 クラウドでは、`GENERATE` と `MIXED` の job 処理は LLM利用につながるため、job 作成時だけでなく worker 実行時にも生成権限または信頼済み内部実行コンテキストを確認する。`BANK` job は保存済み問題の取得だけなので、登録済みユーザーであれば実行できる。
 

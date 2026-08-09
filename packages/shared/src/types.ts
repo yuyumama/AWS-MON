@@ -80,6 +80,17 @@ export type SourceRef = {
 	hash?: string;
 };
 
+// 自己整合ジャッジが判定する4欠陥型(ADR 0018 の決定2)。事実誤りと難易度は
+// 判定範囲外で、いずれもドキュメント原文を必要としない型だけを対象にしている。
+export const JUDGE_DEFECT_TYPES = [
+	"requirement_contradiction",
+	"unsupported_specific_name",
+	"correct_label_mismatch",
+	"ambiguous_correct",
+] as const;
+
+export type JudgeDefectType = (typeof JUDGE_DEFECT_TYPES)[number];
+
 export type QuestionItem = {
 	questionId: string;
 	schemaVersion: 1;
@@ -113,6 +124,14 @@ export type QuestionItem = {
 		score?: number;
 		issues?: string;
 		evaluatedAt?: string;
+		// 自己整合ジャッジ(ADR 0018 の決定2)。report-only の間は保存するだけで
+		// 生成をブロックしない。判定できなかった生成では属性ごと存在しない。
+		judge?: {
+			status: "clean" | "defective";
+			modelId?: string;
+			defectTypes: JudgeDefectType[];
+			detail?: string;
+		};
 	};
 	contentHash: string;
 	validUntil: string;
