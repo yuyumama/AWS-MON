@@ -145,6 +145,12 @@ def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
 
     status別件数、grounding/relevanceスコアの mean・median・p25・p75、
     しきい値候補ごとの通過率(そのしきい値以上のスコアだった割合)を返す。
+
+    **通過率として読むべきは passed_rate_scored である。**threshold_pass_rates は
+    grounding と relevance を軸ごとに独立して集計した値であり、ゲートの合否ではない
+    (ゲートは両者の AND で判定する)。ADR 0015 / 0016 はこの区別をせず
+    threshold_pass_rates["0.6"]["grounding"] を「初回通過率」として転記しており、
+    実際の通過率と最大14ポイントずれていた(issue #143)。
     """
     status_counts: dict[str, int] = {}
     for record in records:
@@ -179,11 +185,21 @@ def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
             ),
         }
 
+    # 分母は threshold_pass_rates と揃える(スコアが取れた件数)。揃えないと
+    # 2つの通過率を並べたときに読み手が取り違える。
+    scored = len(grounding_values)
+    passed = status_counts.get("passed", 0)
+
     return {
         "total": len(records),
+        "scored": scored,
         "status_counts": status_counts,
+        # ゲートの合否(grounding と relevance の AND)。過去ADRとの比較にはこれを使う。
+        "passed_rate_scored": (passed / scored if scored else None),
+        "passed_rate_total": (passed / len(records) if records else None),
         "grounding": _stats_block(grounding_values),
         "relevance": _stats_block(relevance_values),
+        # 軸ごとの独立集計。合否ではないので通過率として読まないこと。
         "threshold_pass_rates": threshold_pass_rates,
     }
 

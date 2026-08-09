@@ -119,6 +119,65 @@ def test_summarize_threshold_pass_rates() -> None:
     assert rates["0.7"]["relevance"] == 0.0
 
 
+# --- status=passed ベースの通過率 --------------------------------------------
+# issue #143: threshold_pass_rates は grounding と relevance を軸ごとに独立して
+# 集計しており、AND を取った値が無かった。ADR 0015 / 0016 はこの出力の
+# threshold_pass_rates["0.6"]["grounding"] を「初回通過率」として転記しており、
+# 実際のゲート通過率(AND判定)と最大 14 ポイントずれていた。
+
+
+def test_summarize_reports_passed_rate_over_scored_records() -> None:
+    """実際の通過率は status=passed / スコア取得件数で出すこと。
+
+    threshold_pass_rates と同じ分母(スコアが取れた件数)にしないと、
+    2つの数字を並べたときに読み手が取り違える。
+    """
+    records = [
+        _record("passed", 0.8, 0.7),
+        _record("failed", 0.72, 0.3),  # grounding は高いが relevance で落ちた
+        _record("passed", 0.9, 0.8),
+        _record("failed", 0.4, 0.6),
+        _record("not_run", None, None),  # スコアが無いので分母に入れない
+        _record("error", None, None),
+    ]
+
+    summary = sample_gate_scores.summarize(records)
+
+    assert summary["scored"] == 4
+    assert summary["passed_rate_scored"] == pytest.approx(0.5)
+    # 全サンプル(not_run / error も分母)の通過率も併記する
+    assert summary["passed_rate_total"] == pytest.approx(2 / 6)
+
+
+def test_summarize_passed_rate_is_lower_than_grounding_axis_alone() -> None:
+    """grounding 単軸の通過率と AND 判定が食い違う状況を固定する。
+
+    ADR 0015 / 0016 の誤りは、この2つが同じ数字だと暗黙に仮定したことだった。
+    grounding 0.72 / relevance 0.3 の1件は grounding 0.6 を満たすが通過しない。
+    """
+    records = [
+        _record("passed", 0.8, 0.7),
+        _record("failed", 0.72, 0.3),
+        _record("passed", 0.9, 0.8),
+        _record("failed", 0.4, 0.6),
+    ]
+
+    summary = sample_gate_scores.summarize(records)
+
+    assert summary["threshold_pass_rates"]["0.6"]["grounding"] == pytest.approx(0.75)
+    assert summary["passed_rate_scored"] == pytest.approx(0.5)
+
+
+def test_summarize_passed_rate_is_none_without_scores() -> None:
+    records = [_record("error", None, None), _record("not_run", None, None)]
+
+    summary = sample_gate_scores.summarize(records)
+
+    assert summary["scored"] == 0
+    assert summary["passed_rate_scored"] is None
+    assert summary["passed_rate_total"] == 0.0
+
+
 def test_main_writes_metadata_first_and_detail_in_sample_record(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
