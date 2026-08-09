@@ -22,7 +22,12 @@ agent は当面、AgentCore Runtime 外（ローカル/自前ホスト）で動�
 - 出題セッションとの紐付けでは、API→agentへ `sessionId` を渡し、OTel baggage `session.id` に設定する。
 - **計装はオプトイン**: 通常起動（`python -m quiz_agent.server`）では計装されず、挙動も依存も変わらない。
 
-### 2. インライン品質ゲートは Bedrock Guardrails 文脈的グラウンディングチェック
+### 2. インライン品質ゲートは Bedrock Guardrails 文脈的グラウンディングチェック（→ [ADR 0018](0018-retire-grounding-gate-as-quality-judge.md) で撤回）
+
+> **2026-08-09 撤回**: 実測（prod 7問 + n=30×2腕）で、このゲートが本物の欠陥を捕まえた例が
+> 1つも無いことが分かった（grounding 軸の真陽性ゼロ、事実誤りのある問題は 0.78 / 0.92 で通過）。
+> さらにブロック起因の再生成が良問を壊し、壊れた版を通していた。品質判定は決定的チェックと
+> 自己整合ジャッジに置き換える。経緯と実測は [ADR 0018](0018-retire-grounding-gate-as-quality-judge.md)。
 - `quiz_agent/guardrail.py` が `ApplyGuardrail`（bedrock-runtime）を呼ぶ。
   - grounding_source = AWSドキュメントMCP調査で取得した**ドキュメント原文**（会話履歴のツール結果から抽出）
   - query = 設問文、guard content = 正解の選択肢＋解説（根拠を主張する部分）

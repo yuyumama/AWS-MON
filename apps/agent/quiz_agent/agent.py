@@ -577,11 +577,30 @@ def _generate_quiz_with_docs(
 
 
 @dataclass
+class GateAttempt:
+    """ゲート1試行分の記録。
+
+    再生成が問題を良くしているのか悪くしているのかを後から読み比べるため、
+    その試行で採点された item をスコアと対にして保持する
+    (`sample_gate_scores.py` の計測用。本番経路では参照しない)。
+    """
+
+    attempt: int
+    item: QuizItem
+    gate: GateResult
+
+
+@dataclass
 class GenerationResult:
     """生成結果とインライン品質ゲートの結果。"""
 
     item: QuizItem
     gate: GateResult = field(default_factory=lambda: GateResult(status="not_run"))
+    attempts: list[GateAttempt] = field(default_factory=list)
+    # グラウンディングの根拠になった read_documentation の原文。低スコアの原因が
+    # 捏造なのか調査の的外れなのかは、取得した原文を見ないと判別できないため残す
+    # (計測用。本番経路では参照しない)。
+    source_texts: list[str] = field(default_factory=list)
 
 
 def _gate_query(item: QuizItem) -> str:
@@ -596,13 +615,29 @@ def _gate_include_overview() -> bool:
     )
 
 
+def _gate_guard_content_mode() -> str:
+    """guard_content の構成を切り替える(スコア分布のA/B比較用)。
+
+    - "mixed"(既定): 正解の選択肢本文(日本語) + grounding_claim_en(英語)
+    - "claim_only" : grounding_claim_en のみ
+
+    ADR 0015 は「日本語部分は英語の原文と照合できず減点要因になる」として
+    correct_reason を grounding_claim_en に置き換えたが、正解の選択肢本文(日本語)は
+    guard_content に残ったままである。同じ理屈が残りの日本語にも当たるのかを測る腕。
+    """
+    return os.environ.get("AGENT_GATE_GUARD_CONTENT", "mixed").strip().lower()
+
+
 def _gate_guard_content(item: QuizItem) -> str:
     """ゲート対象のテキスト = 正解の選択肢本文 + 評価専用の英語主張。
 
     「正解: A, D」のようなラベル行はドキュメント原文に存在しえず常に減点要因になるため
     含めない。overview は既定では含めず、AGENT_GATE_INCLUDE_OVERVIEW=1 のときだけ
     含める(スコア分布でのA/B比較用)。
+    AGENT_GATE_GUARD_CONTENT=claim_only なら英語の主張文だけに絞る。
     """
+    if _gate_guard_content_mode() == "claim_only":
+        return item.explanation.grounding_claim_en
     option_text = {o.label: o.text for o in item.question.options}
     lines = [
         f"{label}: {option_text.get(label, '')}" for label in item.question.correct
@@ -681,7 +716,7 @@ def _generate_quiz_with_docs_and_gate(
             item = _structured_quiz_with_retries(agent)
             item = _ensure_valid_content(agent, item, on_phase=on_phase)
             _emit_phase(on_phase, "complete", attempt=1, total_attempts=1)
-            return GenerationResult(item=item, gate=gate)
+            return GenerationResult(item=item, gate=gate, source_texts=source_texts)
 
         item = _structured_quiz_with_retries(agent)
         if not gate_is_enabled:
@@ -689,8 +724,9 @@ def _generate_quiz_with_docs_and_gate(
             _log_gate_result(gate, attempt=1, attempts=1, cert=cert)
             item = _ensure_valid_content(agent, item, on_phase=on_phase)
             _emit_phase(on_phase, "complete", attempt=1, total_attempts=1)
-            return GenerationResult(item=item, gate=gate)
+            return GenerationResult(item=item, gate=gate, source_texts=source_texts)
 
+        gate_attempts: list[GateAttempt] = []
         for attempt in range(attempts):
             _emit_phase(
                 on_phase,
@@ -704,6 +740,8 @@ def _generate_quiz_with_docs_and_gate(
                 guard_content=_gate_guard_content(item),
             )
             _log_gate_result(gate, attempt=attempt + 1, attempts=attempts, cert=cert)
+            # 採点された時点の item を残す(content検証前・再生成前の姿)。
+            gate_attempts.append(GateAttempt(attempt=attempt + 1, item=item, gate=gate))
             if gate.status != "failed":
                 item = _ensure_valid_content(agent, item, on_phase=on_phase)
                 _emit_phase(
@@ -712,9 +750,19 @@ def _generate_quiz_with_docs_and_gate(
                     attempt=attempt + 1,
                     total_attempts=attempts,
                 )
-                return GenerationResult(item=item, gate=gate)
+                return GenerationResult(
+                    item=item,
+                    gate=gate,
+                    attempts=gate_attempts,
+                    source_texts=source_texts,
+                )
 
-            last = GenerationResult(item=item, gate=gate)
+            last = GenerationResult(
+                item=item,
+                gate=gate,
+                attempts=gate_attempts,
+                source_texts=source_texts,
+            )
             logger.warning(
                 "グラウンディングチェックでブロックされました (%d/%d回目, %s)",
                 attempt + 1,

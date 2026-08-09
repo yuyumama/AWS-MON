@@ -511,6 +511,35 @@ def test_gate_guard_content_includes_overview_when_enabled(
     assert "概要" in content
 
 
+def test_gate_guard_content_claim_only_drops_japanese_option_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """claim_only 腕では日本語の正解選択肢本文とラベル接頭辞を含めない。"""
+    monkeypatch.setenv("AGENT_GATE_GUARD_CONTENT", "claim_only")
+    monkeypatch.delenv("AGENT_GATE_INCLUDE_OVERVIEW", raising=False)
+    item = _quiz_item()
+
+    content = agent_module._gate_guard_content(item)
+
+    assert content == item.explanation.grounding_claim_en
+    assert "A: " not in content
+    assert "正解" not in content
+
+
+def test_gate_guard_content_defaults_to_mixed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """未設定なら従来どおり日本語の正解選択肢本文を含む(既定の腕を変えない)。"""
+    monkeypatch.delenv("AGENT_GATE_GUARD_CONTENT", raising=False)
+    monkeypatch.delenv("AGENT_GATE_INCLUDE_OVERVIEW", raising=False)
+    item = _quiz_item()
+
+    content = agent_module._gate_guard_content(item)
+
+    assert "A: 正解" in content
+    assert item.explanation.grounding_claim_en in content
+
+
 # --- Phase 1-b: _tool_result_texts -------------------------------------------
 
 

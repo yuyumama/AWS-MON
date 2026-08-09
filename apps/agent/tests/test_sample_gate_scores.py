@@ -9,6 +9,38 @@ import pytest
 import sample_gate_scores
 
 from quiz_agent.guardrail import GateResult
+from quiz_agent.schema import QuizItem
+
+
+def _quiz_item(question: str = "設問") -> QuizItem:
+    return QuizItem.model_validate(
+        {
+            "summary": "Bedrock Knowledge Basesの検索設計",
+            "question": {
+                "type": "single",
+                "question": question,
+                "options": [
+                    {"label": "A", "text": "正解"},
+                    {"label": "B", "text": "不正解"},
+                    {"label": "C", "text": "不正解"},
+                    {"label": "D", "text": "不正解"},
+                ],
+                "correct": ["A"],
+            },
+            "explanation": {
+                "overview": "概要",
+                "correct_reason": "正解の理由",
+                "grounding_claim_en": (
+                    "The correct option accurately reflects the documented AWS service "
+                    "behavior. It applies the capability described in the source."
+                ),
+                "option_reasons": [
+                    {"label": label, "reason": "理由"} for label in ("A", "B", "C", "D")
+                ],
+                "source": "https://docs.aws.amazon.com/example",
+            },
+        }
+    )
 
 
 def _record(status: str, grounding: float | None, relevance: float | None) -> dict:
@@ -128,7 +160,10 @@ def test_sample_once_includes_gate_detail(monkeypatch: pytest.MonkeyPatch) -> No
         sample_gate_scores,
         "generate_quiz",
         lambda *args: SimpleNamespace(
-            gate=GateResult(status="not_run", detail="no_read_documentation")
+            item=_quiz_item(),
+            gate=GateResult(status="not_run", detail="no_read_documentation"),
+            attempts=[],
+            source_texts=[],
         ),
     )
 
@@ -136,6 +171,68 @@ def test_sample_once_includes_gate_detail(monkeypatch: pytest.MonkeyPatch) -> No
 
     assert record["status"] == "not_run"
     assert record["detail"] == "no_read_documentation"
+    # 試行が無い(ゲート未実行)ときは最終結果にフォールバックする。
+    assert record["final_status"] == "not_run"
+    assert record["attempt_count"] == 0
+    assert record["attempts"] == []
+
+
+def test_sample_once_reports_first_attempt_and_keeps_every_item(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """再生成が起きた回では、初回スコアを status に、両方の本文を attempts に残す。
+
+    status を最終結果にすると RETRIES>0 のランが過去ラン(RETRIES=0)と比較できなく
+    なるため、初回を表に出す。Q-C(再生成が問題を良くしているか)の判定には
+    attempts[] に残した本文を使う。
+    """
+    first_item = _quiz_item("初回の設問")
+    final_item = _quiz_item("再生成後の設問")
+    monkeypatch.setattr(
+        sample_gate_scores,
+        "generate_quiz",
+        lambda *args: SimpleNamespace(
+            item=final_item,
+            gate=GateResult(status="passed", grounding_score=0.85, relevance_score=0.9),
+            attempts=[
+                SimpleNamespace(
+                    attempt=1,
+                    item=first_item,
+                    gate=GateResult(
+                        status="failed", grounding_score=0.42, relevance_score=0.5
+                    ),
+                ),
+                SimpleNamespace(
+                    attempt=2,
+                    item=final_item,
+                    gate=GateResult(
+                        status="passed", grounding_score=0.85, relevance_score=0.9
+                    ),
+                ),
+            ],
+            source_texts=["Amazon Bedrock Guardrails supports ...", "second doc"],
+        ),
+    )
+
+    record = sample_gate_scores._sample_once("aip", None)
+
+    assert record["status"] == "failed"
+    assert record["grounding"] == 0.42
+    assert record["final_status"] == "passed"
+    assert record["final_grounding"] == 0.85
+    assert record["attempt_count"] == 2
+    assert [a["attempt"] for a in record["attempts"]] == [1, 2]
+    assert record["attempts"][0]["item"]["question"]["question"] == "初回の設問"
+    assert record["attempts"][1]["item"]["question"]["question"] == "再生成後の設問"
+    assert record["item"]["question"]["question"] == "再生成後の設問"
+    # H1(捏造)/H2(調査の的外れ)の判別に使うので、根拠原文を落とさないこと。
+    assert record["source_texts"] == [
+        "Amazon Bedrock Guardrails supports ...",
+        "second doc",
+    ]
+    assert record["source_chars"] == len(
+        "Amazon Bedrock Guardrails supports ..."
+    ) + len("second doc")
 
 
 def test_sampling_metadata_records_model_and_dependency_versions(
@@ -153,6 +250,10 @@ def test_sampling_metadata_records_model_and_dependency_versions(
 
     monkeypatch.setattr(sample_gate_scores, "model_id", lambda: "test/model")
     monkeypatch.setattr(sample_gate_scores.importlib.metadata, "version", version)
+    monkeypatch.setenv("AGENT_GATE_GUARD_CONTENT", "claim_only")
+    monkeypatch.setenv("AGENT_GUARDRAIL_RETRIES", "1")
+    monkeypatch.setenv("AGENT_GUARDRAIL_ENFORCE", "0")
+    monkeypatch.setenv("AGENT_RESEARCH_RETRIES", "2")
 
     metadata = sample_gate_scores.sampling_metadata()
 
@@ -164,4 +265,9 @@ def test_sampling_metadata_records_model_and_dependency_versions(
             "openai": "2.46.0",
             "awslabs.aws-documentation-mcp-server": None,
         },
+        # 腕の識別子。どの設定で採ったランかを summary から復元できること。
+        "guard_content_mode": "claim_only",
+        "guardrail_retries": "1",
+        "guardrail_enforce": "0",
+        "research_retries": "2",
     }
