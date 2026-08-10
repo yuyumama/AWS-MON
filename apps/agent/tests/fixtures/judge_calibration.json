@@ -1,5 +1,5 @@
 {
-	"description": "自己整合ジャッジの較正セット。ジャッジは clean を通し defective を弾けること。item は利用者向けフィールドのみ（grounding_claim_en は評価専用の内部フィールドで利用者に届かないため、自己整合の判定対象に含めない）。",
+	"description": "自己整合ジャッジの較正セット。ジャッジは clean を通し defective を弾けること。item は利用者向けフィールドのみ（自己整合の判定は利用者に届くテキストだけを対象にする）。",
 	"defect_types": {
 		"requirement_contradiction": "設問が掲げた要件のうち少なくとも1つを正解が満たしていない",
 		"unsupported_specific_name": "選択肢がAPI名・条件キー・パラメータ名を名指ししているのに、その選択肢の解説が当該固有名を裏付けていない",

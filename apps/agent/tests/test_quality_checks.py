@@ -44,9 +44,6 @@ def _item(
             "explanation": {
                 "overview": "概要",
                 "correct_reason": "理由",
-                "grounding_claim_en": (
-                    "The correct option reflects the documented behavior."
-                ),
                 "option_reasons": [
                     {"label": label, "reason": "理由"} for label in "ABCD"
                 ],

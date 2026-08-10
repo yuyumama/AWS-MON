@@ -64,16 +64,8 @@ def load_cases() -> list[dict[str, Any]]:
 
 
 def build_item(case: dict[str, Any]) -> QuizItem:
-    """較正セットの item を QuizItem にする。
-
-    較正セットは利用者向けフィールドしか持たない(grounding_claim_en は評価専用の
-    内部フィールドで、自己整合の判定対象外であるため)。ジャッジも同フィールドを
-    読まないので、スキーマを満たすためだけに空文字を補う。
-    """
-    raw = case["item"]
-    explanation = {**raw["explanation"]}
-    explanation.setdefault("grounding_claim_en", "")
-    return QuizItem.model_validate({**raw, "explanation": explanation})
+    """較正セットの item を QuizItem にする。"""
+    return QuizItem.model_validate(case["item"])
 
 
 def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:

@@ -1,6 +1,6 @@
 # ADR 0015: 表示用の日本語テキストとグラウンディング評価用の英語根拠を分離する
 
-- 状態: 採用（2026-08-04）→ **前提を撤回**（[ADR 0018](0018-retire-grounding-gate-as-quality-judge.md)。`grounding_claim_en` はゲート専用フィールドであり、そのゲート自体を品質判定から外した）
+- 状態: 採用（2026-08-04）→ **前提を撤回**（[ADR 0018](0018-retire-grounding-gate-as-quality-judge.md)。`grounding_claim_en` はゲート専用フィールドであり、そのゲート自体を品質判定から外した）→ **決定1〜4を撤回し、`grounding_claim_en` をスキーマから削除**（2026-08-10、issue #149）。決定5（利用者向けフィールドの日本語プレーンテキスト検証）だけが現行である
 - 関連: [ADR 0010](0010-grounding-gate-thresholds.md)（グラウンディングゲートの閾値と実測分布）、[ADR 0012](0012-openrouter-only-inference.md)（OpenRouter一本化）、[ADR 0016](0016-generation-model-selection.md)（本ADRの計測を土台にしたモデル選定）、issue #86（本ADRの意思決定元）
 
 ## 背景

@@ -27,10 +27,6 @@ def _valid_item() -> QuizItem:
             "explanation": {
                 "overview": "この問題ではサービスの用途を確認します。",
                 "correct_reason": "公式ドキュメントの説明と一致するため正解です。",
-                "grounding_claim_en": (
-                    "This internal field may contain a longer English grounding claim "
-                    "because it is not shown to users."
-                ),
                 "option_reasons": [
                     {"label": label, "reason": "日本語で記述した理由です。"}
                     for label in ("A", "B", "C", "D")
@@ -154,11 +150,9 @@ def test_still_rejects_english_prose(value: str) -> None:
     assert "ASCII英単語が8語以上連続している" in str(excinfo.value)
 
 
-def test_does_not_validate_internal_grounding_claim_or_source() -> None:
+def test_does_not_validate_source() -> None:
+    """source はURLなので、英単語の連続もHTML実体参照も違反にしない。"""
     item = _valid_item()
-    item.explanation.grounding_claim_en = (
-        "one two three four five six seven eight nine ten eleven twelve"
-    )
     item.explanation.source = "https://example.com/a?escaped=&amp;"
 
     validate_quiz_content(item)

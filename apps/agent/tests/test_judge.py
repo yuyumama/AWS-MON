@@ -39,7 +39,6 @@ def _item(
             "explanation": {
                 "overview": "概要",
                 "correct_reason": "Aが正しい理由",
-                "grounding_claim_en": "EVALUATION ONLY: the documented behavior.",
                 "option_reasons": [
                     {"label": label, "reason": f"{label}の理由"}
                     for label in ("A", "B", "C", "D")
@@ -208,8 +207,8 @@ def test_judge_failure_does_not_break_generation(
 
 
 # --- 入力 ---------------------------------------------------------------------
-# 入力は QuizItem の利用者向けフィールドだけ。grounding_claim_en は評価専用の
-# 内部フィールドで利用者に届かないため、自己整合の判定対象に含めない(ADR 0018)。
+# 入力は QuizItem の利用者向けフィールドだけ。source(URL)は原文を読ませない以上
+# 判定材料にならないため含めない(ADR 0018)。
 
 
 def test_prompt_contains_user_facing_fields_only(

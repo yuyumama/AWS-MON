@@ -120,11 +120,11 @@ def test_calibration_fixture_has_the_expected_shape() -> None:
     assert all(count >= 2 for count in defect_counts.values())
 
 
-def test_build_item_fills_evaluation_only_field() -> None:
-    """較正セットは利用者向けフィールドしか持たないのでスキーマを満たす補完が要る。"""
+def test_build_item_validates_calibration_case() -> None:
+    """較正セットの item がそのまま QuizItem のスキーマを満たすこと。"""
     case = run_judge_calibration.load_cases()[0]
 
     item = run_judge_calibration.build_item(case)
 
     assert isinstance(item, QuizItem)
-    assert item.explanation.grounding_claim_en == ""
+    assert item.question.correct
