@@ -35,10 +35,6 @@ def _quiz_item(question: str = "設問はどれか。") -> QuizItem:
             "explanation": {
                 "overview": "概要",
                 "correct_reason": "正解の理由",
-                "grounding_claim_en": (
-                    "The correct option accurately reflects the documented AWS service "
-                    "behavior. It applies the capability described in the source."
-                ),
                 "option_reasons": [
                     {"label": label, "reason": "理由"} for label in ("A", "B", "C", "D")
                 ],
@@ -665,18 +661,16 @@ def test_empty_research_records_incomplete_when_not_enforced(
     assert result.research == ResearchResult(status="incomplete", detail=detail)
 
 
-def test_empty_research_is_blocked_without_any_guardrail_configuration(
+def test_empty_research_is_blocked_with_no_env_configuration(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """ガードレールの設定と無関係に fail-closed が効くこと(#141 の中心)。
+    """環境変数を何も設定しない既定状態で fail-closed が効くこと(#141 の中心)。
 
-    撤去前は `gate_enabled() and gate_enforced()` が条件だったため、
-    AGENT_GUARDRAIL_ID が未設定だと調査未完了でもそのまま生成していた。
-    ガードレールの有無と調査の強制は無関係なので切り離した。
+    撤去前は `gate_enabled() and gate_enforced()` が条件で、ガードレールIDが
+    未設定だと調査未完了でもそのまま生成していた。ガードレールの設定と調査の
+    強制は無関係なので、既定(未設定)で止まることをここで固定する。
     """
     _mock_empty_research(monkeypatch, _no_tool_messages())
-    monkeypatch.delenv("AGENT_GUARDRAIL_ID", raising=False)
-    monkeypatch.delenv("AGENT_GUARDRAIL_ENFORCE", raising=False)
     monkeypatch.delenv("AGENT_RESEARCH_ENFORCE", raising=False)
 
     with pytest.raises(agent_module.ResearchIncompleteError, match="no_tool_calls"):
@@ -714,10 +708,10 @@ def test_research_failure_is_blocked_as_dependency_error_when_enforced(
         agent_module.generate_quiz("saa")
 
 
-def test_research_failure_is_blocked_without_any_guardrail_configuration(
+def test_research_failure_is_blocked_with_no_env_configuration(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """調査失敗の fail-closed もガードレールの設定に依存しないこと。"""
+    """調査失敗の fail-closed も、環境変数の未設定状態で効くこと。"""
     monkeypatch.setattr(agent_module, "_docs_mcp_enabled", lambda: True)
     monkeypatch.setattr(
         agent_module,
@@ -729,8 +723,6 @@ def test_research_failure_is_blocked_without_any_guardrail_configuration(
         "_generate",
         lambda *args, **kwargs: pytest.fail("強制モードではフォールバックしないこと"),
     )
-    monkeypatch.delenv("AGENT_GUARDRAIL_ID", raising=False)
-    monkeypatch.delenv("AGENT_GUARDRAIL_ENFORCE", raising=False)
     monkeypatch.delenv("AGENT_RESEARCH_ENFORCE", raising=False)
 
     with pytest.raises(agent_module.ResearchFailedError):

@@ -351,7 +351,7 @@ type GenerationProgress = {
 |---|---|---|
 | `mcp`, `research` | `researching` | 調査 |
 | `generation` | `drafting` | 作成 |
-| `guardrail`, `grounding` | `verifying` | 検証 |
+| `guardrail`, `grounding` | `verifying` | 検証（[ADR 0018](adr/0018-retire-grounding-gate-as-quality-judge.md) のゲート撤去でagentは送らなくなった。デプロイ順序と切り戻しのため写像だけ残す） |
 | `regeneration` | `regenerating` | 作り直し（作成段階を点灯） |
 
 `attempt` はその工程の試行番号、`totalAttempts` は最大試行数である。割合には換算しない。

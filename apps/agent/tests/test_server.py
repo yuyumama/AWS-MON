@@ -56,10 +56,6 @@ def test_build_generate_response_includes_summary(
             "explanation": {
                 "overview": "概要",
                 "correct_reason": "正解の理由",
-                "grounding_claim_en": (
-                    "The correct option matches the documented AWS behavior. "
-                    "It applies the capability described in the source."
-                ),
                 "option_reasons": [
                     {"label": "A", "reason": "正しい"},
                     {"label": "B", "reason": "誤り"},
@@ -216,22 +212,6 @@ def test_server_do_post_returns_422_for_content_violation(
     status, body = handler.sent
     assert status == HTTPStatus.UNPROCESSABLE_ENTITY
     assert body["code"] == "content_invalid"
-
-
-def test_generate_response_excludes_internal_grounding_claim(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    item = server_module._stub_quiz("aip", None)
-    monkeypatch.setattr(
-        server_module,
-        "_generate_quiz",
-        lambda cert, domain, on_phase=None: (item, JudgeResult(status="not_run")),
-    )
-
-    response = server_module.build_generate_response({}, started=0.0)
-
-    assert "grounding_claim_en" not in response["quiz"]["explanation"]
-    assert response["quiz"]["explanation"]["correct_reason"]
 
 
 def test_runtime_do_post_returns_http_200_with_rate_limited_code(
@@ -420,10 +400,6 @@ def _item_with_source(source: str) -> QuizItem:
             "explanation": {
                 "overview": "概要",
                 "correct_reason": "正解の理由",
-                "grounding_claim_en": (
-                    "The correct option matches the documented AWS behavior. "
-                    "It applies the capability described in the source."
-                ),
                 "option_reasons": [
                     {"label": "A", "reason": "正しい"},
                     {"label": "B", "reason": "誤り"},

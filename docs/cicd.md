@@ -159,7 +159,7 @@ infra/
 | パス | 作成者 | 用途 |
 |---|---|---|
 | `cognito-user-pool-id` / `cognito-client-id` | **オーナー手動（前提条件）** | Terraformがapi Lambda環境変数へ注入。deploy-webがVITE_*へ注入 |
-| `agent-guardrail-id` | **オーナー手動（前提条件）** | AgentCore Runtime環境変数 `AGENT_GUARDRAIL_ID` |
+| `agent-guardrail-id` | **オーナー手動（過去の前提条件）** | **現在は未使用**。[ADR 0018](adr/0018-retire-grounding-gate-as-quality-judge.md) のゲート撤去でTerraformは参照せず、Runtimeにも注入しない。切り戻し用にパラメータとGuardrailリソースだけ残してある |
 | `api-base-url` | Terraform | deploy-webの `VITE_API_BASE_URL` |
 | `web-bucket` / `cloudfront-distribution-id` | Terraform | deploy-webのsync先/invalidation |
 | `agent-runtime-id` | Terraform | deploy-agentのRuntime更新対象 |

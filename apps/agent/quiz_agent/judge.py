@@ -1,9 +1,9 @@
 """自己整合ジャッジ（ADR 0018 の決定2、issue #140）。
 
 Guardrails グラウンディングゲートは実測で本物の欠陥を1つも捕まえていなかった
-（grounding 軸の真陽性ゼロ）。原因は構造的で、ゲートが採点するのは
-`grounding_claim_en` という利用者に届かない評価専用フィールドであり、
-`grounding_source` が英語原文のため日本語の製品へ向け直すことが原理的にできない。
+（grounding 軸の真陽性ゼロ）。原因は構造的で、ゲートが採点していたのは利用者に
+届かない英語の評価専用フィールドであり、突き合わせ先も英語原文だったため、
+日本語の出荷物へ向け直すことが原理的にできなかった（当該フィールドは撤去済み）。
 
 無料モデルのジャッジは**日本語の出荷物をそのまま読める**。ここが決定的な違い。
 
@@ -122,8 +122,7 @@ def _judge_model(judge_model: str) -> Model:
 def build_judge_prompt(item: QuizItem) -> str:
     """利用者向けフィールドだけを提示する判定プロンプトを構築する。
 
-    grounding_claim_en（評価専用）と source（URL）は含めない。前者は利用者に
-    届かないフィールドであり、後者は原文を読ませない以上、判定材料にならない。
+    source（URL）は含めない。原文を読ませない以上、判定材料にならないためである。
     """
     options = "\n".join(
         f"  {option.label}: {option.text}" for option in item.question.options

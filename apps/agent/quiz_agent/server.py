@@ -56,11 +56,6 @@ def _stub_quiz(cert: str, domain: str | None) -> QuizItem:
         explanation=Explanation(
             overview="Knowledge Bases は外部データを検索して生成時の根拠として使うRAG構成を支援します。",
             correct_reason="選択肢BがKnowledge Basesの用途に該当します。",
-            grounding_claim_en=(
-                "Amazon Bedrock Knowledge Bases retrieves information from connected "
-                "data sources for retrieval augmented generation. The retrieved context "
-                "supports grounded responses from a foundation model."
-            ),
             option_reasons=[
                 OptionReason(
                     label="A",
@@ -216,7 +211,7 @@ def build_generate_response(
         "cert": cert,
         "domain": domain,
         "domainSelection": domain_selection,
-        "quiz": item.model_dump(exclude={"explanation": {"grounding_claim_en"}}),
+        "quiz": item.model_dump(),
         "generation": {
             "modelId": _model_id(),
             "promptVersion": PROMPT_VERSION,

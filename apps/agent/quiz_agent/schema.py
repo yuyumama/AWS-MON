@@ -45,13 +45,6 @@ class Explanation(BaseModel):
     correct_reason: str = Field(
         description="正解が正しい理由を日本語のプレーンテキストで記述"
     )
-    grounding_claim_en: str = Field(
-        description=(
-            "正解が正しい理由を、調査したAWS公式ドキュメントの記述に忠実な英語で述べる"
-            "評価専用の主張文（2〜4文）。原文の逐語コピーではなく、原文の記述に基づいて"
-            "言い換える"
-        )
-    )
     option_reasons: list[OptionReason] = Field(description="各選択肢についての説明")
     source: str = Field(description="参考になるAWS公式ドキュメントのURL")
 

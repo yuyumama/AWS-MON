@@ -37,10 +37,6 @@ def _quiz_item(question: str = "設問はどれか。") -> QuizItem:
             "explanation": {
                 "overview": "概要",
                 "correct_reason": "正解の理由",
-                "grounding_claim_en": (
-                    "The correct option accurately reflects the documented AWS service "
-                    "behavior. It applies the capability described in the source."
-                ),
                 "option_reasons": [
                     {"label": label, "reason": "理由"} for label in ("A", "B", "C", "D")
                 ],

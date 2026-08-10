@@ -65,19 +65,6 @@ def _iter_calibration_items(path: Path) -> Iterator[tuple[str, dict[str, Any]]]:
             yield f"{case.get('id')}({case.get('label')})", item
 
 
-def _with_claim(raw: dict[str, Any]) -> dict[str, Any]:
-    """grounding_claim_en を持たない item に空の値を補う。
-
-    較正セットは利用者向けフィールドしか持たない(評価専用フィールドは自己整合の
-    判定対象外であるため)。決定的チェックはどれもこのフィールドを見ないので、
-    スキーマを満たすためだけの補完で判定結果は変わらない。
-    """
-    explanation = raw.get("explanation")
-    if not isinstance(explanation, dict) or "grounding_claim_en" in explanation:
-        return raw
-    return {**raw, "explanation": {**explanation, "grounding_claim_en": ""}}
-
-
 def _load_items(paths: list[Path], calibration: bool) -> list[tuple[str, QuizItem]]:
     sources: list[Iterator[tuple[str, dict[str, Any]]]] = [
         _iter_jsonl_items(path) for path in paths
@@ -90,7 +77,7 @@ def _load_items(paths: list[Path], calibration: bool) -> list[tuple[str, QuizIte
     for source in sources:
         for label, raw in source:
             try:
-                items.append((label, QuizItem.model_validate(_with_claim(raw))))
+                items.append((label, QuizItem.model_validate(raw)))
             except Exception:  # noqa: BLE001 - スキーマ違反は集計対象外として数える
                 skipped += 1
     if skipped:

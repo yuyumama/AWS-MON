@@ -1,8 +1,9 @@
 """モデル設定（環境変数）の解決。
 
 strands 等の重い依存を持たないため、stubモードの server.py からも安全にimportできる。
-生成モデルの実行は OpenRouter に一本化している（ADR 0012。Bedrock は Guardrails と
-AgentCore Runtime でのみ使い、モデル推論には使わない）。
+生成モデルの実行は OpenRouter に一本化している（ADR 0012。Bedrock は AgentCore
+Runtime のホスティングでのみ使い、モデル推論には使わない。Guardrails も ADR 0018 の
+ゲート撤去で呼ばなくなった）。
 
 既定モデルは ADR 0016 で inclusionai/ling-3.0-flash:free に切り替えたが、
 2026-08-08 に OpenRouter が同モデルの無料枠を廃止（404）したため

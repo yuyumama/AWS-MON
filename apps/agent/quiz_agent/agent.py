@@ -263,8 +263,9 @@ def _docs_mcp_client() -> MCPClient:
 def _tool_result_texts(messages: list[Any]) -> list[str]:
     """会話履歴からMCPツール結果のテキスト(ドキュメント原文)を抜き出す。
 
-    グラウンディングチェックの grounding_source として使う。search_documentation の
-    結果(検索結果一覧のJSON)はドキュメント原文ではなくノイズになるため、
+    GenerationResult.source_texts として計測に使う(本番経路では参照しない)。
+    search_documentation の結果(検索結果一覧のJSON)はドキュメント原文ではなく
+    ノイズになるため、
     toolUse(toolUseId -> ツール名)を手がかりに read_documentation の結果だけに絞る。
     status=error の結果(上限超過によるキャンセル等)は根拠として扱わない。
     """

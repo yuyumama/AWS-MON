@@ -61,8 +61,8 @@ def missing_question_prompt(item: QuizItem) -> bool:
 def _user_facing_fields(item: QuizItem) -> list[tuple[str, str]]:
     """利用者に表示されるテキストを(フィールド名, 値)で列挙する。
 
-    content_policy.validate_quiz_content と同じ範囲。評価専用の
-    grounding_claim_en と、パーセントエンコードが正当な source は含めない。
+    content_policy.validate_quiz_content と同じ範囲。パーセントエンコードが
+    正当な source は含めない。
     """
     return [
         ("summary", item.summary),
