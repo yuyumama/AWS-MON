@@ -49,5 +49,5 @@ AWS-MON/
 
 - **ローカル**: `.env`（各appの `.env.example` をコピー）。
 - **クラウド**: **SSM Parameter Store(SecureString) を既定**。ローテーションが要るもの（外部APIトークンなど）だけ Secrets Manager。
-- OpenRouterのprodキーはSSM SecureStringからRuntimeが取得する。Guardrails・SSM・CloudWatchはIAMロールで呼ぶのでAPIキー不要。
+- OpenRouterのprodキーはSSM SecureStringからRuntimeが取得する。SSM・CloudWatchはIAMロールで呼ぶのでAPIキー不要。
 - **tfstate に平文の秘密を書かない**。SSM/Secretsは別作成しARN参照＋`sensitive`。stateは暗号化バックエンドへ。

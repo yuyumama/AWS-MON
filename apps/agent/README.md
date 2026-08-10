@@ -237,7 +237,9 @@ status別件数、調査完了状況、ジャッジ判定、所要時間の分�
 旧 `evaluate_question`（自己批評）を置き換える形で、トレースを LLM-as-a-Judge が
 非同期採点するオンライン評価を運用していたが、**費用のほぼ全額がジャッジトークン
 だったため廃止した**（[ADR 0011](../../docs/adr/0011-retire-online-evaluations.md)、issue #74）。
-品質担保は Guardrails グラウンディングゲート（全件・同期）に一本化。
+当時は後継として Guardrails グラウンディングゲート（全件・同期）に一本化したが、
+そのゲートも [ADR 0018](../../docs/adr/0018-retire-grounding-gate-as-quality-judge.md) で撤去した。
+**現在の品質担保は決定的チェック（`quality_checks.py`）と自己整合ジャッジ（`judge.py`）の2層である。**
 セットアップスクリプト `scripts/setup_evaluations.py` も削除済み（git 履歴から参照可）。
 
 ## TODO（次の段階）

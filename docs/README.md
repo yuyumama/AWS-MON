@@ -17,15 +17,15 @@
   - [0004](adr/0004-local-first-dev.md) ローカルファースト開発
   - [0005](adr/0005-combined-generation.md) 問題と解説を同時生成する
   - [0006](adr/0006-auth-cognito-cloud-only.md) 認証は既存Cognito User Pool＋生成権限制御＋ローカルは devシム
-  - [0007](adr/0007-observability-stack.md) オブザーバビリティ構成（ADOT直送＋Guardrailsゲート＋オンライン評価。決定3は0011で撤回）
+  - [0007](adr/0007-observability-stack.md) オブザーバビリティ構成（ADOT直送＋Guardrailsゲート＋オンライン評価。決定2は0018で、決定3は0011で撤回）
   - [0008](adr/0008-prod-deployment-shape.md) prodデプロイ構成（CloudFront/API分離・定期worker・AgentCore Runtime）
   - [0009](adr/0009-openrouter-default-provider.md) 生成モデルプロバイダの既定を Bedrock から OpenRouter へ昇格（決定1・3は0012で更新）
-  - [0010](adr/0010-grounding-gate-thresholds.md) グラウンディングゲートの閾値を実測分布に基づき grounding 0.6 へ引き下げる
+  - [0010](adr/0010-grounding-gate-thresholds.md) グラウンディングゲートの閾値を実測分布に基づき grounding 0.6 へ引き下げる（ゲートごと0018で撤回）
   - [0011](adr/0011-retire-online-evaluations.md) AgentCore Evaluations オンライン評価の廃止（費用実測に基づく）
   - [0012](adr/0012-openrouter-only-inference.md) 生成モデルの推論は OpenRouter に一本化し Bedrock 推論経路を撤去する
   - [0013](adr/0013-async-initial-generation.md) 初回問題生成を非同期job化し、生成経路の時間予算を明示する
   - [0014](adr/0014-generation-retry-policy.md) 生成失敗を分類し、失敗種別ごとのリトライ方針と実時間締切を導入する
-  - [0015](adr/0015-display-and-grounding-data-separation.md) 表示用の日本語テキストとグラウンディング評価用の英語根拠を分離する
+  - [0015](adr/0015-display-and-grounding-data-separation.md) 表示用の日本語テキストとグラウンディング評価用の英語根拠を分離する（英語根拠は0018で撤回・削除）
   - [0016](adr/0016-generation-model-selection.md) 生成モデルを ling-3.0-flash に切り替える
   - [0017](adr/0017-test-strategy.md) テストを2層構成にし、テスト先行を委譲プロセスに組み込む
   - [0018](adr/0018-retire-grounding-gate-as-quality-judge.md) グラウンディングゲートを品質判定から外し、決定的チェックと自己整合ジャッジに置き換える

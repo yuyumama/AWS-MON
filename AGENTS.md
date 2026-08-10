@@ -12,7 +12,7 @@ AWS認定試験の模擬問題を生成するWebアプリ。問題・解説は�
 
 - `apps/web` … フロントエンド（Vite+React+TS。主要画面・SRPログイン実装済み）
 - `apps/api` … ビジネスロジックAPI（Hono + Lambda Web Adapter, TS。認証・認可含め実装済み）
-- `apps/agent` … 問題生成エージェント（Strands + Bedrock, Python。MCP調査・Guardrailsゲート・OTel計装込み）
+- `apps/agent` … 問題生成エージェント（Strands + OpenRouter, Python。MCP調査・品質チェック・自己整合ジャッジ・OTel計装込み）
 - `packages/shared` … web/api/seed で共有するTS型とDynamoDBテーブル定義（`@aws-mon/shared`）
 - `infra` … Terraform（envs = local / prod。prodはデプロイ済み: DynamoDB/ECR/S3+CloudFront/Lambda/AgentCore Runtime）
 - `local` … ローカル開発環境（DynamoDB Local + LocalStack。`local/seed` に投入スクリプト）
@@ -124,7 +124,7 @@ Codexに「実装して、テストも書いて」と渡すと、テストは実
 |---|---|
 | バグ修正（実機・本番で発現した、または回帰しうるもの） | **必須**。再現テストを書き、赤を見てから直す |
 | 認可・認証の分岐（`auth.ts`、`devOnly`） | **必須** |
-| 採点・判定ロジック（`answerSession`、`arrays_equal`、`check_grounding`） | **必須** |
+| 採点・判定ロジック（`answerSession`、`arrays_equal`、`quality_checks.py`、`judge.py` の `_resolve_verdict`） | **必須** |
 | DynamoDBキー生成（`packages/shared/src/tables.ts`） | **必須** |
 | APIの外部契約（ステータスコード、レスポンス形状） | **必須** |
 | repository層の新規クエリ | 実装と並行でよい。マージ前に緑であること |
@@ -172,7 +172,7 @@ npm run typecheck --workspaces --if-present   # 型チェック（リポジト�
 # Web（vite dev server が /api -> localhost:8080 をプロキシ）
 cd apps/web && npm run dev      # http://localhost:5173
 
-# 問題生成エージェント（要 AWS認証 + Bedrockモデルアクセス）
+# 問題生成エージェント（要 OpenRouter APIキー。AWS認証はSSM/CloudWatch用）
 cd apps/agent && python -m quiz_agent.cli --cert aip   # CLIで1問
 python -m quiz_agent.server                            # API連携用HTTPサーバ（AGENT_BASE_URL）
 

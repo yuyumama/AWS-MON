@@ -20,7 +20,9 @@ infra/
   SSMパラメータ。構成の意思決定は `docs/adr/0008`、
   デプロイ経路とSSMパラメータ契約・初回立ち上げ手順は `docs/cicd.md` を参照。
 - AgentCore Runtime にはオブザーバビリティ用の環境変数（`AGENT_OBSERVABILITY_ENABLED` /
-  `OTEL_*`）とGuardrail IDを注入する（監視構成の全体像は `docs/observability.md`）。
+  `OTEL_*`）と、生成・ジャッジのモデルID（`AGENT_MODEL_ID` / `AGENT_JUDGE_MODEL_ID`）を
+  注入する（監視構成の全体像は `docs/observability.md`）。Guardrail IDの注入は
+  `docs/adr/0018` のゲート撤去で不要になったため削除済み。
 - apply は **deploy-infra ワークフロー経由のみ**（plan → prod承認 → apply）。
   backendのバケット名はCIが `-backend-config` で注入する。
 - `api_image_tag` / `agent_image_tag`（`terraform.tfvars`）が空の間は
