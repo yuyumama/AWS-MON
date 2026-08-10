@@ -14,7 +14,9 @@ from dotenv import load_dotenv
 
 from .agent import generate_quiz
 from .certs import CERT_FULL_NAMES
+from .judge import JudgeResult
 from .log_filters import suppress_duplicate_strands_warnings
+from .research_status import ResearchResult
 from .schema import Explanation, Question
 
 # 実験用 CLI の --domain 互換と省略時抽選だけに使うローカル定義。
@@ -91,6 +93,27 @@ def _print_explanation(ex: Explanation) -> None:
         print(f"\n[参考資料]\n{ex.source}")
 
 
+def _print_research(research: ResearchResult) -> None:
+    # complete は既定の期待値なので黙る。fail-closed を切って動かしたときだけ出る。
+    if research.status == "complete":
+        return
+    detail = f" ({research.detail})" if research.detail else ""
+    print(f"\n--- 調査 ---\n完了状況: {research.status}{detail}")
+
+
+def _print_judge(judge: JudgeResult) -> None:
+    """自己整合ジャッジの判定を出す(report-only。ADR 0018 の決定2)。
+
+    未設定(AGENT_JUDGE_MODEL_ID なし)と実行失敗は判定が無いので何も出さない。
+    """
+    if judge.status in ("not_run", "error"):
+        return
+    model = f" (model={judge.model_id})" if judge.model_id else ""
+    print(f"\n--- 自己整合ジャッジ ---\n判定: {judge.status}{model}")
+    for defect in judge.defects:
+        print(f"  - {defect.type}: {defect.detail}")
+
+
 def main(argv: list[str] | None = None) -> int:
     load_dotenv()
     suppress_duplicate_strands_warnings()
@@ -134,11 +157,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         out = {
             "quiz": item.model_dump(),
-            "gate": {
-                "status": result.gate.status,
-                "groundingScore": result.gate.grounding_score,
-                "relevanceScore": result.gate.relevance_score,
-                "detail": result.gate.detail,
+            "research": {
+                "status": result.research.status,
+                "detail": result.research.detail,
+            },
+            "judge": {
+                "status": result.judge.status,
+                "modelId": result.judge.model_id,
+                "defectTypes": [defect.type for defect in result.judge.defects],
+                "detail": result.judge.detail,
             },
         }
         print(json.dumps(out, ensure_ascii=False, indent=2))
@@ -146,11 +173,8 @@ def main(argv: list[str] | None = None) -> int:
 
     _print_question(item.question)
     _print_explanation(item.explanation)
-    if result.gate.status != "not_run":
-        print(
-            f"\n--- グラウンディングチェック ---\n判定: {result.gate.status}"
-            f" (grounding={result.gate.grounding_score}, relevance={result.gate.relevance_score})"
-        )
+    _print_research(result.research)
+    _print_judge(result.judge)
     return 0
 
 
