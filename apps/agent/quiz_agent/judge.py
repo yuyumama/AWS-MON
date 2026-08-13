@@ -106,6 +106,17 @@ def judge_model_id() -> str | None:
     return os.environ.get("AGENT_JUDGE_MODEL_ID", "").strip() or None
 
 
+# 検品器は同じ問題に同じ判定を返すべきなので温度を明示する。ただし**これだけでは
+# 決定的にならない**。issue #147 の実測では、temperature=0 がリクエストに乗った状態
+# (format_request で確認済み)で同一95問を2回判定して一致は64%だった。採用モデルは
+# MoE(120b-a12b)で、無料枠は複数プロバイダへ振り分けられるため配信側が非決定的である。
+# **単発判定を fail-closed に使えない根拠がこれ。**
+#
+# なお温度既定での同一条件2ランは取っていないため、この設定が再現性を上げた証拠は無い。
+# 「検品器は決定的であるべき」という原則からの措置で、害は無いが効果は未実証である。
+JUDGE_TEMPERATURE = 0.0
+
+
 def _judge_model(judge_model: str) -> Model:
     # openai extra を必要とするため、importを初期化時まで遅らせる
     from .openrouter_model import ToolCallStructuredOutputModel
@@ -116,6 +127,7 @@ def _judge_model(judge_model: str) -> Model:
             "base_url": openrouter_base_url(),
         },
         model_id=judge_model,
+        params={"temperature": JUDGE_TEMPERATURE},
     )
 
 
