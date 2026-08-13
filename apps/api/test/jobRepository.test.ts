@@ -767,7 +767,7 @@ describe("runRunnableJobs", () => {
 			await input.onPhase?.("research", { attempt: 1, totalAttempts: 3 });
 			await input.onPhase?.("research", { attempt: 1, totalAttempts: 3 });
 			await input.onPhase?.("generation", { attempt: 1, totalAttempts: 1 });
-			await input.onPhase?.("guardrail", { attempt: 1, totalAttempts: 2 });
+			await input.onPhase?.("validation", { attempt: 1, totalAttempts: 2 });
 			await vi.advanceTimersByTimeAsync(5_000);
 			return question;
 		});

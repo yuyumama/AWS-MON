@@ -525,6 +525,12 @@ def _ensure_valid_content(
     """
     retries = _content_retries()
     for attempt in range(retries + 1):
+        # 決定的チェックの区間を「検証」として通知する(#155)。ADR 0018 のゲート撤去で
+        # guardrail/grounding を送らなくなり、この工程が表示上死んでいた。
+        # 再生成のたびに検証し直すため、ループの先頭で通知する。
+        _emit_phase(
+            on_phase, "validation", attempt=attempt + 1, total_attempts=retries + 1
+        )
         try:
             # 内容ポリシーを先に見る。HTML混入は品質欠陥の判定(問いかけの有無など)を
             # 巻き添えにしうるので、表記を正してから品質を見る順序にする。
@@ -653,6 +659,9 @@ def generate_quiz(
     result = _generate_quiz_result(
         cert, domain, domain_label, domain_label_en, on_phase=on_phase
     )
+    # ジャッジはLLM呼び出しで実時間がかかる。無通知だと「作成」のまま数秒止まって
+    # 見えるため、決定的チェックと同じ「検証」工程として通知する(#155)。
+    _emit_phase(on_phase, "validation", attempt=1, total_attempts=1)
     result.judge = judge_self_consistency(result.item, cert=cert)
     return result
 

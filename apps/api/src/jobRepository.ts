@@ -181,10 +181,9 @@ function publicProgressPhase(
 			return "researching";
 		case "generation":
 			return "drafting";
-		// guardrail / grounding は ADR 0018 のゲート撤去で agent が送らなくなった。
-		// デプロイ順序と切り戻しのため写像は残す。
-		case "guardrail":
-		case "grounding":
+		// 決定的チェックと自己整合ジャッジの区間(#155)。ADR 0018 のゲート撤去で
+		// 送られなくなった guardrail / grounding を置き換えたもの。
+		case "validation":
 			return "verifying";
 		case "regeneration":
 			return "regenerating";
