@@ -89,6 +89,8 @@ def _generate_quiz(
     if os.environ.get("AGENT_STUB") == "1":
         if on_phase is not None:
             on_phase("generation", {"attempt": 1, "totalAttempts": 1})
+            # 実経路と同じ工程をローカルでも辿れるようにする(#155)
+            on_phase("validation", {"attempt": 1, "totalAttempts": 1})
         return _stub_quiz(cert, domain), JudgeResult(status="not_run", detail="stub")
 
     from .agent import generate_quiz

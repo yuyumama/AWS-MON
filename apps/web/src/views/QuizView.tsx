@@ -29,6 +29,10 @@ import {
 import { invalidateCache } from "../lib/cache";
 import { invalidateFor } from "../lib/cacheKeys";
 import { certFullName, certName, domainLabel, modeLabel } from "../lib/certs";
+import {
+	generationStages,
+	resolveGenerationStage,
+} from "../lib/generationStages";
 import { useElapsedSeconds } from "../lib/useElapsedSeconds";
 
 type Props = {
@@ -85,24 +89,9 @@ function PrefetchStatus({ state }: { state: PrefetchState }) {
 	);
 }
 
-const generationStages = ["調査", "作成", "検証"] as const;
-
 function GenerationStages({ progress }: { progress?: GenerationProgress }) {
 	if (!progress) return null;
-	const currentIndex =
-		progress.phase === "researching"
-			? 0
-			: progress.phase === "verifying"
-				? 2
-				: 1;
-	const message =
-		progress.phase === "researching"
-			? "出題に必要な資料を調べています"
-			: progress.phase === "drafting"
-				? "調査結果から問題を作成しています"
-				: progress.phase === "verifying"
-					? "問題と解説の内容を確認しています"
-					: `作り直しています（${progress.attempt ?? 2}回目）`;
+	const { currentIndex, message } = resolveGenerationStage(progress);
 
 	return (
 		<div className="generation-stages">

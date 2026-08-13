@@ -1027,15 +1027,18 @@ def test_phase_events_follow_generation_and_regeneration_order(
         on_phase=lambda phase, detail: events.append((phase, detail)),
     )
 
+    # validation は再生成のたびに通知される(#155)。
     assert [phase for phase, _detail in events] == [
         "mcp",
         "research",
         "research",
         "generation",
+        "validation",
         "regeneration",
+        "validation",
         "complete",
     ]
-    assert events[4][1] == {"attempt": 2, "totalAttempts": 2}
+    assert events[5][1] == {"attempt": 2, "totalAttempts": 2}
 
 
 def test_phase_callback_error_does_not_stop_generation(
@@ -1130,3 +1133,28 @@ def test_judge_receives_cert(monkeypatch: pytest.MonkeyPatch) -> None:
     agent_module.generate_quiz("aip")
 
     assert seen == ["aip"]
+
+
+# --- 検証工程の進捗通知 (#155) -----------------------------------------------
+
+
+def test_emits_validation_phase_before_complete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """決定的チェックの区間で検証フェーズを通知する。
+
+    ADR 0018 のゲート撤去で guardrail/grounding を送らなくなった結果、
+    生成待ち画面の「検証」が永久に upcoming のままになっていた(#155)。
+    """
+    _mock_research(monkeypatch)
+    FakeAgent.structured_results = [_quiz_item("正常な設問はどれか。")]
+    events: list[tuple[str, dict[str, int]]] = []
+
+    agent_module._generate_quiz_with_research(
+        "問題生成プロンプト",
+        on_phase=lambda phase, detail: events.append((phase, detail)),
+    )
+
+    phases = [phase for phase, _ in events]
+    assert "validation" in phases
+    assert phases.index("validation") < phases.index("complete")
