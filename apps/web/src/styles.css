@@ -215,15 +215,19 @@ a {
 
 /* ---- sheet(カード) ---- */
 
+/* 案B(ADR 0019)は面を持たない。カードの枠と背景をやめ、余白と罫線で節を分ける。
+   左右のpaddingを落とすぶん、本文の行が広く取れる。 */
 .sheet {
-	background: var(--panel);
-	border: 1px solid var(--line);
-	border-radius: var(--radius-lg);
-	padding: 24px 26px;
+	background: transparent;
+	border: 0;
+	border-radius: 0;
+	padding: 0;
 }
 
 .sheet + .sheet {
-	margin-top: 22px;
+	margin-top: 40px;
+	padding-top: 28px;
+	border-top: 1px solid var(--line);
 }
 
 .sheet-heading {
@@ -808,11 +812,14 @@ a {
 	white-space: nowrap;
 }
 
+/* 罫線一覧では枠付きボタンが縦に連なって列に見える。枠をやめ、
+   本文との間だけヘアラインで仕切る。 */
 .session-delete {
 	padding: 0 12px;
-	border: 1px solid var(--line);
-	border-radius: var(--radius);
-	background: var(--panel);
+	border: 0;
+	border-left: 1px solid var(--line);
+	border-radius: 0;
+	background: transparent;
 	font-family: var(--font-mono);
 	font-size: 11px;
 	color: var(--ink-soft);
@@ -1404,6 +1411,8 @@ button.option:hover:not(:disabled) {
 
 .review-summary {
 	width: 100%;
+	/* 「読み物」として行長を止める(ADR 0019) */
+	max-width: var(--measure);
 	margin: 0;
 	padding: 0;
 	border: 0;
