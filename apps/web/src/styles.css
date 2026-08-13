@@ -1361,21 +1361,20 @@ button.option:hover:not(:disabled) {
 	flex-wrap: wrap;
 }
 
+/* 罫線で区切る一覧にする(案B)。天は太い罫で本文と切り、項目間はヘアライン。 */
 .review-list {
 	list-style: none;
 	margin: 0;
 	padding: 0;
-}
-
-.review-list li + li {
-	margin-top: 10px;
+	border-top: 1px solid var(--ink);
 }
 
 .review-item {
-	border: 1px solid var(--line);
-	border-radius: var(--radius);
-	padding: 14px 16px;
-	background: var(--panel);
+	border: 0;
+	border-bottom: 1px solid var(--line);
+	border-radius: 0;
+	padding: 14px 2px;
+	background: transparent;
 }
 
 .review-item-head {
