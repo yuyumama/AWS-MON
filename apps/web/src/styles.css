@@ -98,12 +98,15 @@ a {
 
 /* ---- masthead ---- */
 
+/* 紙面の天。細い罫線で本文と切る(ADR 0019) */
 .masthead {
 	display: flex;
 	justify-content: space-between;
 	align-items: flex-end;
 	gap: 16px;
+	padding-bottom: 14px;
 	margin-bottom: 26px;
+	border-bottom: 1px solid var(--line);
 }
 
 .masthead-kicker {
@@ -254,6 +257,7 @@ a {
 
 .select {
 	width: 100%;
+	min-height: 48px;
 	padding: 10px 12px;
 	font-family: inherit;
 	font-size: 14px;
@@ -271,6 +275,7 @@ a {
 /* ログインフォーム等のテキスト入力(.selectと同トーン) */
 .input {
 	width: 100%;
+	min-height: 48px;
 	padding: 10px 12px;
 	font-family: inherit;
 	font-size: 14px;
@@ -330,10 +335,13 @@ a {
 
 /* ---- ボタン ---- */
 
+/* 面を塗らず罫線で示すのが案Bの語彙(ADR 0019)。
+   大きなCTAの扱いは .button-primary だけに与える。.button 自体を大きくすると
+   ghost / danger / review まで巻き添えになる。 */
 .button {
 	display: inline-block;
 	padding: 10px 22px;
-	background: var(--panel);
+	background: transparent;
 	border: 1px solid var(--line-strong);
 	border-radius: var(--radius);
 	font-size: 14px;
@@ -341,22 +349,34 @@ a {
 }
 
 .button:hover:not(:disabled) {
-	background: var(--panel-dim);
+	background: color-mix(in srgb, var(--ink) 5%, transparent);
 }
 
+/* 主要導線。明朝・52pxで「紙面の見出し」と同じ重さにする。
+   タップ target も 52px 確保される。 */
 .button-primary {
-	background: var(--accent);
-	color: #fff;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-height: 52px;
+	padding: 0 24px;
+	background: transparent;
+	color: var(--accent-deep);
 	border-color: var(--accent);
+	font-family: var(--font-heading);
+	font-size: 17px;
+	font-weight: 600;
+	letter-spacing: 0.04em;
 }
 
 .button-primary:hover:not(:disabled) {
-	background: var(--accent-deep);
-	border-color: var(--accent-deep);
+	background: color-mix(in srgb, var(--accent) 8%, transparent);
+	border-color: var(--accent);
 }
 
 .button-primary:disabled {
-	background: var(--line-strong);
+	background: transparent;
+	color: var(--ink-soft);
 	border-color: var(--line-strong);
 }
 
