@@ -317,40 +317,113 @@ a {
 	color: var(--ink-soft);
 }
 
+/* 罫線で区切った選択行(案B)。天は太い罫、行間はヘアライン。 */
+.form-rows {
+	margin-bottom: 22px;
+	border-top: 1px solid var(--ink);
+}
+
+.form-row {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	justify-content: center;
+	gap: 1px;
+	min-height: 58px;
+	padding: 10px 22px 10px 0;
+	border-bottom: 1px solid var(--line);
+}
+
+.form-row .field-label {
+	margin-bottom: 0;
+	font-size: 10px;
+	letter-spacing: 0.16em;
+}
+
+/* 箱をやめて行そのものを押させる。ネイティブのピッカーはそのまま使う。 */
+.form-row .select {
+	appearance: none;
+	min-height: 0;
+	padding: 0;
+	border: 0;
+	border-radius: 0;
+	background: transparent;
+	font-family: var(--font-heading);
+	font-size: 17px;
+	font-weight: 600;
+	/* 資格名は「›」に届くほど長い。行からはみ出さず省略する。 */
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+}
+
+.form-row::after {
+	content: "›";
+	position: absolute;
+	right: 4px;
+	top: 50%;
+	transform: translateY(-50%);
+	font-size: 18px;
+	color: var(--accent-deep);
+	pointer-events: none;
+}
+
 .mode-field {
 	border: none;
 	padding: 0;
 	margin: 0 0 20px;
 }
 
+/* 案B(ADR 0019)は3つを横に並べた罫線の選択帯。積み上げたカードをやめる。 */
+.mode-options {
+	display: flex;
+	gap: 8px;
+}
+
 .mode-option {
+	flex: 1;
 	display: grid;
-	grid-template-columns: auto auto 1fr;
-	align-items: baseline;
-	gap: 10px;
-	padding: 11px 14px;
-	border: 1px solid var(--line);
+	place-items: center;
+	min-height: 44px;
+	padding: 8px 6px;
+	border: 1px solid var(--line-strong);
 	border-radius: var(--radius);
-	background: var(--panel);
-	margin-bottom: 8px;
+	background: transparent;
+	color: var(--ink-soft);
+	text-align: center;
+	cursor: pointer;
 }
 
 .mode-option[data-selected="true"] {
-	background: var(--accent-bg);
 	border-color: var(--accent);
+	color: var(--accent-deep);
+	background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
+/* ラジオ自体は隠すが、矢印キーでの移動とAT向けの意味は残す。 */
 .mode-option input {
-	accent-color: var(--accent);
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	opacity: 0;
+	pointer-events: none;
+}
+
+.mode-option:focus-within {
+	outline: 2px solid var(--accent);
+	outline-offset: 1px;
 }
 
 .mode-option-label {
-	font-weight: 600;
-	white-space: nowrap;
+	font-size: 13px;
+	line-height: 1.4;
 }
 
 .mode-option-desc {
+	margin: 10px 0 0;
+	max-width: var(--measure);
 	font-size: 12.5px;
+	line-height: 1.7;
 	color: var(--ink-soft);
 }
 

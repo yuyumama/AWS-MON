@@ -20,6 +20,7 @@ import {
 	certFullName,
 	certName,
 	certOptionLabel,
+	modeDescription,
 	modeLabel,
 	modeOptions,
 } from "../lib/certs";
@@ -307,65 +308,73 @@ export function HomeView({ canGenerate, onOpenSession, onResume }: Props) {
 					<span className="sheet-no">01</span>新しい演習をはじめる
 				</h2>
 
-				<div className="field">
-					<label className="field-label" htmlFor="cert-select">
-						資格
-					</label>
-					<select
-						id="cert-select"
-						className="select"
-						value={cert}
-						onChange={(e) => {
-							setCert(e.target.value);
-							setDomainSelection(allDomains);
-						}}
-					>
-						{certDefinitions.map((definition) => (
-							<option key={definition.code} value={definition.code}>
-								{certOptionLabel(definition.code)}
-							</option>
-						))}
-					</select>
-				</div>
+				{/* 案B(ADR 0019)は選択欄も箱にせず、罫線で区切った行として組む。
+				    値は明朝で、右端の「›」が押せることを示す。 */}
+				<div className="form-rows">
+					<div className="form-row">
+						<label className="field-label" htmlFor="cert-select">
+							資格
+						</label>
+						<select
+							id="cert-select"
+							className="select"
+							value={cert}
+							onChange={(e) => {
+								setCert(e.target.value);
+								setDomainSelection(allDomains);
+							}}
+						>
+							{certDefinitions.map((definition) => (
+								<option key={definition.code} value={definition.code}>
+									{certOptionLabel(definition.code)}
+								</option>
+							))}
+						</select>
+					</div>
 
-				<div className="field">
-					<label className="field-label" htmlFor="domain-select">
-						出題ドメイン
-					</label>
-					<select
-						id="domain-select"
-						className="select"
-						value={domainSelection}
-						onChange={(e) => setDomainSelection(e.target.value)}
-					>
-						<option value={allDomains}>全ドメイン(重み付きランダム)</option>
-						{domains.map((domain) => (
-							<option key={domain.value} value={domain.value}>
-								{domain.label}({domain.weight}%)
-							</option>
-						))}
-					</select>
+					<div className="form-row">
+						<label className="field-label" htmlFor="domain-select">
+							出題ドメイン
+						</label>
+						<select
+							id="domain-select"
+							className="select"
+							value={domainSelection}
+							onChange={(e) => setDomainSelection(e.target.value)}
+						>
+							<option value={allDomains}>全ドメイン(重み付きランダム)</option>
+							{domains.map((domain) => (
+								<option key={domain.value} value={domain.value}>
+									{domain.label}({domain.weight}%)
+								</option>
+							))}
+						</select>
+					</div>
 				</div>
 
 				<fieldset className="field mode-field">
 					<legend className="field-label">出題モード</legend>
-					{availableModes.map((option) => (
-						<label
-							key={option.value}
-							className="mode-option"
-							data-selected={mode === option.value}
-						>
-							<input
-								type="radio"
-								name="mode"
-								value={option.value}
-								checked={mode === option.value}
-								onChange={() => setMode(option.value)}
-							/>
-							<span className="mode-option-label">{option.label}</span>
-							<span className="mode-option-desc">{option.description}</span>
-						</label>
-					))}
+					<div className="mode-options">
+						{availableModes.map((option) => (
+							<label
+								key={option.value}
+								className="mode-option"
+								data-selected={mode === option.value}
+							>
+								<input
+									type="radio"
+									name="mode"
+									value={option.value}
+									checked={mode === option.value}
+									onChange={() => setMode(option.value)}
+								/>
+								<span className="mode-option-label">{option.label}</span>
+							</label>
+						))}
+					</div>
+					{/* 説明は選択中のモードのぶんだけ1行で出す(案B)。3件並べると
+					    選ぶ前に読む必要のない文字が版面を埋める。 */}
+					<p className="mode-option-desc">{modeDescription(mode)}</p>
 				</fieldset>
 
 				{startError && <p className="notice notice-error">{startError}</p>}

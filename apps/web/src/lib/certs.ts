@@ -68,3 +68,7 @@ export const modeOptions: ModeOption[] = [
 export function modeLabel(mode: string): string {
 	return modeOptions.find((m) => m.value === mode)?.label ?? mode;
 }
+
+export function modeDescription(mode: string): string {
+	return modeOptions.find((m) => m.value === mode)?.description ?? "";
+}
