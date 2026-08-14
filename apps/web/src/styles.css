@@ -1395,6 +1395,12 @@ button.option:hover:not(:disabled) {
 	border-top-color: var(--ink);
 }
 
+/* PCではシートにしないので、囲いは無かったことにして素通しする。 */
+.result-clip,
+.result-slide {
+	display: contents;
+}
+
 /* シートのつまみ。スマホでのみ出す(PCは重ねないので不要)。 */
 .result-grabber {
 	display: none;
@@ -1774,12 +1780,21 @@ button.option:hover:not(:disabled) {
 		padding-bottom: 96px;
 	}
 
-	.quiz[data-sheet="true"] {
+	/* シートが隠す高さぶんだけ本文の下に余白を作る。段ごとに変える。 */
+	.quiz[data-sheet="full"],
+	.quiz[data-sheet="compact"] {
 		padding-bottom: 240px;
 	}
 
-	/* 解説はボトムシートとして問題の上に重ねる(ADR 0019)。
-	   つまみを押すとたたまれ、後ろの問題文を読み返せる。 */
+	.quiz[data-sheet="minimal"] {
+		padding-bottom: 140px;
+	}
+
+	/* 解説はボトムシートとして問題の上に重ねる(ADR 0019)。3段あり、
+	   つまみを指で上下させて切り替える。
+	     full    … 解説まで出す
+	     compact … 正誤と次への導線だけ
+	     minimal … 問題文を読むための最小(正誤も隠す) */
 	.quiz .result-sheet {
 		position: fixed;
 		left: 0;
@@ -1798,6 +1813,22 @@ button.option:hover:not(:disabled) {
 		box-shadow: var(--shadow-float);
 	}
 
+	/* .result-clip は動かない窓。ここで切り落とすので、中身を下げても
+	   「次の問題へ」の上に文字が乗らない。translate は内側だけに掛ける
+	   (外側を動かすと切り取り枠ごと動いて何も切れない)。 */
+	.result-clip {
+		display: flex;
+		flex-direction: column;
+		min-height: 0;
+		overflow: hidden;
+	}
+
+	.result-slide {
+		display: flex;
+		flex-direction: column;
+		min-height: 0;
+	}
+
 	.result-grabber {
 		display: grid;
 		place-items: center;
@@ -1807,6 +1838,19 @@ button.option:hover:not(:disabled) {
 		padding: 10px 0 6px;
 		border: 0;
 		background: transparent;
+		/* 下げる操作を後ろのスクロールに取られない */
+		touch-action: none;
+		cursor: grab;
+	}
+
+	.result-grabber:active {
+		cursor: grabbing;
+	}
+
+	/* 指を離したあと 0 へ戻るぶんだけ滑らせる。掴んでいる間に効かせると
+	   追従が1フレームぶん遅れて重く感じるので、その間は切る。 */
+	.quiz .result-sheet[data-dragging="false"] .result-slide {
+		transition: translate 0.18s ease-out;
 	}
 
 	.result-grabber-bar {
@@ -1845,7 +1889,13 @@ button.option:hover:not(:disabled) {
 		padding: 16px 0;
 	}
 
-	.result-sheet[data-expanded="false"] .result-body {
+	/* compact 以下では解説を畳む。minimal ではさらに正誤も隠し、
+	   後ろの問題文にいちばん場所を空ける。 */
+	.result-sheet:not([data-stage="full"]) .result-body {
+		display: none;
+	}
+
+	.result-sheet[data-stage="minimal"] .result-head {
 		display: none;
 	}
 
@@ -1855,11 +1905,17 @@ button.option:hover:not(:disabled) {
 		border-top: 1px solid var(--line);
 	}
 
+	/* minimal では正誤が消えて罫線が二重になるので、上の罫を落とす。 */
+	.result-sheet[data-stage="minimal"] .result-actions {
+		border-top: 0;
+		padding-top: 0;
+	}
+
 	.result-actions .button-primary {
 		flex: 1;
 	}
 
-	/* たたんだ状態でも正誤と次への導線は残す。星は正方形のアイコンボタンにする。 */
+	/* たたんだ状態でも次への導線は残す。星は正方形のアイコンボタンにする。 */
 	.result-actions .button-review-text {
 		display: none;
 	}
@@ -1901,7 +1957,8 @@ button.option:hover:not(:disabled) {
 		animation: none;
 	}
 
-	.score-meter-fill {
+	.score-meter-fill,
+	.quiz .result-sheet[data-dragging="false"] .result-slide {
 		transition: none;
 	}
 
