@@ -167,7 +167,7 @@ export function QuestionListView() {
 								changeFilters({ cert: event.target.value, domain: "" })
 							}
 						>
-							<option value="">すべて</option>
+							<option value="">すべての資格</option>
 							{certDefinitions.map((definition) => (
 								<option key={definition.code} value={definition.code}>
 									{certOptionLabel(definition.code)}

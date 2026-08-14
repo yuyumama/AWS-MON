@@ -1549,10 +1549,18 @@ button.option:hover:not(:disabled) {
 	margin-bottom: 14px;
 }
 
+/* 絞り込みは常に版面の幅いっぱいを分け合う。資格だけのときは2列グリッドの
+   片側が空いて半端な幅になっていたので、伸縮で埋める。 */
 .list-filters {
-	display: grid;
-	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+	display: flex;
+	flex-wrap: wrap;
 	gap: 12px;
+}
+
+.list-filter {
+	display: block;
+	flex: 1 1 240px;
+	min-width: 0;
 }
 
 .list-filter .field-label {
@@ -1871,10 +1879,6 @@ button.option:hover:not(:disabled) {
 	.action-error {
 		align-items: flex-start;
 		flex-direction: column;
-	}
-
-	.list-filters {
-		grid-template-columns: 1fr;
 	}
 
 	.question-list-date {
