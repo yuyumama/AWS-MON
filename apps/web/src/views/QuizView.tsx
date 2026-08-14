@@ -89,6 +89,12 @@ function PrefetchStatus({ state }: { state: PrefetchState }) {
 	);
 }
 
+const stageStatusLabel = {
+	done: "完了",
+	current: "進行中",
+	upcoming: "待機",
+} as const;
+
 function GenerationStages({ progress }: { progress?: GenerationProgress }) {
 	if (!progress) return null;
 	const { currentIndex, message } = resolveGenerationStage(progress);
@@ -96,23 +102,25 @@ function GenerationStages({ progress }: { progress?: GenerationProgress }) {
 	return (
 		<div className="generation-stages">
 			<ol aria-label="問題生成の工程">
-				{generationStages.map((stage, index) => (
-					<li
-						key={stage}
-						data-state={
-							index === currentIndex
-								? "current"
-								: index < currentIndex
-									? "done"
-									: "upcoming"
-						}
-					>
-						<span className="generation-stage-mark" aria-hidden="true">
-							{index < currentIndex ? "✓" : index + 1}
-						</span>
-						<span>{stage}</span>
-					</li>
-				))}
+				{generationStages.map((stage, index) => {
+					const state =
+						index === currentIndex
+							? "current"
+							: index < currentIndex
+								? "done"
+								: "upcoming";
+					return (
+						<li key={stage} data-state={state}>
+							<span className="generation-stage-mark" aria-hidden="true">
+								{index < currentIndex ? "✓" : index + 1}
+							</span>
+							<span className="generation-stage-name">{stage}</span>
+							<span className="generation-stage-status">
+								{stageStatusLabel[state]}
+							</span>
+						</li>
+					);
+				})}
 			</ol>
 			<strong>{message}</strong>
 		</div>
@@ -308,6 +316,16 @@ export function QuizView({
 		session?.mode,
 		sessionId,
 	]);
+
+	// スマホでは解説をボトムシートで重ねる(ADR 0019)。問題文を読み返せるよう
+	// たたんだ状態へ切り替えられる。新しい問題に進んだら必ず開いた状態に戻す。
+	const [sheetExpanded, setSheetExpanded] = useState(true);
+	const currentSequence = current?.sequence;
+
+	// biome-ignore lint/correctness/useExhaustiveDependencies: currentSequence は本文で読まないが、問題が変わったことを検知するための依存。
+	useEffect(() => {
+		setSheetExpanded(true);
+	}, [currentSequence]);
 
 	// 復習マーク状態(null = 未取得)。回答済み問題が表示されたら取得する
 	const [reviewMarked, setReviewMarked] = useState<boolean | null>(null);
@@ -639,7 +657,7 @@ export function QuizView({
 				</div>
 				<article className="sheet">
 					<GenerationWaitingPanel
-						title="最初の問題を生成しています"
+						title="最初の問題を生成中"
 						elapsedSeconds={initialElapsed}
 						stages={<GenerationStages progress={session.preparing?.progress} />}
 					/>
@@ -669,8 +687,17 @@ export function QuizView({
 				)
 			: null;
 
+	const reviewLabel =
+		reviewMarked === null
+			? "復習リストの状態を確認中"
+			: reviewPending
+				? "更新中"
+				: reviewMarked
+					? "復習リストに追加済み"
+					: "復習リストに追加";
+
 	return (
-		<div className="quiz">
+		<div className="quiz" data-sheet={answered ? "true" : "false"}>
 			<div className="quiz-bar">
 				<button type="button" className="button button-ghost" onClick={onExit}>
 					← ホーム
@@ -780,15 +807,20 @@ export function QuizView({
 				)}
 
 				{!answered && (
-					<div className="actions">
+					<div className="actions quiz-actions">
 						<button
 							type="button"
-							className="button button-primary"
+							className="button button-primary button-answer"
 							disabled={selected.length === 0 || pending !== null}
 							onClick={() => void submit()}
 						>
 							{pending === "answer" && <ButtonSpinner />}
 							{pending === "answer" ? "採点中…" : "回答する"}
+							{selected.length > 0 && pending === null && (
+								<span className="answer-picked">
+									{normalizeAnswers(selected).join("・")}
+								</span>
+							)}
 						</button>
 						{question.type === "multiple" && (
 							<span className="hint">該当するものをすべて選択</span>
@@ -803,6 +835,7 @@ export function QuizView({
 						key={`explanation-${current.sequence}`}
 						className="sheet result-sheet"
 						data-correct={isCorrect}
+						data-expanded={sheetExpanded}
 						initial={reducedMotion ? false : { opacity: 0, y: 10 }}
 						animate={reducedMotion ? undefined : { opacity: 1, y: 0 }}
 						exit={reducedMotion ? undefined : { opacity: 0, y: -6 }}
@@ -812,17 +845,36 @@ export function QuizView({
 								: { duration: 0.2, ease: "easeOut" }
 						}
 					>
-						<div className="result-stamp" aria-hidden="true">
-							{isCorrect ? "○" : "✕"}
-						</div>
-						<div className="result-body">
-							<h3 className="result-heading">
-								{isCorrect ? "正解" : "不正解"}
-								<span className="result-answer">
-									正答: {normalizeAnswers(answeredQuestion.correct).join("・")}
-								</span>
-							</h3>
+						<button
+							type="button"
+							className="result-grabber"
+							aria-expanded={sheetExpanded}
+							aria-controls={`result-body-${current.sequence}`}
+							onClick={() => setSheetExpanded((open) => !open)}
+						>
+							<span className="result-grabber-bar" aria-hidden="true" />
+							<span className="result-grabber-text">
+								{sheetExpanded ? "問題を見る" : "解説を見る"}
+							</span>
+						</button>
 
+						<div className="result-head">
+							<span className="result-stamp" aria-hidden="true">
+								{isCorrect ? "○" : "✕"}
+							</span>
+							<div>
+								<h3 className="result-heading">
+									{isCorrect ? "正解" : "不正解"}
+								</h3>
+								<p className="result-answer">
+									正答 {normalizeAnswers(answeredQuestion.correct).join("・")}{" "}
+									・ {session.stats.correctCount}/{session.stats.answeredCount}
+									問 ・ 正答率 {rate !== null ? `${rate}%` : "—"}
+								</p>
+							</div>
+						</div>
+
+						<div className="result-body" id={`result-body-${current.sequence}`}>
 							<dl className="explanation">
 								<dt>概要</dt>
 								<dd>{answeredQuestion.explanation.overview}</dd>
@@ -864,7 +916,7 @@ export function QuizView({
 
 							{nextWaiting && (
 								<GenerationWaitingPanel
-									title="次の問題を生成しています"
+									title="次の問題を生成中"
 									elapsedSeconds={nextElapsed}
 									stages={
 										<GenerationStages progress={session.prefetch?.progress} />
@@ -873,42 +925,46 @@ export function QuizView({
 								/>
 							)}
 
-							<div className="actions">
-								<button
-									type="button"
-									className="button button-primary"
-									disabled={pending !== null}
-									onClick={() => void goNext()}
-								>
-									{pending === "next" && session.mode === "BANK" && (
-										<ButtonSpinner />
-									)}
-									{pending === "next"
-										? session.mode === "BANK"
-											? "次の問題を取得中…"
-											: "次の問題を準備中…"
-										: "次の問題へ →"}
-								</button>
-								<button
-									type="button"
-									className="button button-review"
-									data-marked={reviewMarked === true}
-									disabled={reviewMarked === null || reviewPending}
-									onClick={() => void toggleReview()}
-								>
-									{reviewPending && <ButtonSpinner />}
-									{reviewMarked === null
-										? "☆ 復習リスト…"
-										: reviewPending
-											? "更新中…"
-											: reviewMarked
-												? "★ 復習リストに追加済み"
-												: "☆ 復習リストに追加"}
-								</button>
-								{!isCorrect && (
-									<span className="hint">間違えた問題は自動で追加されます</span>
+							{!isCorrect && (
+								<p className="hint result-hint">
+									間違えた問題は自動で復習リストに追加されます
+								</p>
+							)}
+						</div>
+
+						<div className="actions result-actions">
+							<button
+								type="button"
+								className="button button-primary"
+								disabled={pending !== null}
+								onClick={() => void goNext()}
+							>
+								{pending === "next" && session.mode === "BANK" && (
+									<ButtonSpinner />
 								)}
-							</div>
+								{pending === "next"
+									? session.mode === "BANK"
+										? "次の問題を取得中…"
+										: "次の問題を準備中…"
+									: "次の問題へ →"}
+							</button>
+							<button
+								type="button"
+								className="button button-review"
+								data-marked={reviewMarked === true}
+								aria-label={reviewLabel}
+								disabled={reviewMarked === null || reviewPending}
+								onClick={() => void toggleReview()}
+							>
+								{reviewPending ? (
+									<ButtonSpinner />
+								) : (
+									<span className="button-review-mark" aria-hidden="true">
+										{reviewMarked ? "★" : "☆"}
+									</span>
+								)}
+								<span className="button-review-text">{reviewLabel}</span>
+							</button>
 						</div>
 					</m.section>
 				)}
