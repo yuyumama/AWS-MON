@@ -317,40 +317,113 @@ a {
 	color: var(--ink-soft);
 }
 
+/* 罫線で区切った選択行(案B)。天は太い罫、行間はヘアライン。 */
+.form-rows {
+	margin-bottom: 22px;
+	border-top: 1px solid var(--ink);
+}
+
+.form-row {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	justify-content: center;
+	gap: 1px;
+	min-height: 58px;
+	padding: 10px 22px 10px 0;
+	border-bottom: 1px solid var(--line);
+}
+
+.form-row .field-label {
+	margin-bottom: 0;
+	font-size: 10px;
+	letter-spacing: 0.16em;
+}
+
+/* 箱をやめて行そのものを押させる。ネイティブのピッカーはそのまま使う。 */
+.form-row .select {
+	appearance: none;
+	min-height: 0;
+	padding: 0;
+	border: 0;
+	border-radius: 0;
+	background: transparent;
+	font-family: var(--font-heading);
+	font-size: 17px;
+	font-weight: 600;
+	/* 資格名は「›」に届くほど長い。行からはみ出さず省略する。 */
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+}
+
+.form-row::after {
+	content: "›";
+	position: absolute;
+	right: 4px;
+	top: 50%;
+	transform: translateY(-50%);
+	font-size: 18px;
+	color: var(--accent-deep);
+	pointer-events: none;
+}
+
 .mode-field {
 	border: none;
 	padding: 0;
 	margin: 0 0 20px;
 }
 
+/* 案B(ADR 0019)は3つを横に並べた罫線の選択帯。積み上げたカードをやめる。 */
+.mode-options {
+	display: flex;
+	gap: 8px;
+}
+
 .mode-option {
+	flex: 1;
 	display: grid;
-	grid-template-columns: auto auto 1fr;
-	align-items: baseline;
-	gap: 10px;
-	padding: 11px 14px;
-	border: 1px solid var(--line);
+	place-items: center;
+	min-height: 44px;
+	padding: 8px 6px;
+	border: 1px solid var(--line-strong);
 	border-radius: var(--radius);
-	background: var(--panel);
-	margin-bottom: 8px;
+	background: transparent;
+	color: var(--ink-soft);
+	text-align: center;
+	cursor: pointer;
 }
 
 .mode-option[data-selected="true"] {
-	background: var(--accent-bg);
 	border-color: var(--accent);
+	color: var(--accent-deep);
+	background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
+/* ラジオ自体は隠すが、矢印キーでの移動とAT向けの意味は残す。 */
 .mode-option input {
-	accent-color: var(--accent);
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	opacity: 0;
+	pointer-events: none;
+}
+
+.mode-option:focus-within {
+	outline: 2px solid var(--accent);
+	outline-offset: 1px;
 }
 
 .mode-option-label {
-	font-weight: 600;
-	white-space: nowrap;
+	font-size: 13px;
+	line-height: 1.4;
 }
 
 .mode-option-desc {
+	margin: 10px 0 0;
+	max-width: var(--measure);
 	font-size: 12.5px;
+	line-height: 1.7;
 	color: var(--ink-soft);
 }
 
@@ -375,12 +448,14 @@ a {
 
 /* 主要導線。明朝・52pxで「紙面の見出し」と同じ重さにする。
    タップ target も 52px 確保される。 */
+/* 案Bの主要導線は版面いっぱいの帯。見出しを左、矢印を右端に置く。 */
 .button-primary {
-	display: inline-flex;
+	display: flex;
 	align-items: center;
-	justify-content: center;
+	gap: 10px;
+	width: 100%;
 	min-height: 52px;
-	padding: 0 24px;
+	padding: 0 20px;
 	background: transparent;
 	color: var(--accent-deep);
 	border-color: var(--accent);
@@ -388,6 +463,23 @@ a {
 	font-size: 17px;
 	font-weight: 600;
 	letter-spacing: 0.04em;
+	text-align: left;
+}
+
+/* 横に並ぶボタンがある場所では、残り幅を取る形にする。 */
+.actions .button-primary {
+	width: auto;
+	flex: 1;
+}
+
+/* 右端に寄せる添え物(矢印・送信予定の選択肢) */
+.button-arrow,
+.answer-picked {
+	margin-left: auto;
+}
+
+.button-arrow {
+	font-size: 14px;
 }
 
 .button-primary:hover:not(:disabled) {
@@ -598,27 +690,41 @@ a {
 
 /* ---- 長時間の生成待ち ---- */
 
+/* 案B(ADR 0019)の生成待ち。面を塗らず、太い罫と明朝の見出しで組む。 */
 .generation-wait {
-	padding: 18px;
-	border: 1px dashed var(--line-strong);
-	border-radius: var(--radius);
-	background: var(--accent-bg);
+	padding: 0;
+	border: 0;
+	background: transparent;
 }
 
 .generation-wait[data-compact="true"] {
-	margin-top: 18px;
-	padding: 14px 16px;
+	margin-top: 22px;
+	padding-top: 18px;
+	border-top: 1px solid var(--line);
 }
 
 .generation-wait-head {
 	display: grid;
-	grid-template-columns: auto 1fr auto;
+	grid-template-columns: 1fr auto;
 	align-items: baseline;
-	gap: 12px;
+	gap: 4px 12px;
+	padding-bottom: 12px;
+	border-bottom: 1px solid var(--ink);
+}
+
+.generation-wait-kicker {
+	grid-column: 1 / -1;
 }
 
 .generation-wait-head strong {
-	font-size: 15px;
+	font-family: var(--font-heading);
+	font-size: 22px;
+	font-weight: 600;
+	letter-spacing: 0.02em;
+}
+
+.generation-wait[data-compact="true"] .generation-wait-head strong {
+	font-size: 18px;
 }
 
 .generation-wait-kicker,
@@ -664,62 +770,82 @@ a {
 
 /* #83 の工程表示を受け取る。空の間は余白を作らない。 */
 .generation-stage-slot:not(:empty) {
-	margin-top: 14px;
-	padding-top: 12px;
-	border-top: 1px solid var(--line);
+	margin-top: 26px;
 }
 
+/* 案B(ADR 0019)では工程を横並びのチップではなく罫線の一覧で組む。
+   天は太い罫、行間はヘアライン。 */
 .generation-stages ol {
-	display: grid;
-	grid-template-columns: repeat(3, 1fr);
-	gap: 8px;
 	margin: 0;
 	padding: 0;
 	list-style: none;
+	border-top: 1px solid var(--ink);
 }
 
 .generation-stages li {
-	display: flex;
+	display: grid;
+	grid-template-columns: auto 1fr auto;
 	align-items: center;
-	gap: 7px;
-	font-size: 12px;
-	font-weight: 700;
+	gap: 14px;
+	min-height: 56px;
+	padding: 10px 2px;
+	border-bottom: 1px solid var(--line);
 	color: var(--ink-soft);
 }
 
 .generation-stage-mark {
 	display: grid;
 	place-items: center;
-	width: 24px;
-	height: 24px;
+	width: 28px;
+	height: 28px;
 	flex: none;
 	border: 1px solid var(--line-strong);
 	border-radius: 50%;
-	background: var(--panel);
+	background: transparent;
 	font-family: var(--font-mono);
+	font-size: 13px;
+}
+
+.generation-stage-name {
+	font-family: var(--font-heading);
+	font-size: 17px;
+	font-weight: 600;
+}
+
+.generation-stage-status {
 	font-size: 11px;
+	letter-spacing: 0.1em;
 }
 
 .generation-stages li[data-state="done"] {
 	color: var(--accent-deep);
 }
 
+.generation-stages li[data-state="done"] .generation-stage-mark {
+	border-color: var(--accent);
+}
+
 .generation-stages li[data-state="current"] {
 	color: var(--ink);
+	background: var(--accent-bg);
 }
 
 .generation-stages li[data-state="current"] .generation-stage-mark {
 	border-color: var(--accent);
-	background: var(--accent);
-	color: white;
-	box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+	color: var(--accent-deep);
+}
+
+.generation-stages li[data-state="current"] .generation-stage-status {
+	color: var(--accent-deep);
 }
 
 .generation-stages > strong {
 	display: block;
-	margin-top: 10px;
-	font-size: 12px;
-	color: var(--accent-deep);
+	margin-top: 16px;
+	max-width: var(--measure);
+	font-size: 13.5px;
+	font-weight: 400;
+	line-height: 1.9;
 }
 
 @keyframes generation-progress {
@@ -953,12 +1079,21 @@ a {
 
 /* ---- 出題画面 ---- */
 
+/* 案B(ADR 0019)の追従バー。スクロールしても資格・正答率・ホームへの導線が残る。
+   紙面の天と同じくヘアラインで本文と切る。 */
 .quiz-bar {
+	position: sticky;
+	top: 0;
+	z-index: 4;
 	display: flex;
 	justify-content: space-between;
 	align-items: center;
-	gap: 16px;
-	margin-bottom: 14px;
+	flex-wrap: wrap;
+	gap: 10px 16px;
+	margin-bottom: 20px;
+	padding: 10px 0;
+	background: var(--bg);
+	border-bottom: 1px solid var(--line);
 }
 
 .quiz-bar-meta {
@@ -997,8 +1132,9 @@ a {
 }
 
 .score-value {
-	font-size: 20px;
-	font-weight: 800;
+	font-family: var(--font-heading);
+	font-size: 21px;
+	font-weight: 600;
 	font-variant-numeric: tabular-nums;
 	line-height: 1;
 }
@@ -1009,55 +1145,63 @@ a {
 	color: var(--ink-soft);
 }
 
+/* 案Bのメーターは枠も角丸も持たない3pxの罫 */
 .score-meter {
-	height: 6px;
-	border-radius: 3px;
+	height: 3px;
+	min-width: 120px;
 	background: var(--panel-dim);
-	border: 1px solid var(--line);
 	overflow: hidden;
 }
 
 .score-meter-fill {
 	height: 100%;
-	border-radius: 3px;
 	background: var(--accent);
 	transition: width 0.3s ease;
 }
 
+/* 設問の柱。太い罫で問題文と切る(案Bで唯一インク色の罫を使う場所) */
 .question-head {
 	display: flex;
 	justify-content: space-between;
 	align-items: baseline;
 	gap: 12px;
-	border-bottom: 1px solid var(--line);
+	border-bottom: 1px solid var(--ink);
 	padding-bottom: 12px;
-	margin-bottom: 16px;
+	margin-bottom: 18px;
 }
 
 .question-no {
+	flex: none;
 	margin: 0;
 	font-family: var(--font-heading);
-	font-size: 20px;
+	font-size: 24px;
 	font-weight: 600;
-	letter-spacing: 0.06em;
+	letter-spacing: 0.02em;
+	white-space: nowrap;
+	font-variant-numeric: tabular-nums;
 }
 
 .question-tags {
 	display: flex;
-	gap: 8px;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	gap: 6px;
 }
 
+/* 案Bのタグは塗らず罫線で示す */
 .tag {
-	font-size: 11px;
-	padding: 3px 12px;
+	font-size: 10px;
+	letter-spacing: 0.1em;
+	padding: 3px 10px;
+	border: 1px solid var(--accent);
 	border-radius: 999px;
-	background: var(--accent-bg);
+	background: transparent;
 	color: var(--accent-deep);
 	white-space: nowrap;
 }
 
 .tag-soft {
-	background: var(--panel-dim);
+	border-color: var(--line-strong);
 	color: var(--ink-soft);
 }
 
@@ -1091,11 +1235,15 @@ a {
 	color: var(--ng);
 }
 
+/* 読み物としての本文。行長は --measure で止め、両端を揃える(案B) */
 .question-text {
-	margin: 0 0 20px;
-	font-size: 15.5px;
-	line-height: 2;
+	margin: 0 0 22px;
+	max-width: var(--measure);
+	font-size: 16px;
+	line-height: 1.9;
 	white-space: pre-wrap;
+	text-align: justify;
+	text-wrap: pretty;
 }
 
 .prefetch-status {
@@ -1145,23 +1293,25 @@ a {
 	padding: 0;
 }
 
+/* 案Bの選択肢は面を塗らず罫線だけ。タップ target を 56px 確保する。 */
 .option {
 	display: grid;
 	grid-template-columns: auto 1fr auto;
-	align-items: start;
+	align-items: center;
 	gap: 12px;
 	width: 100%;
-	padding: 12px 14px;
+	min-height: 56px;
+	padding: 14px;
 	text-align: left;
-	background: var(--panel);
-	border: 1px solid var(--line);
+	background: transparent;
+	border: 1px solid var(--line-strong);
 	border-radius: var(--radius);
-	line-height: 1.7;
+	font-size: 15px;
+	line-height: 1.8;
 }
 
 button.option:hover:not(:disabled) {
-	background: var(--accent-bg);
-	border-color: var(--line-strong);
+	border-color: var(--accent);
 }
 
 /* 復習リスト内の読み取り専用表示(divに.optionを流用) */
@@ -1174,10 +1324,11 @@ button.option:hover:not(:disabled) {
 	outline-offset: -2px;
 }
 
+/* 記号は塗りつぶさず、丸い罫線に明朝で置く(案B) */
 .option-label {
-	font-family: var(--font-mono);
-	font-size: 12px;
-	font-weight: 700;
+	font-family: var(--font-heading);
+	font-size: 14px;
+	font-weight: 600;
 	width: 26px;
 	height: 26px;
 	display: inline-flex;
@@ -1186,50 +1337,41 @@ button.option:hover:not(:disabled) {
 	border: 1px solid var(--line-strong);
 	border-radius: 50%;
 	color: var(--ink-soft);
-	background: #fff;
+	background: transparent;
 	flex: none;
 }
 
-.option[data-state="selected"] {
-	border-color: var(--accent);
-	background: var(--accent-bg);
-}
-
-.option[data-state="selected"] .option-label {
-	background: var(--accent);
-	border-color: var(--accent);
-	color: #fff;
-}
-
+/* 選ばれた/正解の面はごく薄く敷くだけ。判別は罫線と ○/✕ マークが担う。 */
+.option[data-state="selected"],
 .option[data-state="correct"] {
-	border-color: var(--ok);
-	background: var(--ok-bg);
+	border-color: var(--accent);
+	background: color-mix(in srgb, var(--accent) 7%, transparent);
 }
 
+.option[data-state="selected"] .option-label,
 .option[data-state="correct"] .option-label {
-	background: var(--ok);
-	border-color: var(--ok);
-	color: #fff;
+	border-color: var(--accent);
+	color: var(--accent-deep);
 }
 
 .option[data-state="wrong"] {
 	border-color: var(--ng);
-	background: var(--ng-bg);
 }
 
 .option[data-state="wrong"] .option-label {
-	background: var(--ng);
 	border-color: var(--ng);
-	color: #fff;
+	color: var(--ng);
 }
 
 .option[data-state="muted"] {
+	border-color: var(--line);
 	color: var(--ink-soft);
 }
 
 .option-mark {
-	font-size: 18px;
-	font-weight: 700;
+	font-family: var(--font-heading);
+	font-size: 17px;
+	font-weight: 600;
 	line-height: 1;
 	align-self: center;
 }
@@ -1244,11 +1386,23 @@ button.option:hover:not(:disabled) {
 
 /* ---- 採点・解説 ---- */
 
-.result-sheet {
+/* PCでは問題の下にそのまま続く節。太い罫で区切り、○/✕ を左の柱に立てる(案B)。
+   スマホでは下のメディアクエリでボトムシートに変わる。 */
+.quiz .result-sheet {
+	border-top-color: var(--ink);
+}
+
+/* シートのつまみ。スマホでのみ出す(PCは重ねないので不要)。 */
+.result-grabber {
+	display: none;
+}
+
+.result-head {
 	display: grid;
 	grid-template-columns: auto 1fr;
-	gap: 20px;
-	margin-top: 22px;
+	align-items: center;
+	gap: 22px;
+	margin-bottom: 22px;
 }
 
 /* 丸つけの「○/✕」マーク */
@@ -1258,12 +1412,11 @@ button.option:hover:not(:disabled) {
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	font-size: 32px;
-	font-weight: 700;
-	border: 3px solid currentColor;
+	font-family: var(--font-heading);
+	font-size: 28px;
+	font-weight: 600;
+	border: 1px solid currentColor;
 	border-radius: 50%;
-	background: #fff;
-	transform: rotate(-6deg);
 	color: var(--ng);
 }
 
@@ -1272,14 +1425,11 @@ button.option:hover:not(:disabled) {
 }
 
 .result-heading {
-	margin: 4px 0 14px;
+	margin: 0;
 	font-family: var(--font-heading);
-	font-size: 19px;
+	font-size: 24px;
 	font-weight: 600;
-	letter-spacing: 0.08em;
-	display: flex;
-	align-items: baseline;
-	gap: 14px;
+	letter-spacing: 0.04em;
 }
 
 .result-sheet[data-correct="true"] .result-heading {
@@ -1291,10 +1441,20 @@ button.option:hover:not(:disabled) {
 }
 
 .result-answer {
+	margin: 2px 0 0;
 	font-family: var(--font-mono);
-	font-size: 12px;
-	letter-spacing: 0.08em;
+	font-size: 11px;
+	letter-spacing: 0.1em;
 	color: var(--ink-soft);
+}
+
+.result-body {
+	max-width: var(--measure);
+}
+
+.result-hint {
+	display: block;
+	margin: 16px 0 0;
 }
 
 .explanation {
@@ -1303,12 +1463,12 @@ button.option:hover:not(:disabled) {
 
 .explanation dt {
 	font-family: var(--font-mono);
-	font-size: 11px;
-	letter-spacing: 0.18em;
-	color: var(--accent);
+	font-size: 10px;
+	letter-spacing: 0.22em;
+	color: var(--accent-deep);
 	border-bottom: 1px solid var(--line);
 	padding-bottom: 4px;
-	margin: 16px 0 8px;
+	margin: 18px 0 8px;
 }
 
 .explanation dt:first-of-type {
@@ -1317,7 +1477,10 @@ button.option:hover:not(:disabled) {
 
 .explanation dd {
 	margin: 0;
-	font-size: 14px;
+	font-size: 15px;
+	line-height: 1.9;
+	text-align: justify;
+	text-wrap: pretty;
 }
 
 .option-reasons {
@@ -1338,14 +1501,29 @@ button.option:hover:not(:disabled) {
 }
 
 .option-reasons .option-label[data-ok="true"] {
-	background: var(--ok);
-	border-color: var(--ok);
-	color: #fff;
+	border-color: var(--accent);
+	color: var(--accent-deep);
 }
 
 /* ---- 復習マークトグル ---- */
 
+/* 送信しようとしている選択肢を右端に添える(案B)。押す前の確認になる。 */
+.button-answer {
+	gap: 14px;
+}
+
+.answer-picked {
+	font-family: var(--font-mono);
+	font-size: 13px;
+	letter-spacing: 0.08em;
+	color: var(--ink-soft);
+}
+
 .button-review {
+	display: inline-flex;
+	align-items: center;
+	gap: 10px;
+	min-height: 48px;
 	border-color: var(--line-strong);
 	color: var(--ink-soft);
 }
@@ -1353,7 +1531,12 @@ button.option:hover:not(:disabled) {
 .button-review[data-marked="true"] {
 	border-color: var(--accent);
 	color: var(--accent-deep);
-	background: var(--accent-bg);
+	background: transparent;
+}
+
+.button-review-mark {
+	font-size: 17px;
+	line-height: 1;
 }
 
 /* ---- 一覧の見出しと絞り込み(問題リスト・復習リストで共通) ---- */
@@ -1366,10 +1549,18 @@ button.option:hover:not(:disabled) {
 	margin-bottom: 14px;
 }
 
+/* 絞り込みは常に版面の幅いっぱいを分け合う。資格だけのときは2列グリッドの
+   片側が空いて半端な幅になっていたので、伸縮で埋める。 */
 .list-filters {
-	display: grid;
-	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+	display: flex;
+	flex-wrap: wrap;
 	gap: 12px;
+}
+
+.list-filter {
+	display: block;
+	flex: 1 1 240px;
+	min-width: 0;
 }
 
 .list-filter .field-label {
@@ -1517,24 +1708,164 @@ button.option:hover:not(:disabled) {
 		text-align: left;
 	}
 
-	.quiz-bar {
+	/* 1行目に「← ホーム + 資格」、2行目に正答率とメーターを幅いっぱいで置く。
+	   入れ子の .quiz-bar-meta を畳んで .quiz-bar の直接の行として並べる。 */
+	.quiz-bar-meta {
+		display: contents;
+	}
+
+	/* 資格名は長い。折り返して段が崩れるより、省略して1行に収める。 */
+	.quiz-cert-group {
+		flex: 1;
+		min-width: 0;
+		flex-wrap: nowrap;
+		justify-content: flex-end;
+		overflow: hidden;
+	}
+
+	.quiz-cert {
+		overflow: hidden;
+		white-space: nowrap;
+		text-overflow: ellipsis;
+	}
+
+	.score {
+		flex: 1 1 100%;
+		flex-direction: row;
+		align-items: center;
+		gap: 10px;
+		min-width: 0;
+	}
+
+	.score-meter {
+		flex: 1;
+	}
+
+	.question-head {
 		flex-wrap: wrap;
 	}
 
-	.result-sheet {
-		grid-template-columns: 1fr;
+	.question-no {
+		font-size: 22px;
+	}
+
+	/* 案Bの下部固定アクション。選択肢が長くてもCTAが常に手の届く位置にある。 */
+	.quiz-actions {
+		position: fixed;
+		left: 0;
+		right: 0;
+		bottom: 0;
+		z-index: 5;
+		margin: 0;
+		padding: 12px 20px calc(12px + env(safe-area-inset-bottom));
+		background: var(--bg);
+		border-top: 1px solid var(--line);
+	}
+
+	.quiz-actions .button-primary {
+		flex: 1;
+	}
+
+	/* 固定バー・シートの下に本文が潜り込まないぶんの余白 */
+	.quiz {
+		padding-bottom: 96px;
+	}
+
+	.quiz[data-sheet="true"] {
+		padding-bottom: 240px;
+	}
+
+	/* 解説はボトムシートとして問題の上に重ねる(ADR 0019)。
+	   つまみを押すとたたまれ、後ろの問題文を読み返せる。 */
+	.quiz .result-sheet {
+		position: fixed;
+		left: 0;
+		right: 0;
+		bottom: 0;
+		z-index: 6;
+		display: flex;
+		flex-direction: column;
+		max-height: 86dvh;
+		margin: 0;
+		padding: 0 18px calc(14px + env(safe-area-inset-bottom));
+		background: var(--bg);
+		border: 0;
+		border-top: 1px solid var(--line-strong);
+		border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+		box-shadow: var(--shadow-float);
+	}
+
+	.result-grabber {
+		display: grid;
+		place-items: center;
+		gap: 6px;
+		width: 100%;
+		min-height: 44px;
+		padding: 10px 0 6px;
+		border: 0;
+		background: transparent;
+	}
+
+	.result-grabber-bar {
+		width: 44px;
+		height: 2px;
+		background: var(--line-strong);
+	}
+
+	.result-grabber-text {
+		font-size: 11px;
+		letter-spacing: 0.1em;
+		color: var(--ink-soft);
+	}
+
+	.result-head {
+		gap: 14px;
+		margin-bottom: 0;
+		padding-bottom: 16px;
+		border-bottom: 1px solid var(--ink);
 	}
 
 	.result-stamp {
-		justify-self: start;
+		width: 44px;
+		height: 44px;
+		font-size: 22px;
 	}
 
-	.generation-wait-head {
-		grid-template-columns: 1fr auto;
+	.result-heading {
+		font-size: 22px;
 	}
 
-	.generation-wait-kicker {
-		grid-column: 1 / -1;
+	.result-body {
+		flex: 1;
+		min-height: 0;
+		overflow-y: auto;
+		padding: 16px 0;
+	}
+
+	.result-sheet[data-expanded="false"] .result-body {
+		display: none;
+	}
+
+	.result-actions {
+		margin: 0;
+		padding-top: 14px;
+		border-top: 1px solid var(--line);
+	}
+
+	.result-actions .button-primary {
+		flex: 1;
+	}
+
+	/* たたんだ状態でも正誤と次への導線は残す。星は正方形のアイコンボタンにする。 */
+	.result-actions .button-review-text {
+		display: none;
+	}
+
+	.result-actions .button-review {
+		justify-content: center;
+		width: 52px;
+		min-height: 52px;
+		padding: 0;
 	}
 
 	.skeleton-session-row {
@@ -1548,10 +1879,6 @@ button.option:hover:not(:disabled) {
 	.action-error {
 		align-items: flex-start;
 		flex-direction: column;
-	}
-
-	.list-filters {
-		grid-template-columns: 1fr;
 	}
 
 	.question-list-date {

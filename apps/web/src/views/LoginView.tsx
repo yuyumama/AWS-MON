@@ -92,6 +92,9 @@ export function LoginView({ onAuthenticated }: Props) {
 					>
 						{busy && <ButtonSpinner />}
 						{busy ? "設定中…" : "パスワードを設定してはじめる"}
+						<span className="button-arrow" aria-hidden="true">
+							→
+						</span>
 					</button>
 					{busy && (
 						<div className="login-progress" role="status" aria-busy="true">
@@ -155,6 +158,9 @@ export function LoginView({ onAuthenticated }: Props) {
 				>
 					{busy && <ButtonSpinner />}
 					{busy ? "ログイン中…" : "ログイン"}
+					<span className="button-arrow" aria-hidden="true">
+						→
+					</span>
 				</button>
 				{busy && (
 					<div className="login-progress" role="status" aria-busy="true">
