@@ -908,102 +908,122 @@ export function QuizView({
 								? { duration: 0 }
 								: { duration: 0.2, ease: "easeOut" }
 						}
-						// motion が transform を持つので、指への追従は別プロパティの
-						// translate で乗せる。離すと 0 に戻り、CSS側の遷移で吸い付く。
-						style={
-							dragOffset === 0 ? undefined : { translate: `0 ${dragOffset}px` }
-						}
 					>
-						<button
-							type="button"
-							className="result-grabber"
-							aria-expanded={sheetStage === "full"}
-							aria-controls={`result-body-${current.sequence}`}
-							onClick={toggleSheet}
-							onPointerDown={startSheetDrag}
-							onPointerMove={moveSheetDrag}
-							onPointerUp={endSheetDrag}
-							onPointerCancel={endSheetDrag}
-							onKeyDown={onSheetKeyDown}
-						>
-							<span className="result-grabber-bar" aria-hidden="true" />
-							<span className="result-grabber-text">
-								{sheetStage === "full" ? "問題を見る" : "解説を見る"}
-							</span>
-						</button>
+						{/* 指に追従して動くのはここまで。下の操作行は動かさない。
+						    外側の .result-clip は動かないので、下げた中身は操作行の
+						    手前で切り落とされる。motion がセクションの transform を
+						    持つので、追従は別プロパティの translate に乗せる。 */}
+						<div className="result-clip">
+							<div
+								className="result-slide"
+								style={
+									dragOffset === 0
+										? undefined
+										: { translate: `0 ${dragOffset}px` }
+								}
+							>
+								<button
+									type="button"
+									className="result-grabber"
+									aria-expanded={sheetStage === "full"}
+									aria-controls={`result-body-${current.sequence}`}
+									onClick={toggleSheet}
+									onPointerDown={startSheetDrag}
+									onPointerMove={moveSheetDrag}
+									onPointerUp={endSheetDrag}
+									onPointerCancel={endSheetDrag}
+									onKeyDown={onSheetKeyDown}
+								>
+									<span className="result-grabber-bar" aria-hidden="true" />
+									<span className="result-grabber-text">
+										{sheetStage === "full" ? "問題を見る" : "解説を見る"}
+									</span>
+								</button>
 
-						<div className="result-head">
-							<span className="result-stamp" aria-hidden="true">
-								{isCorrect ? "○" : "✕"}
-							</span>
-							<div>
-								<h3 className="result-heading">
-									{isCorrect ? "正解" : "不正解"}
-								</h3>
-								<p className="result-answer">
-									正答 {normalizeAnswers(answeredQuestion.correct).join("・")}{" "}
-									・ {session.stats.correctCount}/{session.stats.answeredCount}
-									問 ・ 正答率 {rate !== null ? `${rate}%` : "—"}
-								</p>
-							</div>
-						</div>
+								<div className="result-head">
+									<span className="result-stamp" aria-hidden="true">
+										{isCorrect ? "○" : "✕"}
+									</span>
+									<div>
+										<h3 className="result-heading">
+											{isCorrect ? "正解" : "不正解"}
+										</h3>
+										<p className="result-answer">
+											正答{" "}
+											{normalizeAnswers(answeredQuestion.correct).join("・")} ・{" "}
+											{session.stats.correctCount}/{session.stats.answeredCount}
+											問 ・ 正答率 {rate !== null ? `${rate}%` : "—"}
+										</p>
+									</div>
+								</div>
 
-						<div className="result-body" id={`result-body-${current.sequence}`}>
-							<dl className="explanation">
-								<dt>概要</dt>
-								<dd>{answeredQuestion.explanation.overview}</dd>
-								<dt>正解の理由</dt>
-								<dd>{answeredQuestion.explanation.correct_reason}</dd>
-								<dt>各選択肢</dt>
-								<dd>
-									<ul className="option-reasons">
-										{answeredQuestion.explanation.option_reasons.map(
-											(reason) => (
-												<li key={reason.label}>
-													<span
-														className="option-label"
-														data-ok={correctSet.has(reason.label.toUpperCase())}
-													>
-														{reason.label}
-													</span>
-													<span>{reason.reason}</span>
-												</li>
-											),
-										)}
-									</ul>
-								</dd>
-								<dt>出典</dt>
-								<dd>
-									{/^https?:\/\//.test(answeredQuestion.explanation.source) ? (
-										<a
-											href={answeredQuestion.explanation.source}
-											target="_blank"
-											rel="noreferrer"
-										>
-											{answeredQuestion.explanation.source}
-										</a>
-									) : (
-										answeredQuestion.explanation.source
+								<div
+									className="result-body"
+									id={`result-body-${current.sequence}`}
+								>
+									<dl className="explanation">
+										<dt>概要</dt>
+										<dd>{answeredQuestion.explanation.overview}</dd>
+										<dt>正解の理由</dt>
+										<dd>{answeredQuestion.explanation.correct_reason}</dd>
+										<dt>各選択肢</dt>
+										<dd>
+											<ul className="option-reasons">
+												{answeredQuestion.explanation.option_reasons.map(
+													(reason) => (
+														<li key={reason.label}>
+															<span
+																className="option-label"
+																data-ok={correctSet.has(
+																	reason.label.toUpperCase(),
+																)}
+															>
+																{reason.label}
+															</span>
+															<span>{reason.reason}</span>
+														</li>
+													),
+												)}
+											</ul>
+										</dd>
+										<dt>出典</dt>
+										<dd>
+											{/^https?:\/\//.test(
+												answeredQuestion.explanation.source,
+											) ? (
+												<a
+													href={answeredQuestion.explanation.source}
+													target="_blank"
+													rel="noreferrer"
+												>
+													{answeredQuestion.explanation.source}
+												</a>
+											) : (
+												answeredQuestion.explanation.source
+											)}
+										</dd>
+									</dl>
+
+									{nextWaiting && (
+										<GenerationWaitingPanel
+											title="次の問題を生成中"
+											elapsedSeconds={nextElapsed}
+											stages={
+												<GenerationStages
+													progress={session.prefetch?.progress}
+												/>
+											}
+											compact
+										/>
 									)}
-								</dd>
-							</dl>
 
-							{nextWaiting && (
-								<GenerationWaitingPanel
-									title="次の問題を生成中"
-									elapsedSeconds={nextElapsed}
-									stages={
-										<GenerationStages progress={session.prefetch?.progress} />
-									}
-									compact
-								/>
-							)}
-
-							{!isCorrect && (
-								<p className="hint result-hint">
-									間違えた問題は自動で復習リストに追加されます
-								</p>
-							)}
+									{!isCorrect && (
+										<p className="hint result-hint">
+											間違えた問題は自動で復習リストに追加されます
+										</p>
+									)}
+								</div>
+							</div>
 						</div>
 
 						<div className="actions result-actions">

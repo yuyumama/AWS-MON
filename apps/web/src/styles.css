@@ -1395,6 +1395,12 @@ button.option:hover:not(:disabled) {
 	border-top-color: var(--ink);
 }
 
+/* PCではシートにしないので、囲いは無かったことにして素通しする。 */
+.result-clip,
+.result-slide {
+	display: contents;
+}
+
 /* シートのつまみ。スマホでのみ出す(PCは重ねないので不要)。 */
 .result-grabber {
 	display: none;
@@ -1807,6 +1813,22 @@ button.option:hover:not(:disabled) {
 		box-shadow: var(--shadow-float);
 	}
 
+	/* .result-clip は動かない窓。ここで切り落とすので、中身を下げても
+	   「次の問題へ」の上に文字が乗らない。translate は内側だけに掛ける
+	   (外側を動かすと切り取り枠ごと動いて何も切れない)。 */
+	.result-clip {
+		display: flex;
+		flex-direction: column;
+		min-height: 0;
+		overflow: hidden;
+	}
+
+	.result-slide {
+		display: flex;
+		flex-direction: column;
+		min-height: 0;
+	}
+
 	.result-grabber {
 		display: grid;
 		place-items: center;
@@ -1827,7 +1849,7 @@ button.option:hover:not(:disabled) {
 
 	/* 指を離したあと 0 へ戻るぶんだけ滑らせる。掴んでいる間に効かせると
 	   追従が1フレームぶん遅れて重く感じるので、その間は切る。 */
-	.quiz .result-sheet[data-dragging="false"] {
+	.quiz .result-sheet[data-dragging="false"] .result-slide {
 		transition: translate 0.18s ease-out;
 	}
 
@@ -1936,7 +1958,7 @@ button.option:hover:not(:disabled) {
 	}
 
 	.score-meter-fill,
-	.quiz .result-sheet[data-dragging="false"] {
+	.quiz .result-sheet[data-dragging="false"] .result-slide {
 		transition: none;
 	}
 
