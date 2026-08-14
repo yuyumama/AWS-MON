@@ -33,6 +33,14 @@ import {
 	generationStages,
 	resolveGenerationStage,
 } from "../lib/generationStages";
+import {
+	clampSheetDrag,
+	isSheetTap,
+	resolveSheetDragEnd,
+	type SheetStage,
+	stepSheetStage,
+	toggleSheetStage,
+} from "../lib/sheetDrag";
 import { useElapsedSeconds } from "../lib/useElapsedSeconds";
 
 type Props = {
@@ -317,15 +325,70 @@ export function QuizView({
 		sessionId,
 	]);
 
-	// スマホでは解説をボトムシートで重ねる(ADR 0019)。問題文を読み返せるよう
-	// たたんだ状態へ切り替えられる。新しい問題に進んだら必ず開いた状態に戻す。
-	const [sheetExpanded, setSheetExpanded] = useState(true);
+	// スマホでは解説をボトムシートで重ねる(ADR 0019)。段は3つ:
+	//   full    … 解説まで出す
+	//   compact … 正誤と次への導線だけ
+	//   minimal … 問題文を読むための最小(正誤も隠す)
+	// 新しい問題に進んだら必ず full へ戻す。
+	const [sheetStage, setSheetStage] = useState<SheetStage>("full");
 	const currentSequence = current?.sequence;
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: currentSequence は本文で読まないが、問題が変わったことを検知するための依存。
 	useEffect(() => {
-		setSheetExpanded(true);
+		setSheetStage("full");
 	}, [currentSequence]);
+
+	// つまみのドラッグ。指の移動に追従させ、離した時点で開閉を決める。
+	// 判定は lib/sheetDrag に出してある。
+	const dragStartRef = useRef<number | null>(null);
+	const draggedRef = useRef(false);
+	const [dragOffset, setDragOffset] = useState(0);
+	const [dragging, setDragging] = useState(false);
+
+	const startSheetDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
+		dragStartRef.current = event.clientY;
+		draggedRef.current = false;
+		setDragging(true);
+		event.currentTarget.setPointerCapture(event.pointerId);
+	};
+
+	const moveSheetDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
+		const start = dragStartRef.current;
+		if (start === null) return;
+		const delta = event.clientY - start;
+		if (!isSheetTap(delta)) draggedRef.current = true;
+		setDragOffset(clampSheetDrag(sheetStage, delta));
+	};
+
+	const endSheetDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
+		const start = dragStartRef.current;
+		dragStartRef.current = null;
+		setDragOffset(0);
+		setDragging(false);
+		if (start === null) return;
+		const delta = event.clientY - start;
+		// 動いていなければ押しただけ。onClick 側に任せる。
+		if (isSheetTap(delta)) return;
+		setSheetStage(resolveSheetDragEnd(sheetStage, delta));
+	};
+
+	const toggleSheet = () => {
+		// ドラッグの直後は pointerup に続いて click も飛ぶ。二重に動かさない。
+		if (draggedRef.current) {
+			draggedRef.current = false;
+			return;
+		}
+		setSheetStage(toggleSheetStage);
+	};
+
+	// ドラッグできない環境でも3段すべてに届くようにする。
+	const onSheetKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
+		if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+		event.preventDefault();
+		setSheetStage((stage) =>
+			stepSheetStage(stage, event.key === "ArrowDown" ? 1 : -1),
+		);
+	};
 
 	// 復習マーク状態(null = 未取得)。回答済み問題が表示されたら取得する
 	const [reviewMarked, setReviewMarked] = useState<boolean | null>(null);
@@ -697,7 +760,7 @@ export function QuizView({
 					: "復習リストに追加";
 
 	return (
-		<div className="quiz" data-sheet={answered ? "true" : "false"}>
+		<div className="quiz" data-sheet={answered ? sheetStage : "none"}>
 			<div className="quiz-bar">
 				<button type="button" className="button button-ghost" onClick={onExit}>
 					← ホーム
@@ -835,7 +898,8 @@ export function QuizView({
 						key={`explanation-${current.sequence}`}
 						className="sheet result-sheet"
 						data-correct={isCorrect}
-						data-expanded={sheetExpanded}
+						data-stage={sheetStage}
+						data-dragging={dragging}
 						initial={reducedMotion ? false : { opacity: 0, y: 10 }}
 						animate={reducedMotion ? undefined : { opacity: 1, y: 0 }}
 						exit={reducedMotion ? undefined : { opacity: 0, y: -6 }}
@@ -844,17 +908,27 @@ export function QuizView({
 								? { duration: 0 }
 								: { duration: 0.2, ease: "easeOut" }
 						}
+						// motion が transform を持つので、指への追従は別プロパティの
+						// translate で乗せる。離すと 0 に戻り、CSS側の遷移で吸い付く。
+						style={
+							dragOffset === 0 ? undefined : { translate: `0 ${dragOffset}px` }
+						}
 					>
 						<button
 							type="button"
 							className="result-grabber"
-							aria-expanded={sheetExpanded}
+							aria-expanded={sheetStage === "full"}
 							aria-controls={`result-body-${current.sequence}`}
-							onClick={() => setSheetExpanded((open) => !open)}
+							onClick={toggleSheet}
+							onPointerDown={startSheetDrag}
+							onPointerMove={moveSheetDrag}
+							onPointerUp={endSheetDrag}
+							onPointerCancel={endSheetDrag}
+							onKeyDown={onSheetKeyDown}
 						>
 							<span className="result-grabber-bar" aria-hidden="true" />
 							<span className="result-grabber-text">
-								{sheetExpanded ? "問題を見る" : "解説を見る"}
+								{sheetStage === "full" ? "問題を見る" : "解説を見る"}
 							</span>
 						</button>
 
