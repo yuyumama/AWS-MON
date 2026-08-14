@@ -33,8 +33,11 @@
 	--radius-lg: 4px;
 	/* 影は面に常用しない。浮遊要素(ボトムシート・モーダル)専用 */
 	--shadow-float: 0 18px 50px rgba(34, 48, 63, 0.22);
-	/* 本文の行長。「読み物」として約60文字で止める */
-	--measure: 60ch;
+	/* 本文の行長。「読み物」として約60文字で止める。
+	   単位は em であって ch ではない。ch は「0」の字幅(≒0.5em)なので、
+	   60ch は全角30文字ぶんにしかならず、PCで本文だけがスマホ幅に
+	   縮んで折り返す。全角1文字 = 1em で数えること。 */
+	--measure: 60em;
 
 	--font-body:
 		"Hiragino Kaku Gothic ProN", "Hiragino Sans", "Yu Gothic Medium",
