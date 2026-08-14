@@ -1,10 +1,13 @@
 import { useState } from "react";
+import { ButtonSpinner } from "../components/Loading";
 import { errorMessage } from "../lib/api";
 import { completeNewPassword, signIn } from "../lib/auth";
 
 type Props = {
 	// SRPログイン完了後に呼ぶ。App側が /me を取得してアプリ本体へ進む。
-	onAuthenticated: () => void;
+	// /me の取得もログインの待ち時間なので、その完了まで busy を解かないよう
+	// Promise を返せる形にしている。
+	onAuthenticated: () => void | Promise<void>;
 };
 
 // 自前ログインフォーム(SRP)。Hosted UIへのリダイレクトはしない。
@@ -29,7 +32,7 @@ export function LoginView({ onAuthenticated }: Props) {
 				setPassword("");
 				setPhase("newPassword");
 			} else {
-				onAuthenticated();
+				await onAuthenticated();
 			}
 		} catch (e) {
 			setError(errorMessage(e));
@@ -43,7 +46,7 @@ export function LoginView({ onAuthenticated }: Props) {
 		setError(null);
 		try {
 			await completeNewPassword(newPassword);
-			onAuthenticated();
+			await onAuthenticated();
 		} catch (e) {
 			setError(errorMessage(e));
 		} finally {
@@ -77,6 +80,7 @@ export function LoginView({ onAuthenticated }: Props) {
 							autoComplete="new-password"
 							value={newPassword}
 							onChange={(e) => setNewPassword(e.target.value)}
+							disabled={busy}
 							required
 						/>
 					</div>
@@ -86,8 +90,17 @@ export function LoginView({ onAuthenticated }: Props) {
 						className="button button-primary"
 						disabled={busy || newPassword.length === 0}
 					>
+						{busy && <ButtonSpinner />}
 						{busy ? "設定中…" : "パスワードを設定してはじめる"}
 					</button>
+					{busy && (
+						<div className="login-progress" role="status" aria-busy="true">
+							<div className="generation-bar" aria-hidden="true">
+								<span />
+							</div>
+							<p>パスワードを設定してログインしています。</p>
+						</div>
+					)}
 				</form>
 			</section>
 		);
@@ -115,6 +128,7 @@ export function LoginView({ onAuthenticated }: Props) {
 						autoComplete="username"
 						value={username}
 						onChange={(e) => setUsername(e.target.value)}
+						disabled={busy}
 						required
 					/>
 				</div>
@@ -129,6 +143,7 @@ export function LoginView({ onAuthenticated }: Props) {
 						autoComplete="current-password"
 						value={password}
 						onChange={(e) => setPassword(e.target.value)}
+						disabled={busy}
 						required
 					/>
 				</div>
@@ -138,8 +153,17 @@ export function LoginView({ onAuthenticated }: Props) {
 					className="button button-primary"
 					disabled={busy || username.length === 0 || password.length === 0}
 				>
+					{busy && <ButtonSpinner />}
 					{busy ? "ログイン中…" : "ログイン"}
 				</button>
+				{busy && (
+					<div className="login-progress" role="status" aria-busy="true">
+						<div className="generation-bar" aria-hidden="true">
+							<span />
+						</div>
+						<p>認証情報を確認しています。しばらくお待ちください。</p>
+					</div>
+				)}
 				<p className="login-footnote">
 					アカウントは管理者発行です（登録機能はありません）。
 				</p>

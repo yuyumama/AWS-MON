@@ -20,22 +20,11 @@ import {
 	domainLabel,
 	domainOptionsForCert,
 } from "../lib/certs";
+import { formatDateTime } from "../lib/datetime";
 import {
 	usePersistedViewState,
 	useRouteScrollPosition,
 } from "../lib/viewState";
-
-function formatDate(iso?: string): string {
-	if (!iso) return "—";
-	const date = new Date(iso);
-	if (Number.isNaN(date.getTime())) return iso;
-	return date.toLocaleString("ja-JP", {
-		month: "numeric",
-		day: "numeric",
-		hour: "2-digit",
-		minute: "2-digit",
-	});
-}
 
 export function ReviewView() {
 	useRouteScrollPosition("review");
@@ -113,15 +102,15 @@ export function ReviewView() {
 
 	return (
 		<section className="sheet" aria-labelledby="review-heading">
-			<div className="review-head">
+			<div className="list-head">
 				<h2 className="sheet-heading" id="review-heading">
 					<span className="sheet-no">復習</span>マークした問題
 				</h2>
-				<div className="review-filters">
-					<label className="question-list-filter">
+				<div className="list-filters">
+					<label className="list-filter">
 						<span className="field-label">資格</span>
 						<select
-							className="select review-filter"
+							className="select"
 							value={certFilter}
 							onChange={(event) => {
 								setCertFilter(event.target.value);
@@ -139,10 +128,10 @@ export function ReviewView() {
 						</select>
 					</label>
 					{certFilter !== "" && (
-						<label className="question-list-filter">
+						<label className="list-filter">
 							<span className="field-label">出題ドメイン</span>
 							<select
-								className="select review-filter"
+								className="select"
 								value={effectiveDomainFilter}
 								onChange={(event) => {
 									setDomainFilter(event.target.value);
@@ -208,7 +197,7 @@ export function ReviewView() {
 										>
 											{item.lastCorrect ? "○" : "✕"}
 										</span>{" "}
-										・ {formatDate(item.reviewMarkedAt)}追加
+										・ {formatDateTime(item.reviewMarkedAt)}追加
 									</span>
 								</div>
 
