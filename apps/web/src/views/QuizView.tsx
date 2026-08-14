@@ -946,7 +946,10 @@ export function QuizView({
 									? session.mode === "BANK"
 										? "次の問題を取得中…"
 										: "次の問題を準備中…"
-									: "次の問題へ →"}
+									: "次の問題へ"}
+								<span className="button-arrow" aria-hidden="true">
+									→
+								</span>
 							</button>
 							<button
 								type="button"

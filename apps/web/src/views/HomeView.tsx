@@ -386,6 +386,9 @@ export function HomeView({ canGenerate, onOpenSession, onResume }: Props) {
 					disabled={starting}
 				>
 					{starting ? "開始中…" : "演習をはじめる"}
+					<span className="button-arrow" aria-hidden="true">
+						→
+					</span>
 				</button>
 			</section>
 

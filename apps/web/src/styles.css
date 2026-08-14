@@ -448,12 +448,14 @@ a {
 
 /* 主要導線。明朝・52pxで「紙面の見出し」と同じ重さにする。
    タップ target も 52px 確保される。 */
+/* 案Bの主要導線は版面いっぱいの帯。見出しを左、矢印を右端に置く。 */
 .button-primary {
-	display: inline-flex;
+	display: flex;
 	align-items: center;
-	justify-content: center;
+	gap: 10px;
+	width: 100%;
 	min-height: 52px;
-	padding: 0 24px;
+	padding: 0 20px;
 	background: transparent;
 	color: var(--accent-deep);
 	border-color: var(--accent);
@@ -461,6 +463,23 @@ a {
 	font-size: 17px;
 	font-weight: 600;
 	letter-spacing: 0.04em;
+	text-align: left;
+}
+
+/* 横に並ぶボタンがある場所では、残り幅を取る形にする。 */
+.actions .button-primary {
+	width: auto;
+	flex: 1;
+}
+
+/* 右端に寄せる添え物(矢印・送信予定の選択肢) */
+.button-arrow,
+.answer-picked {
+	margin-left: auto;
+}
+
+.button-arrow {
+	font-size: 14px;
 }
 
 .button-primary:hover:not(:disabled) {
