@@ -16,6 +16,7 @@ import {
 	domainLabel,
 	domainOptionsForCert,
 } from "../lib/certs";
+import { formatDateTime } from "../lib/datetime";
 import {
 	appendQuestionPage,
 	mergeQuestionPage,
@@ -59,17 +60,7 @@ function replaceFilterUrl(filters: Filters) {
 function formatDate(item: QuestionListItemDto): string {
 	const updated = item.updatedAt !== item.createdAt;
 	const value = updated ? item.updatedAt : item.createdAt;
-	const date = new Date(value);
-	const formatted = Number.isNaN(date.getTime())
-		? value
-		: date.toLocaleString("ja-JP", {
-				year: "numeric",
-				month: "numeric",
-				day: "numeric",
-				hour: "2-digit",
-				minute: "2-digit",
-			});
-	return `${updated ? "更新" : "生成"} ${formatted}`;
+	return `${updated ? "更新" : "生成"} ${formatDateTime(value)}`;
 }
 
 export function QuestionListView() {
@@ -162,12 +153,12 @@ export function QuestionListView() {
 
 	return (
 		<section className="sheet" aria-labelledby="question-list-heading">
-			<div className="question-list-head">
+			<div className="list-head">
 				<h2 className="sheet-heading" id="question-list-heading">
 					<span className="sheet-no">BANK</span>生成済み問題リスト
 				</h2>
-				<div className="question-list-filters">
-					<label className="question-list-filter">
+				<div className="list-filters">
+					<label className="list-filter">
 						<span className="field-label">資格</span>
 						<select
 							className="select"
@@ -186,7 +177,7 @@ export function QuestionListView() {
 					</label>
 
 					{filters.cert !== "" && (
-						<label className="question-list-filter">
+						<label className="list-filter">
 							<span className="field-label">出題ドメイン</span>
 							<select
 								className="select"

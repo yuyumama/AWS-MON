@@ -299,6 +299,18 @@ a {
 	outline-offset: 1px;
 }
 
+/* ログイン中の進捗。SRP と /me の待ち時間に画面が静止して見えると
+   フリーズと区別がつかないため、不定形の進捗バーを出す。 */
+.login-progress {
+	margin-top: 16px;
+}
+
+.login-progress p {
+	margin: 8px 0 0;
+	font-size: 12px;
+	color: var(--ink-soft);
+}
+
 .login-footnote {
 	margin: 14px 0 0;
 	font-size: 12px;
@@ -622,13 +634,17 @@ a {
 	white-space: nowrap;
 }
 
+/* 終わりが読めない待ちを示す不定形バー。生成待ちとログイン中で共用する。 */
 .generation-bar {
 	height: 7px;
-	margin-top: 14px;
 	overflow: hidden;
 	border: 1px solid var(--line-strong);
 	border-radius: 4px;
 	background: var(--panel);
+}
+
+.generation-wait .generation-bar {
+	margin-top: 14px;
 }
 
 .generation-bar span {
@@ -1340,33 +1356,27 @@ button.option:hover:not(:disabled) {
 	background: var(--accent-bg);
 }
 
-/* ---- 復習リスト ---- */
+/* ---- 一覧の見出しと絞り込み(問題リスト・復習リストで共通) ---- */
 
-.review-head {
-	display: flex;
-	justify-content: space-between;
-	align-items: center;
-	gap: 16px;
-	flex-wrap: wrap;
-	margin-bottom: 16px;
+.list-head {
+	margin-bottom: 18px;
 }
 
-.review-head .sheet-heading {
-	margin: 0;
+.list-head .sheet-heading {
+	margin-bottom: 14px;
 }
 
-.review-filter {
-	width: auto;
-	max-width: 340px;
-	font-size: 13px;
-	padding: 8px 10px;
-}
-
-.review-filters {
-	display: flex;
+.list-filters {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 	gap: 12px;
-	flex-wrap: wrap;
 }
+
+.list-filter .field-label {
+	margin-bottom: 4px;
+}
+
+/* ---- 復習リスト ---- */
 
 /* 罫線で区切る一覧にする(案B)。天は太い罫で本文と切り、項目間はヘアライン。 */
 .review-list {
@@ -1477,24 +1487,6 @@ button.option:hover:not(:disabled) {
 
 /* ---- 生成済み問題リスト ---- */
 
-.question-list-head {
-	margin-bottom: 18px;
-}
-
-.question-list-head .sheet-heading {
-	margin-bottom: 14px;
-}
-
-.question-list-filters {
-	display: grid;
-	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-	gap: 12px;
-}
-
-.question-list-filter .field-label {
-	margin-bottom: 4px;
-}
-
 .question-list-date {
 	margin-left: auto;
 	font-family: var(--font-mono);
@@ -1558,7 +1550,7 @@ button.option:hover:not(:disabled) {
 		flex-direction: column;
 	}
 
-	.question-list-filters {
+	.list-filters {
 		grid-template-columns: 1fr;
 	}
 

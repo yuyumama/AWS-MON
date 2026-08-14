@@ -23,6 +23,7 @@ import {
 	modeLabel,
 	modeOptions,
 } from "../lib/certs";
+import { formatDateTime } from "../lib/datetime";
 import { shouldPollSessions } from "../lib/sessionPolling";
 import { useElapsedSeconds } from "../lib/useElapsedSeconds";
 import { useRouteScrollPosition } from "../lib/viewState";
@@ -33,15 +34,6 @@ type Props = {
 	onOpenSession: (session: SessionDto) => void;
 	onResume: (sessionId: string) => void;
 };
-
-function formatUpdatedAt(iso: string): string {
-	const date = new Date(iso);
-	if (Number.isNaN(date.getTime())) return iso;
-	return date.toLocaleTimeString("ja-JP", {
-		hour: "2-digit",
-		minute: "2-digit",
-	});
-}
 
 function formatElapsed(elapsedSeconds: number): string {
 	if (elapsedSeconds < 60) return `${elapsedSeconds}秒`;
@@ -118,18 +110,16 @@ function SessionRow({
 							modeLabel(session.mode)
 						) : initialFailed ? (
 							<>
-								{modeLabel(session.mode)} ・{" "}
-								{formatUpdatedAt(session.updatedAt)}
+								{modeLabel(session.mode)} ・ {formatDateTime(session.updatedAt)}
 							</>
 						) : prefetchQueued ? (
 							<>
 								{modeLabel(session.mode)} ・ {rate} ・{" "}
-								{formatUpdatedAt(session.updatedAt)}
+								{formatDateTime(session.updatedAt)}
 							</>
 						) : (
 							<>
-								{modeLabel(session.mode)} ・{" "}
-								{formatUpdatedAt(session.updatedAt)}
+								{modeLabel(session.mode)} ・ {formatDateTime(session.updatedAt)}
 							</>
 						)}
 					</span>

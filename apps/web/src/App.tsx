@@ -190,7 +190,7 @@ export function App() {
 										{auth.error && (
 											<p className="notice notice-error">{auth.error}</p>
 										)}
-										<LoginView onAuthenticated={() => void loadMe()} />
+										<LoginView onAuthenticated={loadMe} />
 									</>
 								) : route.view === "home" ? (
 									<HomeView
