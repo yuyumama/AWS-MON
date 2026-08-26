@@ -56,7 +56,11 @@ function ViewTransition({
 			animate={reducedMotion ? undefined : { opacity: 1, y: 0 }}
 			exit={reducedMotion ? undefined : { opacity: 0, y: -6 }}
 			transition={
-				reducedMotion ? { duration: 0 } : { duration: 0.18, ease: "easeOut" }
+				reducedMotion
+					? { duration: 0 }
+					: // CSSの --ease-out と同じカーブ(ADR 0020)。画面遷移は他の動きの
+						// 土台なので、部品より短く保って前に出させない。
+						{ duration: 0.24, ease: [0.23, 1, 0.32, 1] }
 			}
 			inert={isPresent ? undefined : true}
 			style={isPresent ? undefined : { pointerEvents: "none" }}

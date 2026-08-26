@@ -900,13 +900,15 @@ export function QuizView({
 						data-correct={isCorrect}
 						data-stage={sheetStage}
 						data-dragging={dragging}
-						initial={reducedMotion ? false : { opacity: 0, y: 10 }}
+						initial={reducedMotion ? false : { opacity: 0, y: 18 }}
 						animate={reducedMotion ? undefined : { opacity: 1, y: 0 }}
 						exit={reducedMotion ? undefined : { opacity: 0, y: -6 }}
 						transition={
 							reducedMotion
 								? { duration: 0 }
-								: { duration: 0.2, ease: "easeOut" }
+								: // CSSの --ease-out と同じカーブ(ADR 0020)。採点結果は
+									// 画面のどこよりも長い距離を、強く減速しながら着地させる。
+									{ duration: 0.42, ease: [0.23, 1, 0.32, 1] }
 						}
 					>
 						{/* 指に追従して動くのはここまで。下の操作行は動かさない。
