@@ -111,6 +111,79 @@ resource "aws_ecr_repository" "agent" {
   }
 }
 
+# ECRイメージは保持コストがかかるため、デプロイのたびに増える古い世代を期限で落とす。
+# 稼働中のLambda/AgentCoreは常に最新pushのイメージを参照する(deploy-*ワークフローが
+# sha付きタグで update するため)ので、保持世代には必ず含まれる。残す世代数は
+# 「そのぶんだけ過去のshaへロールバックできる窓」でもある。
+resource "aws_ecr_lifecycle_policy" "api" {
+  repository = aws_ecr_repository.api.name
+
+  # api と worker は同一リポジトリにタグで同居するため、プレフィックス別に数える
+  # (合算だと片方の連続デプロイでもう片方が押し出される)。
+  # `api-latest` / `worker-latest` は最新shaと同じイメージに付くので、この規則で消えない。
+  policy = jsonencode({
+    rules = [
+      {
+        rulePriority = 1
+        description  = "keep last 10 api- images"
+        selection = {
+          tagStatus     = "tagged"
+          tagPrefixList = ["api-"]
+          countType     = "imageCountMoreThan"
+          countNumber   = 10
+        }
+        action = { type = "expire" }
+      },
+      {
+        rulePriority = 2
+        description  = "keep last 10 worker- images"
+        selection = {
+          tagStatus     = "tagged"
+          tagPrefixList = ["worker-"]
+          countType     = "imageCountMoreThan"
+          countNumber   = 10
+        }
+        action = { type = "expire" }
+      },
+      {
+        # タグ差し替え(MUTABLE)やpush失敗で生じる浮きイメージの回収。
+        # 直後のロールバック調査に使う余地を残して14日置く。
+        rulePriority = 3
+        description  = "expire untagged images after 14 days"
+        selection = {
+          tagStatus   = "untagged"
+          countType   = "sinceImagePushed"
+          countUnit   = "days"
+          countNumber = 14
+        }
+        action = { type = "expire" }
+      },
+    ]
+  })
+}
+
+# agentのタグは `<sha>` と `latest` で、shaに共通プレフィックスが無い。
+# プレフィックス別に数えられないため、タグ有無を問わず世代数で切る
+# (arm64 Python イメージはapiより大きく、保持コストの効きも大きい)。
+resource "aws_ecr_lifecycle_policy" "agent" {
+  repository = aws_ecr_repository.agent.name
+
+  policy = jsonencode({
+    rules = [
+      {
+        rulePriority = 1
+        description  = "keep last 5 images (tagged or not)"
+        selection = {
+          tagStatus   = "any"
+          countType   = "imageCountMoreThan"
+          countNumber = 5
+        }
+        action = { type = "expire" }
+      },
+    ]
+  })
+}
+
 # webビルド成果物の配信元。公開はCloudFront OACのみに絞る。
 resource "aws_s3_bucket" "web" {
   bucket = local.web_bucket_name

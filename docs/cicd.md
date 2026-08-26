@@ -151,6 +151,12 @@ infra/
 - api/worker のコンテナは npm workspaces のため**リポジトリルートをビルドコンテキスト**にする
   （`docker build -f apps/api/Dockerfile .`）。agent は `apps/agent` コンテキストで
   **linux/arm64**（AgentCore Runtime要件。`ubuntu-24.04-arm` runnerでネイティブビルド）。
+- ECR のイメージ保持は Terraform 側のライフサイクルポリシーで打ち切る。
+  `aws-mon-prod-api` は `api-` / `worker-` プレフィックス別に**直近10世代**（両者は
+  同一リポジトリに同居するため合算では数えない）＋未タグは14日で失効。
+  `aws-mon-prod-agent` はタグが `<sha>` / `latest` でプレフィックスを持たないため、
+  タグ有無を問わず**直近5世代**で切る。保持世代数がそのまま
+  「過去のshaへロールバックできる窓」になる。
 
 ### SSMパラメータ契約（`/app/aws-mon/prod/*`, type=String）
 
