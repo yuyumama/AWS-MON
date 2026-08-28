@@ -33,6 +33,32 @@
 	--radius-lg: 4px;
 	/* 影は面に常用しない。浮遊要素(ボトムシート・モーダル)専用 */
 	--shadow-float: 0 18px 50px rgba(34, 48, 63, 0.22);
+	/* モーション(ADR 0020)。静的な版面ではなく「状態が変わる瞬間」を担う。
+	   減速の強い外向きカーブ。既定の ease は等速に近く、状態変化が
+	   機械的に見える。 */
+	--ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+	/* 1.15 までわずかに行き過ぎて戻るバネ。押した・選んだ手応えはここが作る。 */
+	--ease-spring: linear(
+		0 0%,
+		0.55 7%,
+		1.1 20%,
+		1.15 21%,
+		1.1 25%,
+		1.1 31%,
+		1.05 37%,
+		1 41%,
+		1 48%,
+		0.98 49%,
+		0.96 57%,
+		1 80%,
+		1 100%
+	);
+	/* 押下は速く、状態変化はゆっくり。押した瞬間に返事が来て、
+	   結果はじっくり変わる、の順序を崩さない。 */
+	--dur-tap: 0.12s;
+	--dur-state: 0.22s;
+	--dur-reveal: 0.5s;
+
 	/* 本文の行長。「読み物」として約60文字で止める。
 	   単位は em であって ch ではない。ch は「0」の字幅(≒0.5em)なので、
 	   60ch は全角30文字ぶんにしかならず、PCで本文だけがスマホ幅に
@@ -1159,7 +1185,9 @@ a {
 .score-meter-fill {
 	height: 100%;
 	background: var(--accent);
-	transition: width 0.3s ease;
+	/* 採点後に伸びるのが目で追える長さにする。既定の ease だと
+	   「いつの間にか変わっていた」になり、反映された感が出ない。 */
+	transition: width 0.6s var(--ease-out);
 }
 
 /* 設問の柱。太い罫で問題文と切る(案Bで唯一インク色の罫を使う場所) */
@@ -1946,7 +1974,180 @@ button.option:hover:not(:disabled) {
 	}
 }
 
+/* ============================================================
+   モーション層(ADR 0020)
+   静的な版面は ADR 0019 のまま。ここが扱うのは状態が変わる瞬間だけで、
+   色・罫線・角丸・書体には一切触れない。
+   原則: 「待ち」ではなく「確定」を表現する。動きは丸つけの語彙
+   (○/✕ と 56px の判子)から導出し、新しい造形は持ち込まない。
+   ============================================================ */
+
+/* 状態変化に時間を与える。ここまで全ての状態が0秒で切り替わっていた。 */
+.button,
+.option,
+.session-row,
+.session-delete,
+.review-summary,
+.mode-option,
+.link-button,
+.result-grabber,
+.select,
+.input {
+	transition:
+		background-color var(--dur-state) var(--ease-out),
+		border-color var(--dur-state) var(--ease-out),
+		color var(--dur-state) var(--ease-out),
+		scale var(--dur-tap) var(--ease-out);
+}
+
+/* 押下。幅いっぱいの帯は 0.99 前後が上限で、それ以上縮めると
+   沈むのではなく「ずれた」ように見える。小さい部品ほど深く沈めてよい。
+   離すときは --dur-tap で戻り、押すときだけ更に速くする。 */
+.button:active:not(:disabled),
+button.option:active:not(:disabled),
+.session-row:active,
+.mode-option:active {
+	scale: 0.988;
+	transition-duration: 0.05s;
+}
+
+.button-ghost:active:not(:disabled),
+.session-delete:active:not(:disabled),
+.link-button:active:not(:disabled) {
+	scale: 0.94;
+}
+
+/* スマホの既定タップハイライト(角丸の灰色矩形)を消す。罫線で構造を出す
+   版面(ADR 0019)の上では、ブラウザ既定の矩形が版面と無関係に浮く。 */
+button,
+a,
+label.mode-option {
+	-webkit-tap-highlight-color: transparent;
+}
+
+/* 選んだ瞬間。記号の丸がバネで着地する。 */
+.option[data-state="selected"] .option-label,
+.option[data-state="correct"] .option-label {
+	animation: label-pop var(--dur-reveal) var(--ease-spring);
+}
+
+@keyframes label-pop {
+	from {
+		scale: 0.78;
+	}
+	to {
+		scale: 1;
+	}
+}
+
+/* 採点の瞬間。○/✕ は新しく現れる要素なので transition では動かせない。
+   これまでキーフレームは3つとも「待ち」の表現だけで、「確定」を
+   表す部品を一つも持っていなかった。 */
+.option-mark {
+	animation: mark-in var(--dur-reveal) var(--ease-spring) backwards;
+}
+
+@keyframes mark-in {
+	from {
+		scale: 0.2;
+		opacity: 0;
+	}
+	to {
+		scale: 1;
+		opacity: 1;
+	}
+}
+
+/* 判子。56px の丸に明朝の ○/✕ という既存の造形は、そもそも
+   「上から押す」動きを前提にした形をしている。丸つけのモチーフと
+   ぶつからず、いちばん効く一箇所。 */
+.result-stamp {
+	animation: stamp-in 0.55s var(--ease-out) 0.08s backwards;
+}
+
+@keyframes stamp-in {
+	from {
+		scale: 1.55;
+		rotate: -9deg;
+		opacity: 0;
+	}
+	to {
+		scale: 1;
+		rotate: 0deg;
+		opacity: 1;
+	}
+}
+
+/* 解説の各項目が順に立ち上がる。刻みは40ms。これ以上遅らせると
+   「丁寧」ではなく「重い」に転ぶ。 */
+.explanation > * {
+	animation: explanation-rise 0.4s var(--ease-out) backwards;
+}
+
+.explanation > *:nth-child(1) {
+	animation-delay: 0.14s;
+}
+.explanation > *:nth-child(2) {
+	animation-delay: 0.18s;
+}
+.explanation > *:nth-child(3) {
+	animation-delay: 0.22s;
+}
+.explanation > *:nth-child(4) {
+	animation-delay: 0.26s;
+}
+.explanation > *:nth-child(5) {
+	animation-delay: 0.3s;
+}
+.explanation > *:nth-child(6) {
+	animation-delay: 0.34s;
+}
+.explanation > *:nth-child(7) {
+	animation-delay: 0.38s;
+}
+.explanation > *:nth-child(n + 8) {
+	animation-delay: 0.42s;
+}
+
+@keyframes explanation-rise {
+	from {
+		opacity: 0;
+		translate: 0 6px;
+	}
+}
+
 @media (prefers-reduced-motion: reduce) {
+	/* モーション層(ADR 0020)の打ち消し。上の既存分と足並みを揃える。 */
+	.option-label,
+	.option-mark,
+	.result-stamp,
+	.explanation > * {
+		animation: none;
+	}
+
+	.button,
+	.option,
+	.session-row,
+	.session-delete,
+	.review-summary,
+	.mode-option,
+	.link-button,
+	.result-grabber,
+	.select,
+	.input {
+		transition: none;
+	}
+
+	.button:active:not(:disabled),
+	button.option:active:not(:disabled),
+	.session-row:active,
+	.mode-option:active,
+	.button-ghost:active:not(:disabled),
+	.session-delete:active:not(:disabled),
+	.link-button:active:not(:disabled) {
+		scale: 1;
+	}
+
 	.button-spinner,
 	.skeleton-line,
 	.skeleton-field,
