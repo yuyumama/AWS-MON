@@ -29,7 +29,8 @@
   - [0016](adr/0016-generation-model-selection.md) 生成モデルを ling-3.0-flash に切り替える
   - [0017](adr/0017-test-strategy.md) テストを2層構成にし、テスト先行を委譲プロセスに組み込む
   - [0018](adr/0018-retire-grounding-gate-as-quality-judge.md) グラウンディングゲートを品質判定から外し、決定的チェックと自己整合ジャッジに置き換える
-  - [0019](adr/0019-web-design-language-classical.md) apps/web のデザイン言語を「読み物としての問題集」へ差し替え、スマホ対応を作り直す
+  - [0019](adr/0019-web-design-language-classical.md) apps/web のデザイン言語を「読み物としての問題集」へ差し替え、スマホ対応を作り直す（面・影・角丸の3点は0020で撤回）
+  - [0020](adr/0020-web-surface-and-shadow.md) apps/web に面と影を戻し、押下の手応えと本文コントラストを確保する
 - [`research/`](research/) — 調査メモ
   - [genai-observability-vs-xray](research/genai-observability-vs-xray.md) X-Ray / CloudWatch生成AIオブザーバビリティ / Evaluations の整理（Evaluations は検証後に廃止）
 

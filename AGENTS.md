@@ -196,9 +196,14 @@ cd local && docker compose up -d   # :8000 が未起動だとローカルでは�
 ## コード方針
 
 - フロントは「AIっぽい定型デザイン」を避ける。デザイン言語は「読み物としての問題集」
-  （ヘアライン罫線と余白で構造を出す・明朝の見出し・角丸と影は使わない・配色は青 #2867a8 /
-  ○ #0e8570 / ✕ #c4484f を継承）。根拠と適用範囲は
-  [`docs/adr/0019-web-design-language-classical.md`](docs/adr/0019-web-design-language-classical.md)。
+  （白い面とヘアライン罫線で構造を出す・明朝の見出し・本文の行長は約60文字・配色は青 #2867a8 /
+  ○ #0e8570 / ✕ #c4484f を継承）。面と影は「紙が机からわずかに浮く」程度まで。
+  影は2段（`--lift-1` / `--lift-2`）＋上辺の起き上がり（`--gloss`）＋押下の凹み（`--press`）、
+  角丸は 6px / 10px。状態が変わる瞬間はモーションで表す（`--ease-out` / `--ease-spring`）。
+  根拠と適用範囲は
+  [`docs/adr/0019-web-design-language-classical.md`](docs/adr/0019-web-design-language-classical.md)
+  と [`docs/adr/0020-web-surface-and-shadow.md`](docs/adr/0020-web-surface-and-shadow.md)
+  （0019 の「面・影・角丸」の3点は 0020 が置換。それ以外の 0019 は有効）。
   デザインモックは版面の参考であって仕様ではない — 機能・インタラクション・アクセシビリティは
   既存実装を正とし、モックに描かれていない要素を削除の指示と見なさない。
 - API（TS）はLWA前提 — Lambda固有コードを書かず、普通のWebサーバとして書く。
