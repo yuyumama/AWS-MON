@@ -1,7 +1,7 @@
 # ADR 0014: 生成失敗を分類し、失敗種別ごとのリトライ方針と実時間締切を導入する
 
 - 状態: 採用（2026-08-04）
-- 関連: [ADR 0010](0010-grounding-gate-thresholds.md)（グラウンディングゲートとagent内部の再生成）、[ADR 0013](0013-async-initial-generation.md)（非同期job・生成時間予算・Webのポーリング）、issue #85（本ADRの意思決定元）、issue #86（`content_invalid` のagent側実装）
+- 関連: [ADR 0010](0010-grounding-gate-thresholds.md)（グラウンディングゲートとagent内部の再生成）、[ADR 0013](0013-async-initial-generation.md)（非同期job・生成時間予算・Webのポーリング）、issue #85（本ADRの意思決定元）、issue #86（`content_invalid` のagent側実装）、[ADR 0021](0021-transient-model-error-retry-granularity.md)（agent内部の再試行粒度と調査フェーズの実時間予算）
 
 ## 背景
 

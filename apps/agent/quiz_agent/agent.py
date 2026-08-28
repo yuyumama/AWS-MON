@@ -26,6 +26,7 @@ from strands.tools.mcp import MCPClient
 from .content_policy import ContentPolicyViolationError, validate_quiz_content
 from .judge import JudgeResult, judge_self_consistency
 from .model_config import model_id, openrouter_api_key, openrouter_base_url
+from .model_retry import research_budget_seconds, transient_model_retry
 from .prompts import (
     QUIZ_FROM_RESEARCH_PROMPT,
     QUIZ_SYSTEM_PROMPT,
@@ -222,11 +223,15 @@ class DocsResearchError(RuntimeError):
         *,
         successful_tool_calls: int,
         research_attempts: int,
+        transient_retries: int | None = None,
+        budget_exhausted: bool | None = None,
     ) -> None:
         self.cause_kind = cause_kind
         self.original_exception_type = _original_exception_type(original)
         self.successful_tool_calls = successful_tool_calls
         self.research_attempts = research_attempts
+        self.transient_retries = transient_retries
+        self.budget_exhausted = budget_exhausted
         source = (
             "調査ターンのモデル呼び出し"
             if cause_kind == "model"
@@ -379,15 +384,19 @@ def _researched_agent(
     _emit_phase(on_phase, phase, attempt=1, total_attempts=1)
     research_attempts = 0
     successful_tool_calls = 0
+    transient_retries = 0
+    budget_exhausted = False
     try:
         client = _docs_mcp_client()
         with client:
             tools = client.list_tools_sync()
             phase = "research"
-            # 既定2: リトライ1回では上流混雑の持続に連敗する(2026-08-03再サンプリングで
-            # research_failed 3/30。試行あたり失敗率23%に対し2回で期待1%台まで下がる)
+            deadline = time.monotonic() + research_budget_seconds()
+            # モデル呼び出し単位の再試行を各試行内で行うため、約150秒かかる外側の
+            # 作り直しは既定1回に減らす。0にはせず、MCP異常や内側の予算切れなど、
+            # 内側で拾えない失敗への安全網として残す。
             research_retries = max(
-                0, int(os.environ.get("AGENT_RESEARCH_RETRIES", "2"))
+                0, int(os.environ.get("AGENT_RESEARCH_RETRIES", "1"))
             )
             total_research_attempts = research_retries + 1
             _emit_phase(
@@ -401,12 +410,13 @@ def _researched_agent(
                     total_attempts=total_research_attempts,
                 )
                 # 失敗した会話履歴とツール呼び出し回数を次の試行へ持ち越さない。
+                retry_hook = transient_model_retry(deadline=deadline)
                 agent = Agent(
                     model=model,
                     system_prompt=QUIZ_SYSTEM_PROMPT,
                     tools=tools,
                     # プロンプト指示(最大2回)を無視して呼ばれ続けるのをコードで強制する
-                    hooks=[docs_tool_limiter()],
+                    hooks=[docs_tool_limiter(), retry_hook],
                     **_research_retry_kwargs(),
                 )
                 try:
@@ -414,14 +424,20 @@ def _researched_agent(
                     break
                 except Exception as e:  # noqa: BLE001 - 例外チェーンで再試行可否を判定
                     successful_tool_calls += _successful_tool_call_count(agent.messages)
+                    transient_retries += retry_hook.retry_count
+                    budget_exhausted = budget_exhausted or retry_hook.budget_exhausted
                     if _is_rate_limit(e):
                         # 429はフォールバックも調査ターン再試行も行わない。
                         raise QuotaExhaustedError(
                             "OpenRouterのレート制限/日次リクエスト上限に達しました"
                         ) from e
+                    # 予算は調査フェーズ全体の上限である(ADR 0021)。内側が予算切れで
+                    # 諦めたあとに約150秒の作り直しを始めると、予算を使い切ったうえ
+                    # さらに1ターン回すことになり、10分のジョブ締切を超える。
                     if (
                         _is_transient_model_error(e)
                         and research_attempts <= research_retries
+                        and time.monotonic() < deadline
                     ):
                         logger.warning(
                             "調査ターンの一過性モデルエラーを再試行します (%d/%d回目)",
@@ -443,6 +459,8 @@ def _researched_agent(
                         e,
                         successful_tool_calls=successful_tool_calls,
                         research_attempts=research_attempts,
+                        transient_retries=transient_retries,
+                        budget_exhausted=budget_exhausted,
                     ) from e
             successful_tool_calls += _successful_tool_call_count(agent.messages)
             source_texts = _tool_result_texts(agent.messages)
@@ -460,6 +478,8 @@ def _researched_agent(
                 e,
                 successful_tool_calls=successful_tool_calls,
                 research_attempts=research_attempts,
+                transient_retries=transient_retries,
+                budget_exhausted=budget_exhausted,
             ) from e
         raise
 
@@ -483,7 +503,7 @@ def _structured_quiz_with_retries(
                 ) from e
             last_err = e
             if attempt < retries:
-                time.sleep(0.8 * (attempt + 1))
+                time.sleep(3.0 * (attempt + 1) + random.uniform(0.0, 1.0))
     raise RuntimeError(f"QuizItem の構造化出力に失敗しました: {last_err}") from last_err
 
 
@@ -690,16 +710,23 @@ def _generate_quiz_result(
             raise
         except DocsResearchError as e:
             fail_closed = research_enforced()
+            failure_log: dict[str, Any] = {
+                "event": "docs_research_failed",
+                "cause_kind": e.cause_kind,
+                "exception_type": e.original_exception_type,
+                "successful_tool_calls": e.successful_tool_calls,
+                "research_attempts": e.research_attempts,
+                "fallback": not fail_closed,
+            }
+            # 古い呼び出し元が作るDocsResearchErrorとの互換性を保ちつつ、実際の
+            # 調査経路では内側リトライの消費状況を必ず記録する。
+            if e.transient_retries is not None:
+                failure_log["transient_retries"] = e.transient_retries
+            if e.budget_exhausted is not None:
+                failure_log["budget_exhausted"] = e.budget_exhausted
             logger.warning(
                 json.dumps(
-                    {
-                        "event": "docs_research_failed",
-                        "cause_kind": e.cause_kind,
-                        "exception_type": e.original_exception_type,
-                        "successful_tool_calls": e.successful_tool_calls,
-                        "research_attempts": e.research_attempts,
-                        "fallback": not fail_closed,
-                    },
+                    failure_log,
                     ensure_ascii=False,
                 ),
                 exc_info=True,

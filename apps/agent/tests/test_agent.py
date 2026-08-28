@@ -13,8 +13,10 @@ from openai import APIError
 
 from quiz_agent import agent as agent_module
 from quiz_agent.model_config import model_id, openrouter_api_key
+from quiz_agent.model_retry import TransientModelRetry
 from quiz_agent.research_status import ResearchResult
 from quiz_agent.schema import QuizItem
+from quiz_agent.tool_limits import ToolCallLimiter
 
 
 def _quiz_item(question: str = "設問はどれか。") -> QuizItem:
@@ -359,6 +361,144 @@ def test_research_transient_model_error_exhaustion_reports_attempt_metadata(
     assert exc_info.value.successful_tool_calls == 2
     assert exc_info.value.research_attempts == 2
     assert len(FakeAgent.instances) == 2
+
+
+def test_research_agent_receives_transient_model_retry_hook(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """調査Agentに一過性エラー再試行フックが載っていること。
+
+    これが載っていないと、OpenRouter の 200+error(502) で調査ターンごと
+    落ち、成功済みのツール呼び出しを捨てて作り直しになる(2026-08-28 の prod 障害)。
+    """
+    _mock_research(monkeypatch)
+    FakeAgent.structured_results = [_quiz_item()]
+
+    agent_module._generate_quiz_with_research("問題生成プロンプト")
+
+    hooks = FakeAgent.instances[0].kwargs["hooks"]
+    assert any(isinstance(hook, TransientModelRetry) for hook in hooks)
+    # ツール上限フックは従来どおり併存する(issue #70)
+    assert any(isinstance(hook, ToolCallLimiter) for hook in hooks)
+
+
+def test_research_transient_retry_budget_is_shared_across_attempts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """外側の作り直しで実時間予算を巻き戻さない。
+
+    Agentごとに予算を張り直すと、外側2回で最大840秒粘れてしまい、
+    ジョブ締切(10分)を超える。締切は調査フェーズ全体で1つである。
+    """
+    _mock_research(monkeypatch)
+    monkeypatch.setenv("AGENT_RESEARCH_RETRIES", "1")
+    monkeypatch.setattr(agent_module.time, "sleep", lambda seconds: None)
+
+    class _TransientThenSuccessfulAgent(FakeAgent):
+        research_calls = 0
+
+        def __call__(self, prompt: str) -> None:
+            type(self).research_calls += 1
+            if type(self).research_calls == 1:
+                raise RuntimeError("event loop failed") from _transient_api_error()
+            super().__call__(prompt)
+
+    monkeypatch.setattr(agent_module, "Agent", _TransientThenSuccessfulAgent)
+    FakeAgent.structured_results = [_quiz_item()]
+
+    agent_module._generate_quiz_with_research("問題生成プロンプト")
+
+    assert len(FakeAgent.instances) == 2
+    deadlines = {
+        hook.deadline
+        for instance in FakeAgent.instances
+        for hook in instance.kwargs["hooks"]
+        if isinstance(hook, TransientModelRetry)
+    }
+    assert len(deadlines) == 1
+
+
+def test_research_retries_default_is_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """外側の作り直しは既定1回(計2試行)。
+
+    内側にモデル呼び出し単位の再試行を入れたぶん、150秒かかる作り直しを
+    2回から1回へ減らして総時間を増やさない。0にはしない: 内側で拾えない
+    失敗(MCP異常・内側の枯渇)への保険が要る。
+    """
+    _mock_research(monkeypatch)
+    monkeypatch.delenv("AGENT_RESEARCH_RETRIES", raising=False)
+    monkeypatch.setattr(agent_module.time, "sleep", lambda seconds: None)
+
+    class _AlwaysTransientAgent(FakeAgent):
+        def __call__(self, prompt: str) -> None:
+            self.messages = _search_only_messages()
+            raise RuntimeError("event loop failed") from _transient_api_error()
+
+    monkeypatch.setattr(agent_module, "Agent", _AlwaysTransientAgent)
+
+    with pytest.raises(agent_module.DocsResearchError) as exc_info:
+        agent_module._generate_quiz_with_research("問題生成プロンプト")
+
+    assert exc_info.value.research_attempts == 2
+    assert len(FakeAgent.instances) == 2
+
+
+def test_research_does_not_rebuild_after_budget_exhausted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """実時間予算を使い切ったら外側の作り直しもしない。
+
+    予算は「調査フェーズ全体の上限」である(ADR 0021)。内側が予算切れで
+    諦めたあとに外側が約150秒の作り直しを始めると、420秒を使い切ったうえ
+    さらに1ターン回すことになり、10分のジョブ締切を超える。今回直した
+    障害の再現になるため、予算切れ後は作り直さない。
+    """
+    _mock_research(monkeypatch)
+    monkeypatch.delenv("AGENT_RESEARCH_RETRIES", raising=False)
+    monkeypatch.setattr(agent_module.time, "sleep", lambda seconds: None)
+    # 調査開始時点で既に予算切れの状態にする
+    monkeypatch.setattr(agent_module, "research_budget_seconds", lambda: -1.0)
+
+    class _AlwaysTransientAgent(FakeAgent):
+        def __call__(self, prompt: str) -> None:
+            self.messages = _search_only_messages()
+            raise RuntimeError("event loop failed") from _transient_api_error()
+
+    monkeypatch.setattr(agent_module, "Agent", _AlwaysTransientAgent)
+
+    with pytest.raises(agent_module.DocsResearchError) as exc_info:
+        agent_module._generate_quiz_with_research("問題生成プロンプト")
+
+    assert exc_info.value.research_attempts == 1
+    assert len(FakeAgent.instances) == 1
+
+
+def test_structured_output_backoff_matches_research_curve(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """生成フェーズのバックオフを調査フェーズと同じ曲線に揃える。
+
+    structured_output は AfterModelCallEvent が発火しないため内側フックの
+    対象外で、ここが唯一の再試行地点になる。従来の 0.8s/1.6s では
+    「上流混雑は数秒〜数十秒持続する」という実測に対して短すぎた。
+    """
+    slept: list[float] = []
+    monkeypatch.setattr(agent_module.time, "sleep", slept.append)
+    monkeypatch.setattr(agent_module.random, "uniform", lambda start, end: 0.0)
+
+    agent = FakeAgent()
+    FakeAgent.structured_results = [
+        _transient_api_error(),
+        _transient_api_error(),
+        _quiz_item(),
+    ]
+
+    result = agent_module._structured_quiz_with_retries(agent)
+
+    assert result.question.question == "設問はどれか。"
+    assert slept == [3.0, 6.0]
 
 
 def test_mcp_list_tools_failure_is_not_retried(
