@@ -2,19 +2,19 @@
    AWS-MON 模擬問題演習帳
    デザイン言語: 「読み物としての問題集」(ADR 0019)
    - 問題文と解説を「紙面」として扱う。本文の行長は約60文字で止める
-   - ヘアライン罫線と余白で構造を出す。角丸は 2px/4px まで落とす
-   - 影は面に常用しない。浮遊要素(ボトムシート・モーダル)だけに残す
+   - 白い面とヘアライン罫線で構造を出す。角丸は 6px/10px
+   - 面の影は2段に留め、浮遊要素は専用の影で区別する
    - 見出しは明朝、メタ情報は等幅
    - 採点は ○/✕ マーク(色だけに頼らずアイコン併記)
    - 配色は旧デザイン言語から継承。accent/ok/ng は
-     dataviz validator 検証済み(surface #fafcfe)
+     dataviz validator 検証済み(surface #ffffff)
    - スマホ(<=560px)は上部追従バー + 下部固定アクションバー、解説はボトムシート。
      PCは中央1カラムのまま同じ部品が幅だけ伸びる
    ============================================================ */
 
 :root {
 	--bg: #eef2f6;
-	--panel: #fafcfe;
+	--panel: #ffffff;
 	--panel-dim: #eaf0f6;
 	--ink: #22303f;
 	--ink-soft: #64748b;
@@ -28,10 +28,14 @@
 	--ng: #c4484f;
 	--ng-bg: #faecec;
 
-	/* 角丸は浅く。10/14px から落として罫線で構造を出す(ADR 0019) */
-	--radius: 2px;
-	--radius-lg: 4px;
-	/* 影は面に常用しない。浮遊要素(ボトムシート・モーダル)専用 */
+	/* 面の影と角丸(ADR 0020)。紙がわずかに浮く程度の2段に留める。 */
+	--radius: 6px;
+	--radius-lg: 10px;
+	--lift-1: 0 2px 3px -1.5px rgba(0, 20, 40, 0.06);
+	--lift-2: 0 2.5px 6px -2px rgba(0, 20, 40, 0.08);
+	--gloss: inset 0 1px 0 0 rgba(255, 255, 255, 0.85);
+	--press: inset 0 1px 3px rgba(0, 20, 40, 0.09);
+	/* 浮遊要素(ボトムシート・モーダル)専用 */
 	--shadow-float: 0 18px 50px rgba(34, 48, 63, 0.22);
 	/* モーション(ADR 0020)。静的な版面ではなく「状態が変わる瞬間」を担う。
 	   減速の強い外向きカーブ。既定の ease は等速に近く、状態変化が
@@ -244,8 +248,7 @@ a {
 
 /* ---- sheet(カード) ---- */
 
-/* 案B(ADR 0019)は面を持たない。カードの枠と背景をやめ、余白と罫線で節を分ける。
-   左右のpaddingを落とすぶん、本文の行が広く取れる。 */
+/* 汎用の節は版面のまま保ち、問題と解説だけを紙面として立てる(ADR 0020)。 */
 .sheet {
 	background: transparent;
 	border: 0;
@@ -254,9 +257,19 @@ a {
 }
 
 .sheet + .sheet {
-	margin-top: 40px;
-	padding-top: 28px;
-	border-top: 1px solid var(--line);
+	margin-top: 22px;
+}
+
+.question-sheet,
+.result-sheet {
+	padding: 24px 26px;
+	border-radius: var(--radius-lg);
+	background: var(--panel);
+	box-shadow: var(--lift-1);
+}
+
+.result-sheet {
+	box-shadow: var(--lift-2);
 }
 
 .sheet-heading {
@@ -303,6 +316,7 @@ a {
 	background: #fff;
 	border: 1px solid var(--line-strong);
 	border-radius: var(--radius);
+	box-shadow: var(--press);
 }
 
 .select:focus-visible {
@@ -321,6 +335,7 @@ a {
 	background: #fff;
 	border: 1px solid var(--line-strong);
 	border-radius: var(--radius);
+	box-shadow: var(--press);
 }
 
 .input:focus-visible {
@@ -377,6 +392,9 @@ a {
 	border: 0;
 	border-radius: 0;
 	background: transparent;
+	/* 箱を外した以上、凹みの影も外す。角丸も枠も無い透明な要素に
+	   インセット影だけが残ると、行の上辺に灰色の線として描かれる。 */
+	box-shadow: none;
 	font-family: var(--font-heading);
 	font-size: 17px;
 	font-weight: 600;
@@ -417,16 +435,18 @@ a {
 	padding: 8px 6px;
 	border: 1px solid var(--line-strong);
 	border-radius: var(--radius);
-	background: transparent;
+	background: var(--panel);
 	color: var(--ink-soft);
 	text-align: center;
 	cursor: pointer;
+	box-shadow: var(--lift-1), var(--gloss);
 }
 
 .mode-option[data-selected="true"] {
 	border-color: var(--accent);
 	color: var(--accent-deep);
-	background: color-mix(in srgb, var(--accent) 8%, transparent);
+	background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+	box-shadow: var(--lift-2), var(--gloss);
 }
 
 /* ラジオ自体は隠すが、矢印キーでの移動とAT向けの意味は残す。 */
@@ -458,21 +478,21 @@ a {
 
 /* ---- ボタン ---- */
 
-/* 面を塗らず罫線で示すのが案Bの語彙(ADR 0019)。
-   大きなCTAの扱いは .button-primary だけに与える。.button 自体を大きくすると
+/* 大きなCTAの扱いは .button-primary だけに与える。.button 自体を大きくすると
    ghost / danger / review まで巻き添えになる。 */
 .button {
 	display: inline-block;
 	padding: 10px 22px;
-	background: transparent;
+	background: var(--panel);
 	border: 1px solid var(--line-strong);
 	border-radius: var(--radius);
 	font-size: 14px;
 	letter-spacing: 0.06em;
+	box-shadow: var(--lift-1), var(--gloss);
 }
 
 .button:hover:not(:disabled) {
-	background: color-mix(in srgb, var(--ink) 5%, transparent);
+	background: color-mix(in srgb, var(--ink) 5%, var(--panel));
 }
 
 /* 主要導線。明朝・52pxで「紙面の見出し」と同じ重さにする。
@@ -485,7 +505,7 @@ a {
 	width: 100%;
 	min-height: 52px;
 	padding: 0 20px;
-	background: transparent;
+	background: var(--panel);
 	color: var(--accent-deep);
 	border-color: var(--accent);
 	font-family: var(--font-heading);
@@ -512,12 +532,12 @@ a {
 }
 
 .button-primary:hover:not(:disabled) {
-	background: color-mix(in srgb, var(--accent) 8%, transparent);
+	background: color-mix(in srgb, var(--accent) 8%, var(--panel));
 	border-color: var(--accent);
 }
 
 .button-primary:disabled {
-	background: transparent;
+	background: var(--panel);
 	color: var(--ink-soft);
 	border-color: var(--line-strong);
 }
@@ -527,13 +547,15 @@ a {
 	background: transparent;
 	padding: 6px 8px;
 	color: var(--ink-soft);
+	box-shadow: none;
 }
 
 .button-ghost:hover:not(:disabled) {
 	color: var(--accent);
-	background: transparent;
+	background: color-mix(in srgb, var(--panel) 72%, transparent);
 	text-decoration: underline;
 	text-underline-offset: 3px;
+	box-shadow: var(--lift-1), var(--gloss);
 }
 
 .button-spinner {
@@ -568,17 +590,27 @@ a {
 
 /* ---- 通知 ---- */
 
-.notice {
-	margin: 12px 0;
+.notice,
+.notice-error,
+.generation-error {
 	padding: 10px 14px;
 	border-radius: var(--radius);
-	background: var(--panel-dim);
+	background: var(--panel);
+	box-shadow: var(--lift-1);
+}
+
+.notice {
+	margin: 12px 0;
 	font-size: 13px;
 	color: var(--ink-soft);
 }
 
+/* 地は白面のままにする。--ng を --ng-bg(#faecec) に載せると 4.17 で
+   WCAG AA の本文基準(4.5)を割るため、地色でエラーを示せない。
+   識別は .generation-error / .action-error / .prefetch-status[FAILED] が
+   既に使っている左の太罫に揃える(--ng on #fff は 4.79 で AA を満たす)。 */
 .notice-error {
-	background: var(--ng-bg);
+	border-left: 3px solid var(--ng);
 	color: var(--ng);
 }
 
@@ -719,17 +751,18 @@ a {
 
 /* ---- 長時間の生成待ち ---- */
 
-/* 案B(ADR 0019)の生成待ち。面を塗らず、太い罫と明朝の見出しで組む。 */
+/* 太い罫と明朝の見出しを白い紙面の上に組む。 */
 .generation-wait {
-	padding: 0;
+	padding: 20px;
 	border: 0;
-	background: transparent;
+	border-radius: var(--radius-lg);
+	background: var(--panel);
+	box-shadow: var(--lift-1);
 }
 
 .generation-wait[data-compact="true"] {
 	margin-top: 22px;
-	padding-top: 18px;
-	border-top: 1px solid var(--line);
+	padding: 18px 20px;
 }
 
 .generation-wait-head {
@@ -804,6 +837,13 @@ a {
 
 /* 案B(ADR 0019)では工程を横並びのチップではなく罫線の一覧で組む。
    天は太い罫、行間はヘアライン。 */
+.generation-stages {
+	padding: 20px;
+	border-radius: var(--radius-lg);
+	background: var(--panel);
+	box-shadow: var(--lift-1);
+}
+
 .generation-stages ol {
 	margin: 0;
 	padding: 0;
@@ -892,10 +932,11 @@ a {
 .session-list {
 	display: flex;
 	flex-direction: column;
+	gap: 12px;
 	list-style: none;
 	margin: 0;
 	padding: 0;
-	border-top: 1px solid var(--ink);
+	border-top: 0;
 }
 
 .session-item {
@@ -903,7 +944,10 @@ a {
 	grid-template-columns: 1fr auto;
 	align-items: stretch;
 	gap: 8px;
-	border-bottom: 1px solid var(--line);
+	padding: 4px;
+	border-radius: var(--radius);
+	background: var(--panel);
+	box-shadow: var(--lift-1);
 }
 
 .session-row {
@@ -914,13 +958,15 @@ a {
 	width: 100%;
 	padding: 12px 4px;
 	text-align: left;
+	/* カードを担うのは .session-item。行が自前の面と影を持つと輪郭が
+	   二重になって濁るので、静止時は透明のままにする(押下の --press は残す)。 */
 	background: transparent;
 	border: 0;
-	border-radius: 0;
+	border-radius: var(--radius);
 }
 
 .session-row:hover {
-	background: color-mix(in srgb, var(--accent) 6%, transparent);
+	background: color-mix(in srgb, var(--accent) 6%, var(--panel));
 }
 
 .session-cert {
@@ -989,7 +1035,9 @@ a {
 	padding: 0 12px;
 	border: 0;
 	border-left: 1px solid var(--line);
-	border-radius: 0;
+	border-radius: var(--radius);
+	/* .session-row と同じ理由でカード内では面を持たない。行との仕切りは
+	   従来どおり border-left が担う。 */
 	background: transparent;
 	font-family: var(--font-mono);
 	font-size: 11px;
@@ -1334,11 +1382,12 @@ a {
 	min-height: 56px;
 	padding: 14px;
 	text-align: left;
-	background: transparent;
+	background: var(--panel);
 	border: 1px solid var(--line-strong);
 	border-radius: var(--radius);
 	font-size: 15px;
 	line-height: 1.8;
+	box-shadow: var(--lift-1), var(--gloss);
 }
 
 button.option:hover:not(:disabled) {
@@ -1376,7 +1425,8 @@ button.option:hover:not(:disabled) {
 .option[data-state="selected"],
 .option[data-state="correct"] {
 	border-color: var(--accent);
-	background: color-mix(in srgb, var(--accent) 7%, transparent);
+	background: color-mix(in srgb, var(--accent) 7%, var(--panel));
+	box-shadow: var(--lift-2), var(--gloss);
 }
 
 .option[data-state="selected"] .option-label,
@@ -1387,6 +1437,7 @@ button.option:hover:not(:disabled) {
 
 .option[data-state="wrong"] {
 	border-color: var(--ng);
+	box-shadow: var(--lift-2), var(--gloss);
 }
 
 .option[data-state="wrong"] .option-label {
@@ -1432,6 +1483,9 @@ button.option:hover:not(:disabled) {
 /* シートのつまみ。スマホでのみ出す(PCは重ねないので不要)。 */
 .result-grabber {
 	display: none;
+	border-radius: var(--radius);
+	background: var(--panel);
+	box-shadow: var(--lift-1), var(--gloss);
 }
 
 .result-head {
@@ -1568,7 +1622,8 @@ button.option:hover:not(:disabled) {
 .button-review[data-marked="true"] {
 	border-color: var(--accent);
 	color: var(--accent-deep);
-	background: transparent;
+	background: color-mix(in srgb, var(--accent) 7%, var(--panel));
+	box-shadow: var(--lift-2), var(--gloss);
 }
 
 .button-review-mark {
@@ -1608,18 +1663,21 @@ button.option:hover:not(:disabled) {
 
 /* 罫線で区切る一覧にする(案B)。天は太い罫で本文と切り、項目間はヘアライン。 */
 .review-list {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
 	list-style: none;
 	margin: 0;
 	padding: 0;
-	border-top: 1px solid var(--ink);
+	border-top: 0;
 }
 
 .review-item {
 	border: 0;
-	border-bottom: 1px solid var(--line);
-	border-radius: 0;
-	padding: 14px 2px;
-	background: transparent;
+	border-radius: var(--radius);
+	padding: 16px 18px;
+	background: var(--panel);
+	box-shadow: var(--lift-1);
 }
 
 .review-item-head {
@@ -1666,6 +1724,7 @@ button.option:hover:not(:disabled) {
 	-webkit-line-clamp: 2;
 	-webkit-box-orient: vertical;
 	overflow: hidden;
+	box-shadow: none;
 }
 
 .review-summary:hover:not(:disabled),
@@ -1834,7 +1893,7 @@ button.option:hover:not(:disabled) {
 		max-height: 86dvh;
 		margin: 0;
 		padding: 0 18px calc(14px + env(safe-area-inset-bottom));
-		background: var(--bg);
+		background: var(--panel);
 		border: 0;
 		border-top: 1px solid var(--line-strong);
 		border-radius: var(--radius-lg) var(--radius-lg) 0 0;
@@ -1865,7 +1924,7 @@ button.option:hover:not(:disabled) {
 		min-height: 44px;
 		padding: 10px 0 6px;
 		border: 0;
-		background: transparent;
+		background: var(--panel);
 		/* 下げる操作を後ろのスクロールに取られない */
 		touch-action: none;
 		cursor: grab;
@@ -1972,6 +2031,37 @@ button.option:hover:not(:disabled) {
 		width: 100%;
 		margin-left: 0;
 	}
+}
+
+/* ---- 面の押下状態(ADR 0020) ---- */
+
+.button:active:not(:disabled),
+button.option:active:not(:disabled),
+.session-row:active:not(:disabled),
+.session-delete:active:not(:disabled),
+.mode-option:active:not(:disabled),
+.result-grabber:active:not(:disabled) {
+	box-shadow: var(--press);
+}
+
+.button-ghost:active:not(:disabled) {
+	background: color-mix(in srgb, var(--panel) 64%, transparent);
+}
+
+.review-summary:active:not(:disabled) {
+	border-radius: var(--radius);
+	background: color-mix(in srgb, var(--panel) 72%, transparent);
+	box-shadow: var(--press);
+}
+
+.button:disabled,
+button.option:disabled,
+.session-row:disabled,
+.session-delete:disabled,
+.review-summary:disabled,
+.result-grabber:disabled,
+.mode-option:has(input:disabled) {
+	box-shadow: none;
 }
 
 /* ============================================================
