@@ -445,6 +445,36 @@ def test_research_retries_default_is_one(
     assert len(FakeAgent.instances) == 2
 
 
+def test_research_does_not_rebuild_after_budget_exhausted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """実時間予算を使い切ったら外側の作り直しもしない。
+
+    予算は「調査フェーズ全体の上限」である(ADR 0021)。内側が予算切れで
+    諦めたあとに外側が約150秒の作り直しを始めると、420秒を使い切ったうえ
+    さらに1ターン回すことになり、10分のジョブ締切を超える。今回直した
+    障害の再現になるため、予算切れ後は作り直さない。
+    """
+    _mock_research(monkeypatch)
+    monkeypatch.delenv("AGENT_RESEARCH_RETRIES", raising=False)
+    monkeypatch.setattr(agent_module.time, "sleep", lambda seconds: None)
+    # 調査開始時点で既に予算切れの状態にする
+    monkeypatch.setattr(agent_module, "research_budget_seconds", lambda: -1.0)
+
+    class _AlwaysTransientAgent(FakeAgent):
+        def __call__(self, prompt: str) -> None:
+            self.messages = _search_only_messages()
+            raise RuntimeError("event loop failed") from _transient_api_error()
+
+    monkeypatch.setattr(agent_module, "Agent", _AlwaysTransientAgent)
+
+    with pytest.raises(agent_module.DocsResearchError) as exc_info:
+        agent_module._generate_quiz_with_research("問題生成プロンプト")
+
+    assert exc_info.value.research_attempts == 1
+    assert len(FakeAgent.instances) == 1
+
+
 def test_structured_output_backoff_matches_research_curve(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
