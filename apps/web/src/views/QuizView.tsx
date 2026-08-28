@@ -9,7 +9,13 @@ import {
 	useIsPresent,
 	useReducedMotion,
 } from "motion/react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+	useCallback,
+	useEffect,
+	useLayoutEffect,
+	useRef,
+	useState,
+} from "react";
 import { CertLevelBadge } from "../components/CertLevelBadge";
 import {
 	ButtonSpinner,
@@ -336,6 +342,38 @@ export function QuizView({
 	// biome-ignore lint/correctness/useExhaustiveDependencies: currentSequence は本文で読まないが、問題が変わったことを検知するための依存。
 	useEffect(() => {
 		setSheetStage("full");
+	}, [currentSequence]);
+
+	// 「次の問題へ」を押した時点では解説を読み終えた位置(ページ下部)にいる。
+	// スクロール位置は据え置かれるため、新しい問題が問題文の途中から
+	// 描かれてしまう。問題の先頭へ戻す。
+	// .quiz-bar は position: sticky なので、その高さぶん手前で止めないと
+	// 「第N問」がバーの裏に隠れる。
+	const questionSheetRef = useRef<HTMLElement | null>(null);
+	const quizBarRef = useRef<HTMLDivElement | null>(null);
+	const scrolledSequenceRef = useRef<number | undefined>(undefined);
+	const firstQuestionRef = useRef(true);
+
+	useLayoutEffect(() => {
+		if (currentSequence === undefined) return;
+		// セッションを開いた直後・再開直後は既に先頭にいるので動かさない。
+		if (firstQuestionRef.current) {
+			firstQuestionRef.current = false;
+			scrolledSequenceRef.current = currentSequence;
+			return;
+		}
+		if (scrolledSequenceRef.current === currentSequence) return;
+		const sheet = questionSheetRef.current;
+		// 生成待ちの間は問題が描かれていない。到着後の描画で改めて動かす。
+		if (!sheet) return;
+		scrolledSequenceRef.current = currentSequence;
+
+		const barHeight = quizBarRef.current?.getBoundingClientRect().height ?? 0;
+		const top =
+			sheet.getBoundingClientRect().top + window.scrollY - barHeight - 12;
+		// 中身が入れ替わる遷移なので滑らせない。描き替わった内容の上を
+		// 長い距離スクロールすると、かえって何が起きたのか読み取れない。
+		window.scrollTo({ top: Math.max(0, top), behavior: "auto" });
 	}, [currentSequence]);
 
 	// つまみのドラッグ。指の移動に追従させ、離した時点で開閉を決める。
@@ -761,7 +799,7 @@ export function QuizView({
 
 	return (
 		<div className="quiz" data-sheet={answered ? sheetStage : "none"}>
-			<div className="quiz-bar">
+			<div className="quiz-bar" ref={quizBarRef}>
 				<button type="button" className="button button-ghost" onClick={onExit}>
 					← ホーム
 				</button>
@@ -800,7 +838,7 @@ export function QuizView({
 				</div>
 			</div>
 
-			<article className="sheet question-sheet">
+			<article className="sheet question-sheet" ref={questionSheetRef}>
 				<header className="question-head">
 					<h2 className="question-no">第{current.sequence}問</h2>
 					<div className="question-tags">

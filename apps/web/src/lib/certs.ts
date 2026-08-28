@@ -61,7 +61,9 @@ export const modeOptions: ModeOption[] = [
 	{
 		value: "GENERATE",
 		label: "新規生成",
-		description: "毎問AIが生成する。agentの起動が必要で、出題に時間がかかる。",
+		// 説明は選択中のモードのぶんだけ1行で出す(HomeView)。幅375pxの端末で
+		// 折り返さない長さに収めること。現状 MIXED が最長で、これを超えない。
+		description: "毎問AIが生成する。agentの起動が必要で時間がかかる。",
 	},
 ];
 
