@@ -1862,18 +1862,27 @@ button.option:hover:not(:disabled) {
 		flex: 1;
 	}
 
-	/* 固定バー・シートの下に本文が潜り込まないぶんの余白 */
+	/* 固定バー・シートの下に本文が潜り込まないぶんの余白は、
+	   .quiz ではなく**文書の末尾**に置く。.quiz の下には .colophon と
+	   .frame の下余白が続くため、.quiz に置くとそれらがそのまま上乗せされる。
+	   実測(430x932)では、バーが実際に隠す高さ 77px に対して最後の選択肢の
+	   下に 243px が空き、しかも .colophon がバーの裏(-29px)に入り込んで
+	   読めなくなっていた。余白を末尾へ移すと両方とも解消する。 */
 	.quiz {
+		padding-bottom: 0;
+	}
+
+	.frame:has(.quiz) {
 		padding-bottom: 96px;
 	}
 
 	/* シートが隠す高さぶんだけ本文の下に余白を作る。段ごとに変える。 */
-	.quiz[data-sheet="full"],
-	.quiz[data-sheet="compact"] {
+	.frame:has(.quiz[data-sheet="full"]),
+	.frame:has(.quiz[data-sheet="compact"]) {
 		padding-bottom: 240px;
 	}
 
-	.quiz[data-sheet="minimal"] {
+	.frame:has(.quiz[data-sheet="minimal"]) {
 		padding-bottom: 140px;
 	}
 
