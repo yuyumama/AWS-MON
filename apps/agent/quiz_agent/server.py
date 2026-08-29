@@ -31,7 +31,10 @@ from .quality_checks import split_source_urls
 from .schema import Explanation, Option, OptionReason, Question, QuizItem
 
 AGENT_VERSION = "local-http-v1"
-PROMPT_VERSION = "quiz-v1"
+# quiz-v2: 難易度要件を資格レベル連動にした版(それ以前は全資格に「プロフェッショナル級」
+# を指示していた)。DynamoDB の promptVersion に保存されるので、これを上げておくと
+# 新旧の問題を後から区別できる。既存の問題は再生成せず放置する方針(スキーマは不変)。
+PROMPT_VERSION = "quiz-v2"
 
 
 def _stub_quiz(cert: str, domain: str | None) -> QuizItem:

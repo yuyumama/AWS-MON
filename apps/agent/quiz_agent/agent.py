@@ -23,6 +23,7 @@ from strands import Agent
 from strands.models.model import Model
 from strands.tools.mcp import MCPClient
 
+from .certs import get_difficulty_tier
 from .content_policy import ContentPolicyViolationError, validate_quiz_content
 from .judge import JudgeResult, judge_self_consistency
 from .model_config import model_id, openrouter_api_key, openrouter_base_url
@@ -375,9 +376,17 @@ def _research_retry_kwargs() -> dict[str, Any]:
 
 @contextmanager
 def _researched_agent(
-    quiz_prompt: str, *, on_phase: PhaseCallback | None = None
+    quiz_prompt: str,
+    cert: str | None = None,
+    *,
+    on_phase: PhaseCallback | None = None,
 ) -> Iterator[tuple[Agent, list[str]]]:
-    """MCPクライアントを維持したまま、調査済みAgentと原文を提供する。"""
+    """MCPクライアントを維持したまま、調査済みAgentと原文を提供する。
+
+    cert: 調査の広さ(調べるサービス数とツール呼び出し上限)を資格レベルに
+    合わせるために使う。未指定なら professional 相当にフォールバックする。
+    """
+    tier = get_difficulty_tier(cert) if cert else "professional"
     # APIキー解決を含むモデル生成の失敗は調査失敗(フォールバック対象)にせず即エラーにする
     model = _model()
     phase = "mcp"
@@ -416,11 +425,11 @@ def _researched_agent(
                     system_prompt=QUIZ_SYSTEM_PROMPT,
                     tools=tools,
                     # プロンプト指示(最大2回)を無視して呼ばれ続けるのをコードで強制する
-                    hooks=[docs_tool_limiter(), retry_hook],
+                    hooks=[docs_tool_limiter(tier), retry_hook],
                     **_research_retry_kwargs(),
                 )
                 try:
-                    agent(build_docs_research_prompt(quiz_prompt))
+                    agent(build_docs_research_prompt(quiz_prompt, cert))
                     break
                 except Exception as e:  # noqa: BLE001 - 例外チェーンで再試行可否を判定
                     successful_tool_calls += _successful_tool_call_count(agent.messages)
@@ -631,9 +640,9 @@ def _generate_quiz_with_research(
     cert: ログ・メトリクス記録用(任意)。generate_quiz から渡される。
     """
     researched = (
-        _researched_agent(quiz_prompt)
+        _researched_agent(quiz_prompt, cert)
         if on_phase is None
-        else _researched_agent(quiz_prompt, on_phase=on_phase)
+        else _researched_agent(quiz_prompt, cert, on_phase=on_phase)
     )
     with researched as (agent, source_texts):
         # 構造化出力も同じAgentの履歴へtoolUseを追加しうるため、調査直後に分類する。

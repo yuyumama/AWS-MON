@@ -755,7 +755,7 @@ def _search_only_messages() -> list[Any]:
 
 def _mock_empty_research(monkeypatch: pytest.MonkeyPatch, messages: list[Any]) -> None:
     @contextmanager
-    def researched_agent(prompt: str) -> Any:
+    def researched_agent(prompt: str, cert: str | None = None) -> Any:
         agent = FakeAgent()
         agent.messages = messages
         yield agent, []
