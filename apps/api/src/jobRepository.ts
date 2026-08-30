@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
 	abandonKeys,
 	bucketCounts,
+	type DifficultyOffset,
 	type GenerationJobItem,
 	type GenerationProgress,
 	gsiNames,
@@ -471,6 +472,7 @@ async function attemptJob(
 							cert: claimed.cert,
 							domain,
 							domainSelection: claimed.domainSelection,
+							difficulty: claimed.difficulty,
 							jobId: claimed.jobId,
 							sessionId: claimed.sessionId,
 							onPhase: progressReporter.onPhase,
@@ -483,6 +485,10 @@ async function attemptJob(
 								allowExcludedFallback: false,
 							}).catch((error: unknown) => {
 								if (error instanceof ApiError && error.status === 404) {
+									// MIXED は難易度調整の対象外なので、バンクが枯れて生成に
+									// 落ちる場合も資格レベル既定で作る。startSession が
+									// difficulty を捨てているので claimed.difficulty は
+									// undefined だが、ここでも渡さないことを明示しておく。
 									return generateAndSaveQuestion({
 										cert: claimed.cert,
 										domain,
@@ -551,6 +557,7 @@ export type CreatePrefetchJobInput = {
 	domainSelection: string;
 	domain: string;
 	mode: SessionMode;
+	difficulty?: DifficultyOffset;
 	targetSequence: number;
 	excludeQuestionIds: string[];
 };
@@ -579,6 +586,7 @@ export function createInitialJob(input: CreateInitialJobInput): {
 		domainSelection: input.domainSelection,
 		domain: input.domain,
 		mode: input.mode,
+		...(input.difficulty ? { difficulty: input.difficulty } : {}),
 		attemptCount: 0,
 		maxAttempts: maxJobAttempts,
 		runAfter: createdAt,
@@ -618,6 +626,7 @@ function preparePrefetchJob(input: CreatePrefetchJobInput): {
 		domainSelection: input.domainSelection,
 		domain: input.domain,
 		mode: input.mode,
+		...(input.difficulty ? { difficulty: input.difficulty } : {}),
 		sourceQuestionId: input.excludeQuestionIds[0],
 		attemptCount: 0,
 		maxAttempts: maxJobAttempts,

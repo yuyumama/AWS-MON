@@ -2,6 +2,7 @@
 // DynamoDB item 型(types.ts)はサーバ内部表現、こちらはHTTP境界の形。
 import type {
 	CurrentQuestionState,
+	DifficultyOffset,
 	GenerationProgress,
 	PrefetchState,
 	QuestionDto,
@@ -21,6 +22,8 @@ export type SessionDto = {
 	cert: string;
 	domainSelection: string;
 	mode: SessionMode;
+	// GENERATE のセッションだけ持つ。作成時に確定し、以降変わらない。
+	difficulty?: DifficultyOffset;
 	stats: SessionStatsDto;
 	version: number;
 	preparing?: {
@@ -54,6 +57,7 @@ export type SessionSummaryDto = {
 	cert: string;
 	domainSelection: string;
 	mode: SessionMode;
+	difficulty?: DifficultyOffset;
 	stats: SessionStatsDto;
 	preparing?: {
 		state: "QUEUED" | "FAILED";

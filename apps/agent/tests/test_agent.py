@@ -174,7 +174,11 @@ def test_structured_output_retry_keeps_research_history(
 def test_structured_output_failure_does_not_fall_back_without_research(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fail_structured_output(prompt: str, cert: str | None = None) -> None:
+    def fail_structured_output(
+        prompt: str,
+        cert: str | None = None,
+        difficulty_tier: str | None = None,
+    ) -> None:
         raise RuntimeError("structured output failed")
 
     monkeypatch.setattr(agent_module, "_docs_mcp_enabled", lambda: True)
@@ -755,7 +759,11 @@ def _search_only_messages() -> list[Any]:
 
 def _mock_empty_research(monkeypatch: pytest.MonkeyPatch, messages: list[Any]) -> None:
     @contextmanager
-    def researched_agent(prompt: str, cert: str | None = None) -> Any:
+    def researched_agent(
+        prompt: str,
+        cert: str | None = None,
+        difficulty_tier: str | None = None,
+    ) -> Any:
         agent = FakeAgent()
         agent.messages = messages
         yield agent, []

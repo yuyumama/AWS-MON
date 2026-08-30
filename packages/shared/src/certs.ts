@@ -10,6 +10,8 @@
 // 取得日を併記する**（後から再検証できるようにするため）。
 // 出典の索引: https://docs.aws.amazon.com/aws-certification/latest/examguides/aws-certification-exam-guides.html
 
+import type { DifficultyOffset, DifficultyTier } from "./types.js";
+
 export type CertLevel =
 	| "Foundational"
 	| "Associate"
@@ -515,6 +517,53 @@ export const certDefinitions: CertDefinition[] = [
 ];
 
 const certsByCode = new Map(certDefinitions.map((cert) => [cert.code, cert]));
+
+// 資格レベル -> 難易度仕様。Specialty は professional に畳む。「深いが狭い」という
+// Specialty の性格は難易度の軸ではなく、上の domains と weight が既に表現している
+// ため、難易度側で再表現すると二重管理になる。
+// apps/agent の quiz_agent/certs.py の DIFFICULTY_TIERS と同じ内容を持つ写しがあり、
+// 一致は apps/agent/tests/test_certs.py が検証する。
+const difficultyTierByLevel: Record<CertLevel, DifficultyTier> = {
+	Foundational: "foundational",
+	Associate: "associate",
+	Professional: "professional",
+	Specialty: "professional",
+};
+
+const difficultyTierOrder: DifficultyTier[] = [
+	"foundational",
+	"associate",
+	"professional",
+];
+
+const difficultyOffsetSteps: Record<DifficultyOffset, number> = {
+	EASY: -1,
+	STANDARD: 0,
+	HARD: 1,
+};
+
+/**
+ * 資格と難易度オフセットから、生成に使う難易度仕様を解決する。
+ *
+ * 仕様は3段階しかないので、両端では丸められる。CLF(Foundational)の EASY は
+ * STANDARD と同じ、SAP(Professional)の HARD は STANDARD と同じになる。
+ * これは段階数の帰結であり、バグではない。
+ */
+export function resolveDifficultyTier(
+	code: string,
+	offset: DifficultyOffset = "STANDARD",
+): DifficultyTier | undefined {
+	const cert = findCert(code);
+	if (!cert) return undefined;
+	const base = difficultyTierOrder.indexOf(difficultyTierByLevel[cert.level]);
+	const shifted = base + difficultyOffsetSteps[offset];
+	const clamped = Math.min(
+		Math.max(shifted, 0),
+		difficultyTierOrder.length - 1,
+	);
+	// clamped は 0..length-1 に収めてあるので undefined にはならない。
+	return difficultyTierOrder[clamped] as DifficultyTier;
+}
 
 export function findCert(code: string): CertDefinition | undefined {
 	return certsByCode.get(code);

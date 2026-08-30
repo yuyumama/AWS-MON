@@ -18,6 +18,23 @@ export type QuestionType = "single" | "multiple";
 export type QuestionStatus = "ACTIVE" | "REJECTED" | "STALE" | "ARCHIVED";
 export type SessionStatus = "ACTIVE" | "COMPLETED" | "ABANDONED";
 export type SessionMode = "GENERATE" | "BANK" | "MIXED";
+
+// 同一資格内の難易度調整。資格レベルを基準にした相対オフセットで、STANDARD が
+// その資格のレベルどおり。絶対値にしないのは、CLF の「5」と SAP の「1」が同じ
+// 目盛りに乗ってしまい意味が定まらないため。
+// 生成でしか効かないので、BANK / MIXED セッションでは受け付けない。
+export const difficultyOffsets = ["EASY", "STANDARD", "HARD"] as const;
+export type DifficultyOffset = (typeof difficultyOffsets)[number];
+
+// 難易度仕様の実体。プロンプト側(apps/agent の _DIFFICULTY_REQUIREMENTS)にある
+// 文面と1対1で対応する。オフセットではなく解決後のこちらを問題アイテムに保存する
+// (オフセットは資格が分からないと意味が定まらないが、tier は単独で意味を持つ)。
+export const difficultyTiers = [
+	"foundational",
+	"associate",
+	"professional",
+] as const;
+export type DifficultyTier = (typeof difficultyTiers)[number];
 export type CurrentQuestionState = "ANSWERING" | "ANSWERED";
 export type PrefetchState = "IDLE" | "QUEUED" | "READY" | "FAILED";
 export type AttemptSource = "GENERATED" | "BANK" | "PREFETCH";
@@ -110,6 +127,10 @@ export type QuestionItem = {
 		modelId: string;
 		promptVersion: string;
 		agentVersion?: string;
+		// 生成時に適用した難易度仕様。promptVersion では同一資格内の易/標準/難を
+		// 区別できないため別に持つ。後から遡って付けることはできない。
+		// quiz-v2 より前に生成された問題には存在しない。
+		difficultyTier?: DifficultyTier;
 		generatedAt: string;
 		latencyMs?: number;
 		inputTokens?: number;
@@ -160,6 +181,10 @@ export type SessionMetaItem = {
 	cert: Cert | string;
 	domainSelection: string;
 	mode: SessionMode;
+	// セッション作成時に確定し、以降変更できない。先読み(prefetch)が次の問題を
+	// 先に生成してしまうため、途中で変えると「動かしたのに次の1問は変わらない」に
+	// なる。GENERATE 以外では設定されない。
+	difficulty?: DifficultyOffset;
 	initial?: {
 		state: "QUEUED" | "FAILED";
 		jobId: string;
@@ -212,6 +237,7 @@ export type InitialSessionGuardItem = {
 	cert: Cert | string;
 	domainSelection: string;
 	mode: SessionMode;
+	difficulty?: DifficultyOffset;
 	createdAt: string;
 	updatedAt: string;
 	deleteAt: number;
@@ -291,6 +317,7 @@ export type GenerationJobItem = {
 	domainSelection: string;
 	domain?: string;
 	mode: SessionMode;
+	difficulty?: DifficultyOffset;
 	questionId?: string;
 	sourceQuestionId?: string;
 	attemptCount: number;

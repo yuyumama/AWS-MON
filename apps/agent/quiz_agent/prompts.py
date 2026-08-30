@@ -56,15 +56,21 @@ def build_quiz_prompt(
     domain: str | None = None,
     domain_label: str | None = None,
     domain_label_en: str | None = None,
+    difficulty_tier: str | None = None,
 ) -> str:
     """問題と解説を同時に生成するプロンプトを構築する。
 
     cert: 資格コード（例 'aip'）
     domain: API 側で解決済みのドメイン値（互換性のため受け取る）。
     domain_label/domain_label_en: API 側で解決したドメインの表示名。
+    difficulty_tier: 難易度仕様の明示指定。API が資格レベルと利用者の選んだ
+    オフセットを突き合わせて解決した結果を渡してくる。未指定なら資格レベル
+    どおり（cli.py や測定スクリプトから直接呼ぶ経路）。
     """
     cert_name = get_cert_full_name(cert)
-    difficulty = _DIFFICULTY_REQUIREMENTS[get_difficulty_tier(cert)]
+    difficulty = _DIFFICULTY_REQUIREMENTS[
+        resolve_difficulty_tier(cert, difficulty_tier)
+    ]
     is_aip = cert == "aip"
 
     aip_context = AIP_CONTEXT if is_aip else ""
@@ -152,7 +158,28 @@ _RESEARCH_REQUIREMENTS = {
 }
 
 
-def build_docs_research_prompt(quiz_prompt: str, cert: str | None = None) -> str:
+def resolve_difficulty_tier(cert: str | None, difficulty_tier: str | None) -> str:
+    """難易度仕様の区分を決める。
+
+    明示指定があればそれを使い、無ければ資格レベルから導く。未知の区分名は
+    黙って既定に落とさず ValueError にする（プロンプトが静かに別物になるより、
+    生成が落ちて気づけるほうがよい）。
+    """
+    if difficulty_tier is not None:
+        if difficulty_tier not in _DIFFICULTY_REQUIREMENTS:
+            raise ValueError(
+                f"不明な難易度区分: {difficulty_tier}"
+                f"（有効: {', '.join(_DIFFICULTY_REQUIREMENTS)}）"
+            )
+        return difficulty_tier
+    return get_difficulty_tier(cert) if cert else "professional"
+
+
+def build_docs_research_prompt(
+    quiz_prompt: str,
+    cert: str | None = None,
+    difficulty_tier: str | None = None,
+) -> str:
     """出題前にAWSドキュメントMCPで最新情報を調査させるプロンプト。
 
     quiz_prompt: build_quiz_prompt の出力。ドメイン抽選を2回走らせないよう、
@@ -160,7 +187,7 @@ def build_docs_research_prompt(quiz_prompt: str, cert: str | None = None) -> str
     cert: 資格コード。調査の広さを資格レベルに合わせるために使う。未指定のときは
     professional 相当（従来どおりの2サービス・制約衝突型）にフォールバックする。
     """
-    tier = get_difficulty_tier(cert) if cert else "professional"
+    tier = resolve_difficulty_tier(cert, difficulty_tier)
     return f"""これから次の指示に従ってAWS認定試験の問題を1問作成します。
 
 ---

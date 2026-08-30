@@ -76,6 +76,53 @@ describe("startSession", () => {
 		vi.clearAllMocks();
 	});
 
+	// Q13 の決定: 難易度調整は GENERATE 限定。BANK / MIXED は既存の問題を出すので
+	// 効かせようがなく、値を残すと「効いたはず」と後から読めてしまう。
+	it.each(["BANK", "MIXED"] as const)(
+		"%s では difficulty をセッションにもジョブにも残さない",
+		async (mode) => {
+			repositoryMocks.dynamoSend.mockImplementation(
+				async (command: unknown) => {
+					if (command instanceof QueryCommand) return { Items: [] };
+					if (command instanceof TransactWriteCommand) return {};
+					throw new Error(`unexpected command: ${String(command)}`);
+				},
+			);
+
+			await startSession({ ...startInput, mode, difficulty: "HARD" });
+
+			const transaction = repositoryMocks.dynamoSend.mock.calls
+				.map(([command]) => command)
+				.find(
+					(command): command is TransactWriteCommand =>
+						command instanceof TransactWriteCommand,
+				);
+			for (const item of transaction?.input.TransactItems ?? []) {
+				expect(item.Put?.Item?.difficulty).toBeUndefined();
+			}
+		},
+	);
+
+	it("GENERATE では difficulty をセッションとジョブに残す", async () => {
+		repositoryMocks.dynamoSend.mockImplementation(async (command: unknown) => {
+			if (command instanceof QueryCommand) return { Items: [] };
+			if (command instanceof TransactWriteCommand) return {};
+			throw new Error(`unexpected command: ${String(command)}`);
+		});
+
+		await startSession({ ...startInput, difficulty: "HARD" });
+
+		const transaction = repositoryMocks.dynamoSend.mock.calls
+			.map(([command]) => command)
+			.find(
+				(command): command is TransactWriteCommand =>
+					command instanceof TransactWriteCommand,
+			);
+		const [sessionWrite, jobWrite] = transaction?.input.TransactItems ?? [];
+		expect(sessionWrite?.Put?.Item).toMatchObject({ difficulty: "HARD" });
+		expect(jobWrite?.Put?.Item).toMatchObject({ difficulty: "HARD" });
+	});
+
 	it("creates a preparing session and INITIAL job atomically without synchronous generation", async () => {
 		repositoryMocks.dynamoSend.mockImplementation(async (command: unknown) => {
 			if (command instanceof QueryCommand) return { Items: [] };

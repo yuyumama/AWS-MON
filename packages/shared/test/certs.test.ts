@@ -7,6 +7,7 @@ import {
 	findCert,
 	findDomain,
 	pickWeightedDomain,
+	resolveDifficultyTier,
 } from "../src/certs.js";
 
 // #123: 「全ドメイン」の抽選は API 側でここの重みを使って行う。
@@ -162,5 +163,45 @@ describe("domainFallbackOrder", () => {
 
 	it("未知の資格では指定されたドメインだけを返す", () => {
 		expect(domainFallbackOrder("nope", "d1")).toEqual(["d1"]);
+	});
+});
+
+describe("resolveDifficultyTier", () => {
+	it("STANDARD はその資格のレベルどおりになる", () => {
+		expect(resolveDifficultyTier("clf", "STANDARD")).toBe("foundational");
+		expect(resolveDifficultyTier("saa", "STANDARD")).toBe("associate");
+		expect(resolveDifficultyTier("sap", "STANDARD")).toBe("professional");
+	});
+
+	it("Specialty は professional に畳まれる", () => {
+		expect(resolveDifficultyTier("scs", "STANDARD")).toBe("professional");
+		expect(resolveDifficultyTier("ans", "STANDARD")).toBe("professional");
+	});
+
+	it("オフセットが1段ずつ動かす", () => {
+		expect(resolveDifficultyTier("saa", "EASY")).toBe("foundational");
+		expect(resolveDifficultyTier("saa", "HARD")).toBe("professional");
+	});
+
+	// 仕様が3段階しかないことの帰結。両端では目盛りを動かしても変わらない。
+	it("両端では丸められる", () => {
+		expect(resolveDifficultyTier("clf", "EASY")).toBe(
+			resolveDifficultyTier("clf", "STANDARD"),
+		);
+		expect(resolveDifficultyTier("sap", "HARD")).toBe(
+			resolveDifficultyTier("sap", "STANDARD"),
+		);
+	});
+
+	it("省略時は STANDARD 扱いになる", () => {
+		for (const cert of certDefinitions) {
+			expect(resolveDifficultyTier(cert.code)).toBe(
+				resolveDifficultyTier(cert.code, "STANDARD"),
+			);
+		}
+	});
+
+	it("未知の資格では undefined を返す", () => {
+		expect(resolveDifficultyTier("nope", "HARD")).toBeUndefined();
 	});
 });

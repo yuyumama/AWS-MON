@@ -1,4 +1,4 @@
-import { resolveTableNames } from "@aws-mon/shared";
+import { difficultyOffsets, resolveTableNames } from "@aws-mon/shared";
 import { ListTablesCommand } from "@aws-sdk/client-dynamodb";
 import { serve } from "@hono/node-server";
 import type { MiddlewareHandler } from "hono";
@@ -115,6 +115,12 @@ app.post("/sessions", async (c) => {
 		const domainSelection = asString(body.domainSelection);
 		const domain = asString(body.domain);
 		const mode = asString(body.mode);
+		const difficultyRaw = asString(body.difficulty);
+		// 未知の値は既定(STANDARD 相当)に落とす。難易度は生成の味付けであって
+		// 認可や整合性に関わらないので、400 で弾くより既定で通すほうが素直。
+		const difficulty = difficultyOffsets.find(
+			(offset) => offset === difficultyRaw,
+		);
 
 		const auth = getAuth(c);
 		const result = await startSession({
@@ -123,6 +129,7 @@ app.post("/sessions", async (c) => {
 			domainSelection,
 			domain,
 			mode: mode === "GENERATE" || mode === "MIXED" ? mode : "BANK",
+			difficulty,
 			canGenerateQuestions: auth.canGenerateQuestions,
 		});
 		const responseStatus =

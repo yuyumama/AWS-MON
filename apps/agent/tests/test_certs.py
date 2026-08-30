@@ -74,3 +74,30 @@ def test_every_level_has_a_difficulty_tier() -> None:
     levels = {level for _, level in _parse_certs_ts().values()}
     missing = levels - set(DIFFICULTY_TIERS)
     assert not missing, f"難易度区分が割り当てられていないレベル: {sorted(missing)}"
+
+
+def test_explicit_tier_overrides_cert_level() -> None:
+    """API が解決した難易度が資格レベルより優先されること。"""
+    from quiz_agent.prompts import build_quiz_prompt
+
+    # SAA は既定なら associate だが、HARD 指定なら professional の文面になる。
+    standard = build_quiz_prompt("saa")
+    harder = build_quiz_prompt("saa", difficulty_tier="professional")
+    assert "アソシエイト級" in standard
+    assert "プロフェッショナル級" in harder
+
+
+def test_unknown_tier_is_rejected() -> None:
+    """未知の区分名は黙って既定に落とさない(プロンプトが静かに別物になるのを防ぐ)。"""
+    from quiz_agent.prompts import resolve_difficulty_tier
+
+    with pytest.raises(ValueError, match="不明な難易度区分"):
+        resolve_difficulty_tier("saa", "expert")
+
+
+def test_research_prompt_follows_explicit_tier() -> None:
+    """調査プロンプトの回数指示も明示指定に従うこと。"""
+    from quiz_agent.prompts import build_docs_research_prompt, build_quiz_prompt
+
+    prompt = build_docs_research_prompt(build_quiz_prompt("saa"), "saa", "foundational")
+    assert "search_documentation は最大1回" in prompt

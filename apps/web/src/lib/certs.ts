@@ -2,6 +2,7 @@
 import {
 	type CertLevel,
 	certDomains,
+	type DifficultyOffset,
 	findCert,
 	findDomain,
 	type SessionMode,
@@ -66,6 +67,43 @@ export const modeOptions: ModeOption[] = [
 		description: "毎問AIが新しく生成する。出題までに時間がかかる。",
 	},
 ];
+
+// スライダーの目盛り。順序がそのまま左→右の並びになるので、易しい順に並べる。
+// 難易度仕様は3種類しかないため3ノッチ。目盛りを増やすなら、先に
+// apps/agent の _DIFFICULTY_REQUIREMENTS に対応する文面を足す必要がある。
+export const difficultyOptions: {
+	value: DifficultyOffset;
+	label: string;
+	description: string;
+}[] = [
+	{
+		value: "EASY",
+		label: "易しめ",
+		description: "1つのサービスの役割と用途が分かれば解ける水準。",
+	},
+	{
+		value: "STANDARD",
+		label: "標準",
+		description: "この資格のレベルどおりの水準。",
+	},
+	{
+		value: "HARD",
+		label: "難しめ",
+		description: "複数サービスの制約を突き合わせて判断する水準。",
+	},
+];
+
+export function difficultyLabel(difficulty: string): string {
+	return (
+		difficultyOptions.find((d) => d.value === difficulty)?.label ?? difficulty
+	);
+}
+
+export function difficultyDescription(difficulty: string): string {
+	return (
+		difficultyOptions.find((d) => d.value === difficulty)?.description ?? ""
+	);
+}
 
 export function modeLabel(mode: string): string {
 	return modeOptions.find((m) => m.value === mode)?.label ?? mode;

@@ -1,5 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { findDomain, type QuestionItem } from "@aws-mon/shared";
+import {
+	type DifficultyOffset,
+	type DifficultyTier,
+	findDomain,
+	type QuestionItem,
+	resolveDifficultyTier,
+} from "@aws-mon/shared";
 import {
 	BedrockAgentCoreClient,
 	InvokeAgentRuntimeCommand,
@@ -128,10 +134,14 @@ function agentGeneratePayload(input: GenerateAndSaveQuestionInput): {
 	domainSelection: string;
 	domainLabel?: string;
 	domainLabelEn?: string;
+	difficultyTier?: DifficultyTier;
 	sessionId?: string;
 	stream: true;
 } {
 	const domain = findDomain(input.cert, input.domain);
+	const difficultyTier = input.difficulty
+		? resolveDifficultyTier(input.cert, input.difficulty)
+		: undefined;
 	return {
 		cert: input.cert,
 		domain: input.domain,
@@ -139,6 +149,7 @@ function agentGeneratePayload(input: GenerateAndSaveQuestionInput): {
 		...(domain
 			? { domainLabel: domain.label, domainLabelEn: domain.labelEn }
 			: {}),
+		...(difficultyTier ? { difficultyTier } : {}),
 		sessionId: input.sessionId,
 		stream: true,
 	};
@@ -153,6 +164,12 @@ export type GenerateAndSaveQuestionInput = {
 	cert: string;
 	domain: string;
 	domainSelection: string;
+	/**
+	 * 同一資格内の難易度オフセット。ここで資格レベルと突き合わせて難易度仕様
+	 * (tier)に解決し、agent には解決後の tier を渡す。agent 側はオフセットの
+	 * 意味を知らなくてよい(cli.py 等は資格から自分で tier を導出する)。
+	 */
+	difficulty?: DifficultyOffset;
 	jobId?: string;
 	// agent側でOTel baggage(session.id)に載せ、トレースをセッション単位に束ねる
 	sessionId?: string;
@@ -337,6 +354,13 @@ async function saveAgentGenerateResponse(
 				? body.generation
 				: {}),
 			jobId: input.jobId,
+			// 解決後の tier を保存する。オフセットは資格が分からないと意味が
+			// 定まらないが、tier は単独で意味を持つ。
+			...(input.difficulty
+				? {
+						difficultyTier: resolveDifficultyTier(input.cert, input.difficulty),
+					}
+				: {}),
 		},
 		quality: body.quality,
 		sourceRefs: body.sourceRefs,

@@ -86,6 +86,7 @@ def _generate_quiz(
     domain: str | None,
     domain_label: str | None = None,
     domain_label_en: str | None = None,
+    difficulty_tier: str | None = None,
     *,
     on_phase: Callable[[str, dict[str, int]], None] | None = None,
 ) -> tuple[QuizItem, JudgeResult]:
@@ -103,6 +104,7 @@ def _generate_quiz(
         domain=domain,
         domain_label=domain_label,
         domain_label_en=domain_label_en,
+        difficulty_tier=difficulty_tier,
         on_phase=on_phase,
     )
     return result.item, result.judge
@@ -195,6 +197,9 @@ def build_generate_response(
     domain_selection = _str_value(body.get("domainSelection"), domain)
     domain_label = _str_value(body.get("domainLabel"))
     domain_label_en = _str_value(body.get("domainLabelEn"))
+    # API 側で「資格レベル + 利用者の選んだオフセット」を解決した結果。
+    # 未指定なら資格レベルどおりの難易度になる。
+    difficulty_tier = _str_value(body.get("difficultyTier"))
     session_id = _str_value(body.get("sessionId"))
     with _otel_session(session_id):
         generate_kwargs: dict[str, Any] = {
@@ -206,6 +211,8 @@ def build_generate_response(
             generate_kwargs.update(
                 domain_label=domain_label, domain_label_en=domain_label_en
             )
+        if difficulty_tier is not None:
+            generate_kwargs["difficulty_tier"] = difficulty_tier
         item, judge = _generate_quiz(**generate_kwargs)
     generated_at = _now_iso()
     latency_ms = int((time.perf_counter() - started) * 1000)
@@ -223,6 +230,11 @@ def build_generate_response(
             "agentVersion": agent_version,
             "generatedAt": generated_at,
             "latencyMs": latency_ms,
+            **(
+                {"difficultyTier": difficulty_tier}
+                if difficulty_tier is not None
+                else {}
+            ),
         },
         "quality": _quality(judge, generated_at),
         "sourceRefs": _source_refs(source, generated_at),
