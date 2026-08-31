@@ -333,9 +333,7 @@ def test_resolve_harness_domain_draws_for_any_cert(
 
     ラベルが無いとプロンプトのドメイン句自体が空になり、指定が効かない。
     """
-    monkeypatch.setattr(
-        sample_generations, "cert_domains", lambda: _FAKE_CERT_DOMAINS
-    )
+    monkeypatch.setattr(sample_generations, "cert_domains", lambda: _FAKE_CERT_DOMAINS)
 
     value, label, label_en = sample_generations._resolve_harness_domain("clf", None)
 
@@ -348,9 +346,7 @@ def test_resolve_harness_domain_respects_weights(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """抽選は試験ガイドの配点比率に従うこと(prod と同じ扱い)。"""
-    monkeypatch.setattr(
-        sample_generations, "cert_domains", lambda: _FAKE_CERT_DOMAINS
-    )
+    monkeypatch.setattr(sample_generations, "cert_domains", lambda: _FAKE_CERT_DOMAINS)
     monkeypatch.setattr(sample_generations.random, "seed", lambda *_: None)
 
     drawn = [
@@ -365,9 +361,7 @@ def test_resolve_harness_domain_respects_weights(
 def test_resolve_harness_domain_keeps_explicit_value(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        sample_generations, "cert_domains", lambda: _FAKE_CERT_DOMAINS
-    )
+    monkeypatch.setattr(sample_generations, "cert_domains", lambda: _FAKE_CERT_DOMAINS)
 
     assert sample_generations._resolve_harness_domain("clf", "d1") == (
         "d1",
@@ -380,9 +374,7 @@ def test_resolve_harness_domain_rejects_unknown_cert(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """未知の資格を黙ってドメインなしで回さない(腕の条件が静かに変わるため)。"""
-    monkeypatch.setattr(
-        sample_generations, "cert_domains", lambda: _FAKE_CERT_DOMAINS
-    )
+    monkeypatch.setattr(sample_generations, "cert_domains", lambda: _FAKE_CERT_DOMAINS)
 
     with pytest.raises(ValueError, match="ドメイン定義が無い"):
         sample_generations._resolve_harness_domain("nope", None)
