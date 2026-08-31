@@ -32,6 +32,7 @@
   - [0019](adr/0019-web-design-language-classical.md) apps/web のデザイン言語を「読み物としての問題集」へ差し替え、スマホ対応を作り直す（面・影・角丸の3点は0020で撤回）
   - [0020](adr/0020-web-surface-and-shadow.md) apps/web に面と影を戻し、押下の手応えと本文コントラストを確保する
   - [0021](adr/0021-transient-model-error-retry-granularity.md) 一過性モデルエラーの再試行をモデル呼び出し単位にし、調査フェーズに実時間予算を設ける
+  - [0022](adr/0022-difficulty-by-cert-level-and-offset.md) 難易度を資格レベル連動にし、同一資格内は相対オフセット（易/標準/難）で調整する
 - [`research/`](research/) — 調査メモ
   - [genai-observability-vs-xray](research/genai-observability-vs-xray.md) X-Ray / CloudWatch生成AIオブザーバビリティ / Evaluations の整理（Evaluations は検証後に廃止）
 
