@@ -60,19 +60,30 @@ class ToolCallLimiter(HookProvider):
             event.cancel_tool = _CANCEL_MESSAGE
 
 
-def docs_tool_limiter(tier: str | None = None) -> ToolCallLimiter:
-    """AWSドキュメントMCPツール(search/read)の上限を解決して返す。
+def resolve_docs_limits(tier: str | None = None) -> tuple[int, int]:
+    """(search上限, read上限) を解決する。
 
     tier: 難易度区分(certs.get_difficulty_tier の返り値)。未指定なら従来どおりの
     2回/2回。env での明示指定は区分より優先する(運用でのコスト調整を残すため)。
 
     AGENT_DOCS_SEARCH_LIMIT / AGENT_DOCS_READ_LIMIT で既定値を上書きできる。
+
+    計測ハーネス(scripts/sample_generations.py)も「どの上限で採ったランか」を
+    ここから引く。数値を書き写すと、実際の生成条件とメタデータがずれる
+    (#142 の計測で実際に起きた)。
     """
     tier_search, tier_read = TIER_LIMITS.get(
         tier or "", (DEFAULT_SEARCH_LIMIT, DEFAULT_READ_LIMIT)
     )
-    search_limit = int(os.environ.get("AGENT_DOCS_SEARCH_LIMIT", str(tier_search)))
-    read_limit = int(os.environ.get("AGENT_DOCS_READ_LIMIT", str(tier_read)))
+    return (
+        int(os.environ.get("AGENT_DOCS_SEARCH_LIMIT", str(tier_search))),
+        int(os.environ.get("AGENT_DOCS_READ_LIMIT", str(tier_read))),
+    )
+
+
+def docs_tool_limiter(tier: str | None = None) -> ToolCallLimiter:
+    """AWSドキュメントMCPツール(search/read)の上限を解決したフックを返す。"""
+    search_limit, read_limit = resolve_docs_limits(tier)
     return ToolCallLimiter(
         {
             "search_documentation": search_limit,
