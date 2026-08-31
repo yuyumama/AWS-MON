@@ -404,3 +404,43 @@ def test_cert_domains_reads_the_real_definitions() -> None:
     assert domains["clf"], "clf のドメインが空"
     for entries in domains.values():
         assert sum(weight for *_, weight in entries) == 100
+
+
+# ---- 連続失敗時のバックオフ ----
+#
+# 2026-08-31 の計測で、OpenRouter が provider 由来の 404 を約50秒返した。失敗は
+# 即座に返るため、3連続失敗の打ち切りに15秒で到達し、腕が3本まるごと死んだ
+# (その直後の腕は 30件中29件成功している)。失敗の合間に待つことで、供給側の
+# 短い障害を吸収する。
+
+
+def test_failure_backoff_grows_and_resets(monkeypatch: pytest.MonkeyPatch) -> None:
+    slept: list[float] = []
+    monkeypatch.setattr(sample_generations.time, "sleep", slept.append)
+    monkeypatch.setattr(sample_generations, "load_dotenv", lambda *args: True)
+    monkeypatch.setattr(
+        sample_generations, "sampling_metadata", lambda *a, **k: {"type": "metadata"}
+    )
+    statuses = iter(["error", "error", "ok", "error"])
+    monkeypatch.setattr(
+        sample_generations,
+        "_sample_once",
+        lambda *args: {**_record(status=next(statuses)), "error": None},
+    )
+    monkeypatch.setattr(
+        sys, "argv", ["sample_generations.py", "--n", "4", "--sleep", "5"]
+    )
+
+    assert sample_generations.main() == 0
+
+    # 失敗後は既定の間隔ではなくバックオフで待ち、成功したらリセットする。
+    assert slept == [
+        sample_generations.FAILURE_BACKOFF_SEC[0],
+        sample_generations.FAILURE_BACKOFF_SEC[1],
+        5.0,
+    ]
+
+
+def test_backoff_absorbs_a_provider_blip(monkeypatch: pytest.MonkeyPatch) -> None:
+    """3連続失敗に到達するまでに、供給側の短い障害を越えられるだけ待つこと。"""
+    assert sum(sample_generations.FAILURE_BACKOFF_SEC[:2]) >= 60

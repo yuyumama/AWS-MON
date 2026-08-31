@@ -56,6 +56,13 @@ from quiz_agent.prompts import resolve_difficulty_tier  # noqa: E402
 from quiz_agent.tool_limits import resolve_docs_limits  # noqa: E402
 
 MAX_CONSECUTIVE_FAILURES = 3
+
+# 連続失敗のたびに待つ秒数。2026-08-31 の計測で OpenRouter が provider 由来の 404 を
+# 約50秒返し、失敗が即座に返るせいで15秒で打ち切りに到達して腕が3本まるごと死んだ
+# (その直後の腕は30件中29件成功している)。打ち切りまでに供給側の短い障害を
+# 越えられるだけ待つ。回数そのものは増やさない — 本当に壊れている腕を延々と
+# 回し続けても日次枠を使うだけなので。
+FAILURE_BACKOFF_SEC = (30.0, 60.0, 120.0)
 DEPENDENCIES = (
     "strands-agents",
     "openai",
@@ -354,7 +361,14 @@ def main() -> int:
                 consecutive_failures = 0
 
             if i < args.n - 1:
-                time.sleep(args.sleep)
+                if consecutive_failures:
+                    backoff = FAILURE_BACKOFF_SEC[
+                        min(consecutive_failures, len(FAILURE_BACKOFF_SEC)) - 1
+                    ]
+                    print(f"{backoff:.0f}秒待って再開します", file=sys.stderr)
+                    time.sleep(backoff)
+                else:
+                    time.sleep(args.sleep)
     finally:
         if out_fh:
             out_fh.close()
