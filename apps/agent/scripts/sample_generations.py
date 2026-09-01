@@ -255,15 +255,17 @@ def _sample_once(
     cert: str, domain: str | None, difficulty_tier: str | None = None
 ) -> dict[str, Any]:
     started = time.monotonic()
-    resolved_domain: str | None = domain
     # 明示指定が無い腕でも、実際に適用された区分を記録に残す。複数の腕のJSONLを
     # 結合したあとで腕ごとに分けられるようにするため、メタデータ行だけに頼らない。
     tier = resolve_difficulty_tier(cert, difficulty_tier)
     arm = {"cert": cert, "cert_level": get_cert_level(cert), "difficulty_tier": tier}
+    # 抽選は try の外で行う。ドメイン定義を読めないのは設定の誤り(shared のビルド
+    # 出力が無い等)であって腕の1件の失敗ではなく、error レコードとして記録すると
+    # 3連続失敗の打ち切りに到達して「生成が失敗した」という誤った JSONL が残る。
+    resolved_domain, domain_label, domain_label_en = _resolve_harness_domain(
+        cert, domain
+    )
     try:
-        resolved_domain, domain_label, domain_label_en = _resolve_harness_domain(
-            cert, domain
-        )
         result = generate_quiz(
             cert,
             resolved_domain,

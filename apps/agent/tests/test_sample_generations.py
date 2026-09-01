@@ -18,6 +18,27 @@ from quiz_agent.judge import JudgeDefect, JudgeResult
 from quiz_agent.research_status import ResearchResult
 from quiz_agent.schema import QuizItem
 
+# ドメイン定義の読み込みは node と packages/shared のビルド出力に依存する。
+# ユニットテストをビルド成果物に依存させると、agent の CI(Node を持たない)で
+# _sample_once 系が丸ごと落ちる。既定では偽の定義に差し替える。
+_REAL_CERT_DOMAINS = sample_generations.cert_domains
+
+_FAKE_CERT_DOMAINS = {
+    "clf": [
+        ("d1", "クラウドの概念", "Cloud Concepts", 24),
+        ("d2", "セキュリティとコンプライアンス", "Security and Compliance", 76),
+    ],
+    "saa": [
+        ("d1", "セキュアなアーキテクチャの設計", "Design Secure Architectures", 100)
+    ],
+    "aip": [("d1", "実装と統合", "Implementation and Integration", 100)],
+}
+
+
+@pytest.fixture(autouse=True)
+def _stub_cert_domains(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sample_generations, "cert_domains", lambda: _FAKE_CERT_DOMAINS)
+
 
 def _quiz_item(question: str = "設問はどれか。") -> QuizItem:
     return QuizItem.model_validate(
@@ -317,14 +338,6 @@ def test_sample_once_records_resolved_tier_without_explicit_argument(
 # 腕の比較にならない(clf を素で回すとモデルが毎回同じ話題を選び、30件が
 # ほぼ同じ問題になる)。prod と同じ重み付き抽選を全資格で行う。
 
-_FAKE_CERT_DOMAINS = {
-    "clf": [
-        ("d1", "クラウドの概念", "Cloud Concepts", 24),
-        ("d2", "セキュリティとコンプライアンス", "Security and Compliance", 76),
-    ],
-    "aip": [("d1", "実装と統合", "Implementation and Integration", 100)],
-}
-
 
 def test_resolve_harness_domain_draws_for_any_cert(
     monkeypatch: pytest.MonkeyPatch,
@@ -386,9 +399,9 @@ def test_cert_domains_reads_the_real_definitions() -> None:
     node と packages/shared のビルド出力が要るため、無い環境では skip する
     (agent の CI は Node を持たない)。
     """
-    sample_generations.cert_domains.cache_clear()
+    _REAL_CERT_DOMAINS.cache_clear()
     try:
-        domains = sample_generations.cert_domains()
+        domains = _REAL_CERT_DOMAINS()
     except RuntimeError as e:
         pytest.skip(f"certs.ts のビルド出力を読めない: {e}")
 
@@ -436,3 +449,27 @@ def test_failure_backoff_grows_and_resets(monkeypatch: pytest.MonkeyPatch) -> No
 def test_backoff_absorbs_a_provider_blip(monkeypatch: pytest.MonkeyPatch) -> None:
     """3連続失敗に到達するまでに、供給側の短い障害を越えられるだけ待つこと。"""
     assert sum(sample_generations.FAILURE_BACKOFF_SEC[:2]) >= 60
+
+
+def test_sample_once_does_not_swallow_setup_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ドメイン定義を読めない場合は、1回分の生成失敗として記録せず即座に落とす。
+
+    shared のビルド出力が無いのは設定の誤りであって、腕の1件の失敗ではない。
+    error レコードとして記録すると、3連続失敗の打ち切りに到達して
+    「生成が失敗した」という誤った結論の JSONL が残る。
+    """
+
+    def boom() -> dict:
+        raise RuntimeError("certs.js が無い")
+
+    monkeypatch.setattr(sample_generations, "cert_domains", boom)
+    monkeypatch.setattr(
+        sample_generations,
+        "generate_quiz",
+        lambda *a: pytest.fail("生成まで到達してはいけない"),
+    )
+
+    with pytest.raises(RuntimeError, match="certs.js が無い"):
+        sample_generations._sample_once("saa", None, None)
