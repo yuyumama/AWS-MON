@@ -34,6 +34,7 @@ from .prompts import (
     build_docs_research_prompt,
     build_quality_regenerate_feedback_prompt,
     build_quiz_prompt,
+    resolve_difficulty_tier,
 )
 from .quality_checks import QualityDefectError, validate_quality
 from .research_metrics import emit_research_metrics
@@ -375,9 +376,18 @@ def _research_retry_kwargs() -> dict[str, Any]:
 
 @contextmanager
 def _researched_agent(
-    quiz_prompt: str, *, on_phase: PhaseCallback | None = None
+    quiz_prompt: str,
+    cert: str | None = None,
+    difficulty_tier: str | None = None,
+    *,
+    on_phase: PhaseCallback | None = None,
 ) -> Iterator[tuple[Agent, list[str]]]:
-    """MCPクライアントを維持したまま、調査済みAgentと原文を提供する。"""
+    """MCPクライアントを維持したまま、調査済みAgentと原文を提供する。
+
+    cert / difficulty_tier: 調査の広さ(調べるサービス数とツール呼び出し上限)を
+    難易度に合わせるために使う。どちらも未指定なら professional 相当。
+    """
+    tier = resolve_difficulty_tier(cert, difficulty_tier)
     # APIキー解決を含むモデル生成の失敗は調査失敗(フォールバック対象)にせず即エラーにする
     model = _model()
     phase = "mcp"
@@ -416,11 +426,11 @@ def _researched_agent(
                     system_prompt=QUIZ_SYSTEM_PROMPT,
                     tools=tools,
                     # プロンプト指示(最大2回)を無視して呼ばれ続けるのをコードで強制する
-                    hooks=[docs_tool_limiter(), retry_hook],
+                    hooks=[docs_tool_limiter(tier), retry_hook],
                     **_research_retry_kwargs(),
                 )
                 try:
-                    agent(build_docs_research_prompt(quiz_prompt))
+                    agent(build_docs_research_prompt(quiz_prompt, cert, tier))
                     break
                 except Exception as e:  # noqa: BLE001 - 例外チェーンで再試行可否を判定
                     successful_tool_calls += _successful_tool_call_count(agent.messages)
@@ -618,6 +628,7 @@ def _log_research_result(research: ResearchResult, cert: str | None) -> None:
 def _generate_quiz_with_research(
     quiz_prompt: str,
     cert: str | None = None,
+    difficulty_tier: str | None = None,
     *,
     on_phase: PhaseCallback | None = None,
 ) -> GenerationResult:
@@ -631,9 +642,9 @@ def _generate_quiz_with_research(
     cert: ログ・メトリクス記録用(任意)。generate_quiz から渡される。
     """
     researched = (
-        _researched_agent(quiz_prompt)
+        _researched_agent(quiz_prompt, cert, difficulty_tier)
         if on_phase is None
-        else _researched_agent(quiz_prompt, on_phase=on_phase)
+        else _researched_agent(quiz_prompt, cert, difficulty_tier, on_phase=on_phase)
     )
     with researched as (agent, source_texts):
         # 構造化出力も同じAgentの履歴へtoolUseを追加しうるため、調査直後に分類する。
@@ -662,6 +673,7 @@ def generate_quiz(
     domain: str | None = None,
     domain_label: str | None = None,
     domain_label_en: str | None = None,
+    difficulty_tier: str | None = None,
     *,
     on_phase: PhaseCallback | None = None,
 ) -> GenerationResult:
@@ -677,7 +689,12 @@ def generate_quiz(
     生成物は返す。
     """
     result = _generate_quiz_result(
-        cert, domain, domain_label, domain_label_en, on_phase=on_phase
+        cert,
+        domain,
+        domain_label,
+        domain_label_en,
+        difficulty_tier,
+        on_phase=on_phase,
     )
     # ジャッジはLLM呼び出しで実時間がかかる。無通知だと「作成」のまま数秒止まって
     # 見えるため、決定的チェックと同じ「検証」工程として通知する(#155)。
@@ -691,19 +708,27 @@ def _generate_quiz_result(
     domain: str | None = None,
     domain_label: str | None = None,
     domain_label_en: str | None = None,
+    difficulty_tier: str | None = None,
     *,
     on_phase: PhaseCallback | None = None,
 ) -> GenerationResult:
     """調査と生成までを行う(ジャッジは含まない)。"""
     retries = int(os.environ.get("AGENT_GENERATE_RETRIES", "3"))
-    quiz_prompt = build_quiz_prompt(cert, domain, domain_label, domain_label_en)
+    quiz_prompt = build_quiz_prompt(
+        cert, domain, domain_label, domain_label_en, difficulty_tier
+    )
 
     if _docs_mcp_enabled():
         try:
             if on_phase is None:
-                return _generate_quiz_with_research(quiz_prompt, cert=cert)
+                return _generate_quiz_with_research(
+                    quiz_prompt, cert=cert, difficulty_tier=difficulty_tier
+                )
             return _generate_quiz_with_research(
-                quiz_prompt, cert=cert, on_phase=on_phase
+                quiz_prompt,
+                cert=cert,
+                difficulty_tier=difficulty_tier,
+                on_phase=on_phase,
             )
         except QuotaExhaustedError:
             # 日次枠切れでの再生成は無駄なので、ドキュメントなし生成へフォールバックしない

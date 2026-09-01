@@ -86,6 +86,31 @@ GSI は必要属性だけを投影する。特に `correct` と `explanation` �
   - `domainSelection="all"` の場合も、API側で重み付き抽選し、保存時の `domain` は具体ドメインにする。
   - 定義のない資格コードだけは `"general"` にフォールバックする。
 
+### 難易度
+
+難易度は**2つの表現を使い分ける**。相対オフセットは利用者の選択で、絶対的な区分は生成に渡す値である。
+
+| 表現 | 値 | 持つ item | 意味 |
+|---|---|---|---|
+| `difficulty`（オフセット） | `EASY` / `STANDARD` / `HARD` | `META` / `INITIAL` guard / job | 利用者がスライダーで選んだ、**その資格のレベルを基準にした相対位置** |
+| `generation.difficultyTier`（区分） | `foundational` / `associate` / `professional` | 問題 | 生成時に実際に適用した**難易度仕様**。プロンプトの文面と1対1で対応する |
+
+- オフセットを絶対値にしない理由: CLF の「5」と SAP の「1」が同じ目盛りに乗ってしまい、値の意味が定まらない。
+- **保存するのは解決後の区分**である。オフセットは資格が分からないと意味が定まらないが、区分は単独で意味を持つ。
+- 解決は API 側（`packages/shared/src/certs.ts` の `resolveDifficultyTier`）だけで行い、agent には解決後の区分だけを渡す。
+  資格レベル（`CertDefinition.level`）を基準に1段ずつ動かし、Specialty は Professional と同じ区分に畳む。
+- **区分は3つしかないため、両端では丸められる。** CLF の `EASY` は `STANDARD` と同じ、SAP の `HARD` も `STANDARD` と同じになる。
+  区分を増やすには、先に対応する難易度仕様の文面（`apps/agent/quiz_agent/prompts.py`）を足す必要がある。
+- **`difficulty` は GENERATE のセッションだけが持つ。** BANK / MIXED は既存の問題を出すので効かせようがなく、
+  値を残すと「効いたはず」と後から読めてしまうため、`startSession` が捨てる。MIXED でバンクが枯れて生成に落ちる場合も、
+  資格レベルどおりの既定で生成する。
+- **セッション作成時に確定し、以降変更できない。** 先読み（prefetch）が次の問題を先に生成しているため、
+  途中で変えると「動かしたのに次の1問は変わらない」という説明しづらい挙動になる。作り直せばよい。
+- `generation.difficultyTier` が**無い問題**は3種類ある。どれも資格レベルから区分を導出して読む。
+  1. `promptVersion` が `quiz-v1` の問題（資格レベル連動より前。全資格にプロフェッショナル級の指示で生成された）
+  2. MIXED のバンク枯れフォールバックと stale 再生成で作られた問題（オフセットを渡さない経路）
+  3. スライダーを持たない経路（CLI・計測スクリプト）で作られた問題
+
 ### ID
 
 - `sessionId`, `jobId`: ULID 推奨。時系列ソートとログ追跡がしやすい。
@@ -231,6 +256,9 @@ type QuestionItem = {
     modelId: string;
     promptVersion: string;
     agentVersion?: string;
+    // 生成時に適用した難易度仕様。promptVersion では同一資格内の易/標準/難を
+    // 区別できないため別に持つ。後から遡って付けることはできない。
+    difficultyTier?: "foundational" | "associate" | "professional";
     generatedAt: string;
     latencyMs?: number;
     inputTokens?: number;
@@ -367,6 +395,9 @@ type SessionMetaItem = {
   cert: string;
   domainSelection: string;
   mode: "GENERATE" | "BANK" | "MIXED";
+  // 同一資格内の難易度オフセット。GENERATE のセッションだけが持つ。
+  // 作成時に確定し以降変更できない(先読みが次の問題を先に生成しているため)。
+  difficulty?: "EASY" | "STANDARD" | "HARD";
 
   // 最初の問題を非同期生成している間だけ存在する(ADR 0013)。
   // current が無く initial がある = 生成中。成功時に current へ昇格して削除される。
@@ -433,6 +464,7 @@ type InitialSessionGuardItem = {
   cert: string;
   domainSelection: string;
   mode: "GENERATE" | "BANK" | "MIXED";
+  difficulty?: "EASY" | "STANDARD" | "HARD";
 
   createdAt: string;
   updatedAt: string;
@@ -657,6 +689,7 @@ type GenerationJobItem = {
   domainSelection: string;
   domain?: string;
   mode: "GENERATE" | "BANK" | "MIXED";
+  difficulty?: "EASY" | "STANDARD" | "HARD";  // セッションから引き継ぐ
 
   questionId?: string;
   sourceQuestionId?: string; // stale 再生成などで元問題を指す

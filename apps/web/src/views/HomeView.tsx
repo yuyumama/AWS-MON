@@ -1,4 +1,5 @@
 import type {
+	DifficultyOffset,
 	SessionDto,
 	SessionMode,
 	SessionSummaryDto,
@@ -20,6 +21,9 @@ import {
 	certFullName,
 	certName,
 	certOptionLabel,
+	difficultyDescription,
+	difficultyLabel,
+	difficultyOptions,
 	modeDescription,
 	modeLabel,
 	modeOptions,
@@ -156,6 +160,12 @@ export function HomeView({ canGenerate, onOpenSession, onResume }: Props) {
 	const [domainSelection, setDomainSelection] = useState(allDomains);
 	const domains = certDomains(cert);
 	const [mode, setMode] = useState<SessionMode>("BANK");
+	// 難易度は GENERATE のときだけ効く。既定はその資格のレベルどおり。
+	const [difficulty, setDifficulty] = useState<DifficultyOffset>("STANDARD");
+	const difficultyIndex = difficultyOptions.findIndex(
+		(option) => option.value === difficulty,
+	);
+	const difficultyEnabled = mode === "GENERATE";
 	const [starting, setStarting] = useState(false);
 	const [startError, setStartError] = useState<string | null>(null);
 
@@ -252,6 +262,9 @@ export function HomeView({ canGenerate, onOpenSession, onResume }: Props) {
 				cert,
 				domainSelection,
 				mode,
+				// 対象外モードでは送らない。API 側でも捨てるが、
+				// 送っていないことを呼び出し側で明示しておく。
+				...(difficultyEnabled ? { difficulty } : {}),
 			});
 			invalidateCache("sessions:ACTIVE");
 			onOpenSession(session);
@@ -376,6 +389,48 @@ export function HomeView({ canGenerate, onOpenSession, onResume }: Props) {
 					    選ぶ前に読む必要のない文字が版面を埋める。 */}
 					<p className="mode-option-desc">{modeDescription(mode)}</p>
 				</fieldset>
+
+				{/* 生成権限が無いユーザーは BANK しか選べないので、永久に無効な
+				    部品を見せない。権限があるユーザーには、モードを変えたときに
+				    現れたり消えたりしないよう、無効化して理由を書く。 */}
+				{canGenerate && (
+					<fieldset className="field difficulty-field">
+						<legend className="field-label">難易度</legend>
+						<input
+							className="difficulty-slider"
+							type="range"
+							min={0}
+							max={difficultyOptions.length - 1}
+							step={1}
+							value={difficultyIndex}
+							disabled={!difficultyEnabled}
+							aria-label="難易度"
+							aria-valuetext={difficultyLabel(difficulty)}
+							onChange={(event) => {
+								const next = difficultyOptions[Number(event.target.value)];
+								if (next) setDifficulty(next.value);
+							}}
+						/>
+						<div className="difficulty-ticks" aria-hidden="true">
+							{difficultyOptions.map((option) => (
+								<span
+									key={option.value}
+									className="difficulty-tick"
+									data-selected={
+										difficultyEnabled && option.value === difficulty
+									}
+								>
+									{option.label}
+								</span>
+							))}
+						</div>
+						<p className="mode-option-desc">
+							{difficultyEnabled
+								? difficultyDescription(difficulty)
+								: `${modeLabel(mode)}では既存の問題を出すため、難易度は指定できません。`}
+						</p>
+					</fieldset>
+				)}
 
 				{startError && <p className="notice notice-error">{startError}</p>}
 

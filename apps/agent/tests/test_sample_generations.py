@@ -18,6 +18,27 @@ from quiz_agent.judge import JudgeDefect, JudgeResult
 from quiz_agent.research_status import ResearchResult
 from quiz_agent.schema import QuizItem
 
+# ドメイン定義の読み込みは node と packages/shared のビルド出力に依存する。
+# ユニットテストをビルド成果物に依存させると、agent の CI(Node を持たない)で
+# _sample_once 系が丸ごと落ちる。既定では偽の定義に差し替える。
+_REAL_CERT_DOMAINS = sample_generations.cert_domains
+
+_FAKE_CERT_DOMAINS = {
+    "clf": [
+        ("d1", "クラウドの概念", "Cloud Concepts", 24),
+        ("d2", "セキュリティとコンプライアンス", "Security and Compliance", 76),
+    ],
+    "saa": [
+        ("d1", "セキュアなアーキテクチャの設計", "Design Secure Architectures", 100)
+    ],
+    "aip": [("d1", "実装と統合", "Implementation and Integration", 100)],
+}
+
+
+@pytest.fixture(autouse=True)
+def _stub_cert_domains(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sample_generations, "cert_domains", lambda: _FAKE_CERT_DOMAINS)
+
 
 def _quiz_item(question: str = "設問はどれか。") -> QuizItem:
     return QuizItem.model_validate(
@@ -163,7 +184,9 @@ def test_main_writes_metadata_first(
     metadata = {"type": "metadata", "model_id": "test/model"}
     record = _record()
     monkeypatch.setattr(sample_generations, "load_dotenv", lambda *args: True)
-    monkeypatch.setattr(sample_generations, "sampling_metadata", lambda: metadata)
+    monkeypatch.setattr(
+        sample_generations, "sampling_metadata", lambda *args, **kwargs: metadata
+    )
     monkeypatch.setattr(sample_generations, "_sample_once", lambda *args: record)
     monkeypatch.setattr(
         sys,
@@ -197,7 +220,7 @@ def test_sampling_metadata_records_arm_configuration(
     monkeypatch.setenv("AGENT_DOCS_SEARCH_LIMIT", "2")
     monkeypatch.setenv("AGENT_DOCS_READ_LIMIT", "2")
 
-    metadata = sample_generations.sampling_metadata()
+    metadata = sample_generations.sampling_metadata("aip", None)
 
     assert metadata == {
         "type": "metadata",
@@ -213,4 +236,240 @@ def test_sampling_metadata_records_arm_configuration(
         "content_retries": "1",
         "docs_search_limit": "2",
         "docs_read_limit": "2",
+        # 腕の識別。難易度は資格レベル連動なので、資格だけでは腕が定まらない。
+        "cert": "aip",
+        "cert_level": "Professional",
+        "difficulty_tier": "professional",
     }
+
+
+def test_sampling_metadata_records_tier_resolved_docs_limits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """難易度区分で下がった上限を、そのままメタデータに記録すること。
+
+    #142 の計測では、実際は 2 で走っていた search_limit を 1 と誤記録した。
+    今度は逆向きの取り違え(foundational は 1 で走るのにメタデータは 2)が
+    起きうるので、実際の解決結果から引く。
+    """
+    monkeypatch.setattr(sample_generations, "model_id", lambda: "test/model")
+    monkeypatch.delenv("AGENT_DOCS_SEARCH_LIMIT", raising=False)
+    monkeypatch.delenv("AGENT_DOCS_READ_LIMIT", raising=False)
+
+    metadata = sample_generations.sampling_metadata("clf", None)
+
+    assert metadata["cert_level"] == "Foundational"
+    assert metadata["difficulty_tier"] == "foundational"
+    assert metadata["docs_search_limit"] == "1"
+    assert metadata["docs_read_limit"] == "1"
+
+
+def test_sampling_metadata_records_explicit_tier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """明示指定した区分は資格レベルより優先し、上限もそれに従う。"""
+    monkeypatch.setattr(sample_generations, "model_id", lambda: "test/model")
+    monkeypatch.delenv("AGENT_DOCS_SEARCH_LIMIT", raising=False)
+    monkeypatch.delenv("AGENT_DOCS_READ_LIMIT", raising=False)
+
+    metadata = sample_generations.sampling_metadata("saa", "foundational")
+
+    assert metadata["cert_level"] == "Associate"
+    assert metadata["difficulty_tier"] == "foundational"
+    assert metadata["docs_search_limit"] == "1"
+
+
+def test_sample_once_passes_difficulty_tier_to_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """腕ごとの難易度指定が生成まで届き、記録にも残ること。"""
+    captured: dict[str, object] = {}
+
+    def fake_generate(
+        cert: str,
+        domain: str | None,
+        domain_label: str | None,
+        domain_label_en: str | None,
+        difficulty_tier: str | None,
+    ) -> SimpleNamespace:
+        captured["cert"] = cert
+        captured["difficulty_tier"] = difficulty_tier
+        return SimpleNamespace(
+            item=_quiz_item(),
+            research=ResearchResult(status="complete"),
+            judge=JudgeResult(status="clean", defects=[], model_id="test/judge"),
+            source_texts=[],
+        )
+
+    monkeypatch.setattr(sample_generations, "generate_quiz", fake_generate)
+
+    record = sample_generations._sample_once("saa", None, "professional")
+
+    assert captured == {"cert": "saa", "difficulty_tier": "professional"}
+    # JSONL を複数の腕ぶん結合しても後から分けられるよう、1件ごとに残す。
+    assert record["difficulty_tier"] == "professional"
+    assert record["cert_level"] == "Associate"
+
+
+def test_sample_once_records_resolved_tier_without_explicit_argument(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """未指定の腕でも、実際に適用された区分を記録に残す。"""
+    monkeypatch.setattr(
+        sample_generations,
+        "generate_quiz",
+        lambda *args: SimpleNamespace(
+            item=_quiz_item(),
+            research=ResearchResult(status="complete"),
+            judge=JudgeResult(status="clean", defects=[], model_id="test/judge"),
+            source_texts=[],
+        ),
+    )
+
+    record = sample_generations._sample_once("clf", None, None)
+
+    assert record["difficulty_tier"] == "foundational"
+    assert record["cert_level"] == "Foundational"
+
+
+# ---- ドメイン抽選 ----
+#
+# 計測の腕ごとに資格が変わるため、aip だけドメインが効いて他は効かない状態だと
+# 腕の比較にならない(clf を素で回すとモデルが毎回同じ話題を選び、30件が
+# ほぼ同じ問題になる)。prod と同じ重み付き抽選を全資格で行う。
+
+
+def test_resolve_harness_domain_draws_for_any_cert(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """aip 以外の資格でもラベル付きのドメインを引くこと。
+
+    ラベルが無いとプロンプトのドメイン句自体が空になり、指定が効かない。
+    """
+    monkeypatch.setattr(sample_generations, "cert_domains", lambda: _FAKE_CERT_DOMAINS)
+
+    value, label, label_en = sample_generations._resolve_harness_domain("clf", None)
+
+    assert value in {"d1", "d2"}
+    assert label in {"クラウドの概念", "セキュリティとコンプライアンス"}
+    assert label_en in {"Cloud Concepts", "Security and Compliance"}
+
+
+def test_resolve_harness_domain_respects_weights(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """抽選は試験ガイドの配点比率に従うこと(prod と同じ扱い)。"""
+    monkeypatch.setattr(sample_generations, "cert_domains", lambda: _FAKE_CERT_DOMAINS)
+    monkeypatch.setattr(sample_generations.random, "seed", lambda *_: None)
+
+    drawn = [
+        sample_generations._resolve_harness_domain("clf", None)[0] for _ in range(200)
+    ]
+
+    # d2 の重みは d1 の3倍あまり。厳密な比率ではなく、重みが無視されていない
+    # ことだけを見る(重みを無視すると 50/50 になる)。
+    assert drawn.count("d2") > drawn.count("d1")
+
+
+def test_resolve_harness_domain_keeps_explicit_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sample_generations, "cert_domains", lambda: _FAKE_CERT_DOMAINS)
+
+    assert sample_generations._resolve_harness_domain("clf", "d1") == (
+        "d1",
+        "クラウドの概念",
+        "Cloud Concepts",
+    )
+
+
+def test_resolve_harness_domain_rejects_unknown_cert(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """未知の資格を黙ってドメインなしで回さない(腕の条件が静かに変わるため)。"""
+    monkeypatch.setattr(sample_generations, "cert_domains", lambda: _FAKE_CERT_DOMAINS)
+
+    with pytest.raises(ValueError, match="ドメイン定義が無い"):
+        sample_generations._resolve_harness_domain("nope", None)
+
+
+def test_cert_domains_reads_the_real_definitions() -> None:
+    """実際の certs.ts のビルド出力から12資格ぶん読めること。
+
+    node と packages/shared のビルド出力が要るため、無い環境では skip する
+    (agent の CI は Node を持たない)。
+    """
+    _REAL_CERT_DOMAINS.cache_clear()
+    try:
+        domains = _REAL_CERT_DOMAINS()
+    except RuntimeError as e:
+        pytest.skip(f"certs.ts のビルド出力を読めない: {e}")
+
+    assert len(domains) == 12
+    assert domains["clf"], "clf のドメインが空"
+    for entries in domains.values():
+        assert sum(weight for *_, weight in entries) == 100
+
+
+# ---- 連続失敗時のバックオフ ----
+#
+# 2026-08-31 の計測で、OpenRouter が provider 由来の 404 を約50秒返した。失敗は
+# 即座に返るため、3連続失敗の打ち切りに15秒で到達し、腕が3本まるごと死んだ
+# (その直後の腕は 30件中29件成功している)。失敗の合間に待つことで、供給側の
+# 短い障害を吸収する。
+
+
+def test_failure_backoff_grows_and_resets(monkeypatch: pytest.MonkeyPatch) -> None:
+    slept: list[float] = []
+    monkeypatch.setattr(sample_generations.time, "sleep", slept.append)
+    monkeypatch.setattr(sample_generations, "load_dotenv", lambda *args: True)
+    monkeypatch.setattr(
+        sample_generations, "sampling_metadata", lambda *a, **k: {"type": "metadata"}
+    )
+    statuses = iter(["error", "error", "ok", "error"])
+    monkeypatch.setattr(
+        sample_generations,
+        "_sample_once",
+        lambda *args: {**_record(status=next(statuses)), "error": None},
+    )
+    monkeypatch.setattr(
+        sys, "argv", ["sample_generations.py", "--n", "4", "--sleep", "5"]
+    )
+
+    assert sample_generations.main() == 0
+
+    # 失敗後は既定の間隔ではなくバックオフで待ち、成功したらリセットする。
+    assert slept == [
+        sample_generations.FAILURE_BACKOFF_SEC[0],
+        sample_generations.FAILURE_BACKOFF_SEC[1],
+        5.0,
+    ]
+
+
+def test_backoff_absorbs_a_provider_blip(monkeypatch: pytest.MonkeyPatch) -> None:
+    """3連続失敗に到達するまでに、供給側の短い障害を越えられるだけ待つこと。"""
+    assert sum(sample_generations.FAILURE_BACKOFF_SEC[:2]) >= 60
+
+
+def test_sample_once_does_not_swallow_setup_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ドメイン定義を読めない場合は、1回分の生成失敗として記録せず即座に落とす。
+
+    shared のビルド出力が無いのは設定の誤りであって、腕の1件の失敗ではない。
+    error レコードとして記録すると、3連続失敗の打ち切りに到達して
+    「生成が失敗した」という誤った結論の JSONL が残る。
+    """
+
+    def boom() -> dict:
+        raise RuntimeError("certs.js が無い")
+
+    monkeypatch.setattr(sample_generations, "cert_domains", boom)
+    monkeypatch.setattr(
+        sample_generations,
+        "generate_quiz",
+        lambda *a: pytest.fail("生成まで到達してはいけない"),
+    )
+
+    with pytest.raises(RuntimeError, match="certs.js が無い"):
+        sample_generations._sample_once("saa", None, None)

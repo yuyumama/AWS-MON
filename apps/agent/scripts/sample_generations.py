@@ -12,6 +12,11 @@
     python scripts/sample_generations.py --n 20 --cert aip
     python scripts/sample_generations.py --n 30 --cert aip --domain d1 --out runs.jsonl
 
+難易度は資格レベルから決まる(clf なら foundational)。同一資格内で難易度だけを
+振る腕は --difficulty-tier で明示する。
+
+    python scripts/sample_generations.py --n 30 --cert saa --difficulty-tier professional
+
 出力した JSONL は次のスクリプトにそのまま渡せる。
 
     python scripts/check_quality_defects.py runs.jsonl --list
@@ -20,11 +25,13 @@
 from __future__ import annotations
 
 import argparse
+import functools
 import importlib.metadata
 import json
 import os
 import random
 import statistics as stats
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -43,68 +50,108 @@ AGENT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(AGENT_DIR))
 
 from quiz_agent.agent import generate_quiz  # noqa: E402
+from quiz_agent.certs import DIFFICULTY_TIERS, get_cert_level  # noqa: E402
 from quiz_agent.model_config import model_id  # noqa: E402
-from quiz_agent.tool_limits import (  # noqa: E402
-    DEFAULT_READ_LIMIT,
-    DEFAULT_SEARCH_LIMIT,
-)
+from quiz_agent.prompts import resolve_difficulty_tier  # noqa: E402
+from quiz_agent.tool_limits import resolve_docs_limits  # noqa: E402
 
 MAX_CONSECUTIVE_FAILURES = 3
+
+# 連続失敗のたびに待つ秒数。2026-08-31 の計測で OpenRouter が provider 由来の 404 を
+# 約50秒返し、失敗が即座に返るせいで15秒で打ち切りに到達して腕が3本まるごと死んだ
+# (その直後の腕は30件中29件成功している)。打ち切りまでに供給側の短い障害を
+# 越えられるだけ待つ。回数そのものは増やさない — 本当に壊れている腕を延々と
+# 回し続けても日次枠を使うだけなので。
+FAILURE_BACKOFF_SEC = (30.0, 60.0, 120.0)
 DEPENDENCIES = (
     "strands-agents",
     "openai",
     "awslabs.aws-documentation-mcp-server",
 )
 
-# 実験用ハーネスの省略時抽選だけに使うローカル定義。
-# 本番経路の定義の正は packages/shared/src/certs.ts にある。
-AIP_HARNESS_DOMAINS = {
-    "d1": (
-        "基盤モデル統合・データ管理・コンプライアンス",
-        "Foundation Model Integration, Data Management, and Compliance",
-        31,
-    ),
-    "d2": ("実装と統合", "Implementation and Integration", 26),
-    "d3": (
-        "AIの安全性・セキュリティ・ガバナンス",
-        "AI Safety, Security, and Governance",
-        20,
-    ),
-    "d4": (
-        "運用効率と最適化",
-        "Operational Efficiency and Optimization for GenAI Applications",
-        12,
-    ),
-    "d5": (
-        "テスト・検証・トラブルシューティング",
-        "Testing, Validation, and Troubleshooting",
-        11,
-    ),
-}
+# ドメイン定義の正は packages/shared/src/certs.ts で、そのビルド出力から読む。
+# 12資格ぶんを Python に写すと重い二重管理になり、資格名・レベルの写しを検証する
+# tests/test_certs.py もドメインまでは見ていないため、ドリフトに気づけない。
+_SHARED_CERTS_JS = AGENT_DIR.parent.parent / "packages" / "shared" / "dist" / "certs.js"
+
+_EXPORT_DOMAINS_JS = """
+import(process.argv[1]).then((m) => {
+  const out = {};
+  for (const cert of m.certDefinitions) {
+    out[cert.code] = cert.domains.map((d) => [d.value, d.label, d.labelEn, d.weight]);
+  }
+  process.stdout.write(JSON.stringify(out));
+});
+"""
+
+# ドメイン値 -> (値, 日本語ラベル, 英語ラベル, 配点比率)
+CertDomains = dict[str, list[tuple[str, str, str, int]]]
+
+
+@functools.lru_cache(maxsize=1)
+def cert_domains() -> CertDomains:
+    """certs.ts のビルド出力から資格ごとのドメイン定義を読む。"""
+    if not _SHARED_CERTS_JS.is_file():
+        raise RuntimeError(
+            f"{_SHARED_CERTS_JS} が無い。"
+            "先に `npm run build -w @aws-mon/shared` を実行すること"
+        )
+    try:
+        completed = subprocess.run(
+            [
+                "node",
+                "--input-type=module",
+                "-e",
+                _EXPORT_DOMAINS_JS,
+                str(_SHARED_CERTS_JS),
+            ],
+            capture_output=True,
+            check=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as e:
+        raise RuntimeError(f"certs.ts のドメイン定義を読めなかった: {e}") from e
+    return {
+        code: [
+            (value, label, label_en, weight)
+            for value, label, label_en, weight in entries
+        ]
+        for code, entries in json.loads(completed.stdout).items()
+    }
 
 
 def _resolve_harness_domain(
     cert: str, domain: str | None
 ) -> tuple[str | None, str | None, str | None]:
-    if cert != "aip":
-        return domain, None, None
+    """出題ドメインを prod と同じ重み付き抽選で決める。
+
+    ラベルまで返すのが要点である。build_quiz_prompt はラベルが無いとドメイン句を
+    出さないため、値だけ渡してもドメイン指定は効かない。aip 以外でラベルを返して
+    いなかった頃は、clf を回すとモデルが毎回同じ話題(ストレージ)を選び、
+    30件がほぼ同じ問題になった。
+    """
+    entries = cert_domains().get(cert)
+    if not entries:
+        raise ValueError(
+            f"ドメイン定義が無い資格コード: {cert}"
+            f"（有効: {', '.join(sorted(cert_domains()))}）"
+        )
+    by_value = {value: (label, label_en) for value, label, label_en, _ in entries}
     resolved = domain
     if resolved is None or resolved == "all":
-        values = list(AIP_HARNESS_DOMAINS)
         resolved = random.choices(
-            values,
-            weights=[AIP_HARNESS_DOMAINS[value][2] for value in values],
+            [value for value, *_ in entries],
+            weights=[weight for *_, weight in entries],
             k=1,
         )[0]
-    info = AIP_HARNESS_DOMAINS.get(resolved)
-    if info is None:
-        return resolved, None, None
-    label, label_en, _weight = info
+    label, label_en = by_value.get(resolved, (None, None))
     return resolved, label, label_en
 
 
-def sampling_metadata() -> dict[str, Any]:
-    """再現性のためモデルIDと主要依存バージョンを記録する。"""
+def sampling_metadata(cert: str, difficulty_tier: str | None) -> dict[str, Any]:
+    """再現性のためモデルIDと主要依存バージョン、腕の識別情報を記録する。"""
+    tier = resolve_difficulty_tier(cert, difficulty_tier)
+    search_limit, read_limit = resolve_docs_limits(tier)
     versions: dict[str, str | None] = {}
     for dependency in DEPENDENCIES:
         try:
@@ -120,15 +167,17 @@ def sampling_metadata() -> dict[str, Any]:
         "research_enforce": os.environ.get("AGENT_RESEARCH_ENFORCE", "1"),
         "research_retries": os.environ.get("AGENT_RESEARCH_RETRIES", "2"),
         "content_retries": os.environ.get("AGENT_CONTENT_RETRIES", "1"),
-        # 既定値は tool_limits から引く。ここに数値を書き写すと、実装を変えたときに
-        # メタデータだけが古い値を記録して計測条件を誤らせる(2026-08-09 の #142 計測で
-        # 実際に search_limit を 1 と誤記録した。実際の生成は 2 で走っていた)。
-        "docs_search_limit": os.environ.get(
-            "AGENT_DOCS_SEARCH_LIMIT", str(DEFAULT_SEARCH_LIMIT)
-        ),
-        "docs_read_limit": os.environ.get(
-            "AGENT_DOCS_READ_LIMIT", str(DEFAULT_READ_LIMIT)
-        ),
+        # 上限は生成が実際に使う解決関数から引く。ここに数値を書き写すと、実装を
+        # 変えたときにメタデータだけが古い値を記録して計測条件を誤らせる
+        # (2026-08-09 の #142 計測で実際に search_limit を 1 と誤記録した。実際の
+        # 生成は 2 で走っていた)。上限は難易度区分でも変わるので、区分を解決した
+        # あとの値を記録する。
+        "docs_search_limit": str(search_limit),
+        "docs_read_limit": str(read_limit),
+        # 腕の識別。難易度は資格レベル連動なので、資格コードだけでは腕が定まらない。
+        "cert": cert,
+        "cert_level": get_cert_level(cert),
+        "difficulty_tier": tier,
     }
 
 
@@ -202,24 +251,33 @@ def _judge_defect_counts(records: list[dict[str, Any]]) -> dict[str, int]:
     return counts
 
 
-def _sample_once(cert: str, domain: str | None) -> dict[str, Any]:
+def _sample_once(
+    cert: str, domain: str | None, difficulty_tier: str | None = None
+) -> dict[str, Any]:
     started = time.monotonic()
-    resolved_domain: str | None = domain
+    # 明示指定が無い腕でも、実際に適用された区分を記録に残す。複数の腕のJSONLを
+    # 結合したあとで腕ごとに分けられるようにするため、メタデータ行だけに頼らない。
+    tier = resolve_difficulty_tier(cert, difficulty_tier)
+    arm = {"cert": cert, "cert_level": get_cert_level(cert), "difficulty_tier": tier}
+    # 抽選は try の外で行う。ドメイン定義を読めないのは設定の誤り(shared のビルド
+    # 出力が無い等)であって腕の1件の失敗ではなく、error レコードとして記録すると
+    # 3連続失敗の打ち切りに到達して「生成が失敗した」という誤った JSONL が残る。
+    resolved_domain, domain_label, domain_label_en = _resolve_harness_domain(
+        cert, domain
+    )
     try:
-        resolved_domain, domain_label, domain_label_en = _resolve_harness_domain(
-            cert, domain
-        )
         result = generate_quiz(
             cert,
             resolved_domain,
             domain_label,
             domain_label_en,
+            difficulty_tier,
         )
     except Exception as e:  # noqa: BLE001 - 1回分の失敗として記録して継続する
         return {
             "status": "error",
             "error_code": getattr(e, "error_code", None),
-            "cert": cert,
+            **arm,
             "domain": resolved_domain,
             "duration_sec": time.monotonic() - started,
             "error": str(e),
@@ -236,7 +294,7 @@ def _sample_once(cert: str, domain: str | None) -> dict[str, Any]:
         # 調査が的外れだったのかを後から読むために原文も残す。
         "source_texts": list(result.source_texts),
         "source_chars": sum(len(t) for t in result.source_texts),
-        "cert": cert,
+        **arm,
         "domain": resolved_domain,
         "duration_sec": time.monotonic() - started,
         "error": None,
@@ -253,6 +311,12 @@ def main() -> int:
         "--domain", default=None, help="AIPドメイン(省略時は重み付き抽選)"
     )
     parser.add_argument(
+        "--difficulty-tier",
+        default=None,
+        choices=sorted(set(DIFFICULTY_TIERS.values())),
+        help="難易度区分の明示指定(省略時は資格レベルどおり)",
+    )
+    parser.add_argument(
         "--sleep", type=float, default=5.0, help="各回の間隔秒(既定5, 日次枠に配慮)"
     )
     parser.add_argument(
@@ -261,7 +325,10 @@ def main() -> int:
     args = parser.parse_args()
 
     records: list[dict[str, Any]] = []
-    metadata = sampling_metadata()
+    metadata = sampling_metadata(args.cert, args.difficulty_tier)
+    arm_label = (
+        f"{args.cert}/{resolve_difficulty_tier(args.cert, args.difficulty_tier)}"
+    )
     consecutive_failures = 0
     out_fh = open(args.out, "w", encoding="utf-8") if args.out else None
     try:
@@ -269,10 +336,11 @@ def main() -> int:
             out_fh.write(json.dumps(metadata, ensure_ascii=False) + "\n")
             out_fh.flush()
         for i in range(args.n):
-            record = _sample_once(args.cert, args.domain)
+            record = _sample_once(args.cert, args.domain, args.difficulty_tier)
             records.append(record)
             print(
-                f"[{i + 1}/{args.n}] status={record['status']} "
+                f"[{i + 1}/{args.n}] {arm_label} "
+                f"status={record['status']} "
                 f"research={record.get('research_status')} "
                 f"judge={record.get('judge_status')} "
                 f"duration={record['duration_sec']:.1f}s"
@@ -295,7 +363,14 @@ def main() -> int:
                 consecutive_failures = 0
 
             if i < args.n - 1:
-                time.sleep(args.sleep)
+                if consecutive_failures:
+                    backoff = FAILURE_BACKOFF_SEC[
+                        min(consecutive_failures, len(FAILURE_BACKOFF_SEC)) - 1
+                    ]
+                    print(f"{backoff:.0f}秒待って再開します", file=sys.stderr)
+                    time.sleep(backoff)
+                else:
+                    time.sleep(args.sleep)
     finally:
         if out_fh:
             out_fh.close()

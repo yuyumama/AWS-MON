@@ -2,6 +2,7 @@
 import type {
 	AnsweredQuestionDto,
 	AnswerResultDto,
+	DifficultyOffset,
 	QuestionListItemDto,
 	ReviewItemDto,
 	ReviewStateDto,
@@ -110,6 +111,8 @@ export async function startSession(input: {
 	cert: string;
 	domainSelection?: string;
 	mode: SessionMode;
+	/** GENERATE のときだけ送る。他モードでは API 側が捨てる。 */
+	difficulty?: DifficultyOffset;
 }): Promise<SessionMutationResult> {
 	const { body, httpStatus } = await requestWithStatus<{ session: SessionDto }>(
 		"/sessions",

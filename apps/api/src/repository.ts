@@ -3,6 +3,7 @@ import {
 	type AnswerResultDto,
 	type AttemptItem,
 	abandonKeys,
+	type DifficultyOffset,
 	domainFallbackOrder,
 	domainStatKey,
 	gsiNames,
@@ -49,6 +50,12 @@ export type StartSessionInput = {
 	domainSelection?: string;
 	domain?: string;
 	mode?: SessionMode;
+	/**
+	 * 同一資格内の難易度オフセット。GENERATE のときだけ意味を持つ。
+	 * BANK / MIXED では既存の問題を出すので効かせようがなく、
+	 * startSession が黙って捨てる(Q13 の決定: MIXED も完全に対象外)。
+	 */
+	difficulty?: DifficultyOffset;
 	canGenerateQuestions: boolean;
 };
 
@@ -207,6 +214,7 @@ function toSessionDto(
 		cert: meta.cert,
 		domainSelection: meta.domainSelection,
 		mode: meta.mode,
+		difficulty: meta.difficulty,
 		stats: {
 			answeredCount: meta.answeredCount,
 			correctCount: meta.correctCount,
@@ -257,6 +265,7 @@ function toSessionSummaryDto(meta: SessionMetaItem): SessionSummaryDto {
 		cert: meta.cert,
 		domainSelection: meta.domainSelection,
 		mode: meta.mode,
+		difficulty: meta.difficulty,
 		stats: {
 			answeredCount: meta.answeredCount,
 			correctCount: meta.correctCount,
@@ -674,6 +683,9 @@ export async function startSession(
 ): Promise<StartSessionResult> {
 	const mode = input.mode ?? "BANK";
 	assertGenerationAllowed(mode, input.canGenerateQuestions);
+	// 生成しないモードでは難易度を持たせない。持たせると、効いていないのに
+	// セッションに値が残り、後から「効いたはず」と読めてしまう。
+	const difficulty = mode === "GENERATE" ? input.difficulty : undefined;
 	const { domainSelection, domain } = resolveDomain(input);
 	const question = await selectInitialQuestion({
 		cert: input.cert,
@@ -703,6 +715,7 @@ export async function startSession(
 			domainSelection,
 			domain,
 			mode,
+			difficulty,
 		});
 		const meta: SessionMetaItem = {
 			sessionId,
@@ -713,6 +726,7 @@ export async function startSession(
 			cert: input.cert,
 			domainSelection,
 			mode,
+			difficulty,
 			initial,
 			answeredCount: 0,
 			correctCount: 0,
@@ -738,6 +752,7 @@ export async function startSession(
 			cert: input.cert,
 			domainSelection,
 			mode,
+			difficulty,
 			createdAt,
 			updatedAt: createdAt,
 			// 24 hours covers three long generation attempts plus backoff with ample
@@ -817,6 +832,7 @@ export async function startSession(
 			current,
 		} as SessionMetaItem),
 		mode,
+		difficulty,
 		targetSequence: 2,
 		excludeQuestionIds: [question.questionId],
 	});
@@ -830,6 +846,7 @@ export async function startSession(
 		cert: input.cert,
 		domainSelection,
 		mode,
+		difficulty,
 		current,
 		prefetch,
 		answeredCount: 0,
@@ -882,6 +899,7 @@ export async function retryInitialSession(
 		domainSelection: meta.domainSelection,
 		domain,
 		mode: meta.mode,
+		difficulty: meta.difficulty,
 	});
 	const updatedAt = job.createdAt;
 	const abandonAfter = addDaysIso(updatedAt, policy.abandonAfterDays);
@@ -1329,6 +1347,7 @@ export async function nextSessionQuestion(
 			domainSelection: meta.domainSelection,
 			domain: nextDomain(meta),
 			mode: meta.mode,
+			difficulty: meta.difficulty,
 			targetSequence: meta.current.sequence + 1,
 			excludeQuestionIds: meta.lastSeenQuestionIds,
 		});
@@ -1387,6 +1406,7 @@ export async function nextSessionQuestion(
 		domainSelection: meta.domainSelection,
 		domain: nextDomain({ ...meta, current: newCurrent }),
 		mode: meta.mode,
+		difficulty: meta.difficulty,
 		targetSequence: nextSequence + 1,
 		excludeQuestionIds: lastSeenQuestionIds,
 	});
